@@ -1,0 +1,11 @@
+web/.next/
+web/.next-dev/
+web/node_modules/
+server/target/
+.m2/
+.env
+**/.env.local
+*.log
+*.err.log
+server/data/
+*.tsbuildinfo

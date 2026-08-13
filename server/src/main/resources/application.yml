@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: interview-agent-server
+  config:
+    import: optional:file:./.env.local[.properties]
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${app.supabase.url}/auth/v1
+          jwk-set-uri: ${app.supabase.url}/auth/v1/.well-known/jwks.json
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:interview-agent;MODE=PostgreSQL;DB_CLOSE_DELAY=-1}
+    username: ${SPRING_DATASOURCE_USERNAME:sa}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  flyway:
+    enabled: true
+    default-schema: ${APP_DATABASE_SCHEMA:interview_agent}
+    schemas: ${APP_DATABASE_SCHEMA:interview_agent}
+    create-schemas: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+app:
+  supabase:
+    url: ${SUPABASE_URL}
+    storage-url: ${SUPABASE_STORAGE_URL:${app.supabase.url}/storage/v1}
+    jwt-secret: ${SUPABASE_JWT_SECRET:}
+    jwt-public-jwk:
+      kid: ${SUPABASE_JWT_JWK_KID:}
+      x: ${SUPABASE_JWT_JWK_X:}
+      y: ${SUPABASE_JWT_JWK_Y:}
+  resume-files:
+    bucket: ${SUPABASE_RESUME_FILES_BUCKET:resume-files}
+  review-model:
+    url: ${AI_REVIEW_API_URL:}
+    api-key: ${AI_REVIEW_API_KEY:}
+    model: ${AI_REVIEW_MODEL:}
+  ai-mock-audio:
+    bucket: ${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}
+  transcription:
+    url: ${AI_TRANSCRIPTION_API_URL:}
+    api-key: ${AI_TRANSCRIPTION_API_KEY:}
+    model: ${AI_TRANSCRIPTION_MODEL:}
+  cors:
+    allowed-origin: ${APP_CORS_ALLOWED_ORIGIN:http://localhost:3000}

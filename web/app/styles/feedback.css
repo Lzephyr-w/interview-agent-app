@@ -1,0 +1,122 @@
+.confirm-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+  backdrop-filter: blur(5px);
+}
+.confirm-dialog {
+  width: min(100%, 460px);
+  padding: 30px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 28px 8px 28px 8px;
+  box-shadow: var(--shadow);
+}
+.confirm-dialog-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: var(--orange);
+  background: var(--green-soft);
+  border-radius: 50% 50% 42% 58%;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 22px;
+  font-weight: 700;
+}
+.confirm-dialog .profile-label {
+  margin-top: 16px;
+}
+.confirm-dialog h2 {
+  margin: 8px 0 0;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 28px;
+  line-height: 1.25;
+}
+.confirm-dialog-description {
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.confirm-dialog-actions .secondary-button,
+.dialog-confirm-button {
+  width: auto;
+  padding: 11px 16px;
+}
+.dialog-confirm-button {
+  color: var(--paper);
+  border: 0;
+  border-radius: 12px 4px 12px 4px;
+  font-weight: 800;
+}
+.dialog-confirm-button.primary {
+  background: var(--green);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--green) 25%, transparent);
+}
+.dialog-confirm-button.danger {
+  background: var(--danger);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+.dialog-confirm-button:hover {
+  filter: brightness(1.08);
+}
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+}
+.toast-region {
+  position: fixed;
+  top: 82px;
+  right: 24px;
+  z-index: 30;
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  gap: 10px;
+}
+.toast {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px 4px 14px 4px;
+  box-shadow: var(--shadow);
+  line-height: 1.5;
+}
+.toast-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--paper));
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+}
+.toast-notice {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green-soft) 72%, var(--paper));
+}
+.toast button {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  font-size: 20px;
+  line-height: 1;
+}
+.toast button:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}

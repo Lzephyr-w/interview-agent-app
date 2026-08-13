@@ -1,0 +1,213 @@
+.app-page {
+  min-height: calc(100vh - 40px);
+  margin: 20px;
+}
+.app-shell {
+  display: grid;
+  grid-template-columns: clamp(208px, 18vw, 280px) minmax(0, 1fr);
+  min-height: 100vh;
+}
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  height: 100vh;
+  max-height: 100vh;
+  flex-direction: column;
+  padding: 28px 18px;
+  gap: 5px;
+  overflow-y: auto;
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+}
+.sidebar-brand {
+  display: flex;
+  margin: -28px -18px 0;
+  padding: 28px 18px;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  border-bottom: 1px solid var(--line);
+}
+.sidebar-brand small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.sidebar-nav {
+  display: grid;
+  gap: 8px;
+}
+.sidebar-link {
+  display: grid;
+  gap: 3px;
+  padding: 13px 14px;
+  border-radius: 14px 4px 14px 4px;
+}
+.sidebar-link small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sidebar-link:hover,
+.sidebar-link.active {
+  color: var(--green);
+  background: var(--green-soft);
+  border-color: var(--line);
+}
+.app-main {
+  min-width: 0;
+  overflow-x: clip;
+}
+.chat-app-main {
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chat-app-main .app-topbar {
+  flex: 0 0 auto;
+}
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 66px;
+  padding: 12px clamp(16px, 3vw, 56px);
+  background: color-mix(in srgb, var(--canvas) 86%, transparent);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+.app-topbar > div {
+  display: grid;
+  gap: 2px;
+}
+.app-topbar strong {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 20px;
+}
+.topbar-kicker {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+.hero-card,
+.profile-card {
+  margin-top: 10px;
+  padding: clamp(24px, 5vw, 44px);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+.hero-card {
+  border-radius: 36px 8px 36px 8px;
+  background: linear-gradient(
+    135deg,
+    var(--paper),
+    color-mix(in srgb, var(--green-soft) 55%, var(--paper))
+  );
+}
+.page-hero {
+  display: flex;
+  min-height: clamp(260px, 22vw, 330px);
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  color: #f8f6ef;
+  background:
+    linear-gradient(
+      90deg,
+      rgb(8 28 21 / 96%) 0%,
+      rgb(8 28 21 / 84%) 43%,
+      rgb(8 28 21 / 26%) 72%,
+      rgb(8 28 21 / 8%) 100%
+    ),
+    var(--hero-image) center / cover no-repeat;
+  border-color: rgb(255 255 255 / 14%);
+}
+
+.page-hero .eyebrow {
+  color: #f1ae81;
+}
+.page-hero h1 em {
+  color: #8fbaa3;
+}
+.page-hero .intro {
+  color: #e3ebe6;
+}
+.page-hero .text-link,
+.page-hero .secondary-button {
+  color: #fff;
+  background: rgb(255 255 255 / 8%);
+  border-color: rgb(255 255 255 / 28%);
+  backdrop-filter: blur(8px);
+}
+.hero-actions {
+  gap: 12px;
+  margin-top: 26px;
+}
+.text-link {
+  padding: 11px 14px;
+  color: var(--green);
+  border: 1px solid var(--line);
+  border-radius: 12px 4px 12px 4px;
+  font-weight: 800;
+}
+.text-link:hover {
+  background: var(--green-soft);
+}
+.profile-card {
+  border-radius: 22px 6px 22px 6px;
+}
+.profile-card {
+  display: grid;
+  gap: 16px;
+}
+.profile-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+.profile-label {
+  margin: 0;
+  color: var(--orange);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+}
+.profile-name {
+  margin: 0;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 26px;
+}
+.profile-email {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.secondary-button {
+  justify-self: start;
+  padding: 10px 14px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 12px 4px 12px 4px;
+  font-weight: 700;
+}
+.secondary-button:hover {
+  background: var(--green-soft);
+}
+@media (max-width: 700px) {
+  .page-hero {
+    min-height: 235px;
+    background-position: 68% center;
+  }
+}
