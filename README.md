@@ -1,6 +1,7 @@
 # AI 简历助手
 
 AI 简历助手是一个面向求职准备的前后端分离应用。它集中管理简历、岗位 JD、项目证据和面试记录，并通过文本模拟、录音模拟、AI 复盘和薄弱点训练帮助用户形成可追踪的面试准备闭环。
+<img width="2880" height="1325" alt="image" src="https://github.com/user-attachments/assets/fdca5b85-ec49-4d69-bd15-eb6b56d4e355" />
 
 ## 1. 项目简介与核心功能
 
