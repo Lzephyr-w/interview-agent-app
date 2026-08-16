@@ -305,6 +305,58 @@
   gap: 12px;
   margin-top: 18px;
 }
+.audio-import {
+  margin-top: 20px;
+}
+.audio-dropzone {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border: 1px dashed var(--line);
+  border-radius: 14px 4px 14px 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.audio-dropzone.dragging,
+.audio-dropzone:focus-within {
+  border-color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+}
+.audio-import-result,
+.import-questions {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+.import-steps {
+  display: flex;
+  gap: 40px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+.import-steps .done {
+  color: var(--green);
+  font-weight: 700;
+}
+.import-steps .current {
+  color: var(--orange);
+  font-weight: 700;
+}
+.question-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.transcript-preview {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+}
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

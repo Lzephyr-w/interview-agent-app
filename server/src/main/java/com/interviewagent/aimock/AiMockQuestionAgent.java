@@ -22,7 +22,7 @@ class AiMockQuestionAgent {
             固定分布：第1-5题 FUNDAMENTAL（岗位核心技术/基础原理）；第6-9题 PROJECT（仅深挖简历或证据卡中的真实项目/经历）；第10题 SCENARIO 或 BEHAVIORAL（岗位真实场景、故障、性能、架构、协作或需求变化）。
             输入优先级：JD 岗位职责与技能 > 面试轮次 > 简历真实经历 > 证据卡。资料不足时基础题和第10题使用岗位相关通用问题；不得虚构候选人的项目、指标或技术细节。
             前端等岗位应按 JD/简历在浏览器、JavaScript/TypeScript、React、工程化、性能、安全中分散能力点。所有 competency 不重复；相邻题不得使用同一 projectName、technology 或 angle。项目资料不足时 projectName 留空，绝不能编造。
-            禁止输出隐私信息、能力评级或招聘结论。只返回 JSON：{"plan":[{"order":1,"type":"FUNDAMENTAL","competency":"能力点","projectName":"真实项目名或空字符串","technology":"技术点或空字符串","angle":"问题角度"},...共10项]}
+            禁止输出隐私信息、能力评级或招聘结论。只返回 JSON 对象，不要 Markdown 代码块：{"plan":[{"order":1,"type":"FUNDAMENTAL","competency":"能力点","projectName":"真实项目名或空字符串（没有项目资料必须为空）","technology":"技术点或空字符串","angle":"问题角度"},...共10项]}
             面试包：%s / %s / %s
             JD：%s
             简历：%s
@@ -68,21 +68,17 @@ class AiMockQuestionAgent {
     }
 
     List<PlanItem> parsePlan(JsonNode root) {
-        JsonNode items = root.path("plan");
+        JsonNode items = root.isArray() ? root : root.path("plan");
+        if (items.isTextual()) {
+            try { items = json.readTree(items.asText()); } catch (Exception ignored) { throw invalidPlan(); }
+        }
         if (!items.isArray() || (items.size() != QUESTION_LIMIT && items.size() != 3)) throw invalidPlan();
-        boolean legacyThree = items.size() == 3;
         List<PlanItem> result = new ArrayList<>();
         Set<String> competencies = new HashSet<>();
         for (int i = 0; i < items.size(); i++) {
             JsonNode node = items.get(i);
-            PlanItem item = new PlanItem(requiredInt(node, "order"), required(node, "type"), required(node, "competency"), text(node, "projectName"), text(node, "technology"), required(node, "angle"));
-            String expected = legacyThree ? (i == 0 ? "FUNDAMENTAL" : i == 1 ? "PROJECT" : item.type) : (i < 5 ? "FUNDAMENTAL" : i < 9 ? "PROJECT" : item.type);
-            int finalIndex = legacyThree ? 2 : 9;
-            if (item.order != i + 1 || !TYPES.contains(item.type) || !expected.equals(item.type) || (i == finalIndex && !Set.of("SCENARIO", "BEHAVIORAL").contains(item.type)) || !competencies.add(normalize(item.competency))) throw invalidPlan();
-            if (!result.isEmpty()) {
-                PlanItem previous = result.getLast();
-                if (same(previous.projectName, item.projectName) || same(previous.technology, item.technology) || same(previous.angle, item.angle)) throw invalidPlan();
-            }
+            PlanItem item = new PlanItem(requiredInt(node, "order"), required(node, "type").toUpperCase(Locale.ROOT), required(node, "competency"), projectName(node), text(node, "technology"), required(node, "angle"));
+            if (item.order != i + 1 || !TYPES.contains(item.type) || !competencies.add(normalize(item.competency))) throw invalidPlan();
             result.add(item);
         }
         return List.copyOf(result);
@@ -117,15 +113,17 @@ class AiMockQuestionAgent {
     }
 
     private static QuestionDraft parseQuestion(JsonNode node) {
-        String type = required(node, "type");
+        String type = required(node, "type").toUpperCase(Locale.ROOT);
         if (!TYPES.contains(type)) throw new IllegalArgumentException();
-        return new QuestionDraft(required(node, "questionText", 800), type, required(node, "competency", 120), text(node, "projectName", 120), text(node, "technology", 120));
+        return new QuestionDraft(required(node, "questionText", 800), type, required(node, "competency", 120), projectName(node, 120), text(node, "technology", 120));
     }
     private static String required(JsonNode node, String field) { return required(node, field, 200); }
     private static String required(JsonNode node, String field, int maximum) { String value = text(node, field, maximum); if (value.isBlank()) throw new IllegalArgumentException(); return value; }
-    private static int requiredInt(JsonNode node, String field) { if (!node.path(field).canConvertToInt()) throw new IllegalArgumentException(); return node.path(field).asInt(); }
+    private static int requiredInt(JsonNode node, String field) { if (node.path(field).canConvertToInt()) return node.path(field).asInt(); if (node.path(field).isTextual()) try { return Integer.parseInt(node.path(field).asText().trim()); } catch (NumberFormatException ignored) {} throw new IllegalArgumentException(); }
     private static String text(JsonNode node, String field) { return text(node, field, 200); }
     private static String text(JsonNode node, String field, int maximum) { String value = node.path(field).isTextual() ? node.path(field).asText().trim() : ""; if (value.length() > maximum) throw new IllegalArgumentException(); return value; }
+    private static String projectName(JsonNode node) { return projectName(node, 200); }
+    private static String projectName(JsonNode node, int maximum) { String value = text(node, "projectName", maximum); return Set.of("待补充", "暂无", "无", "未提供", "N/A", "NA").contains(value.toUpperCase(Locale.ROOT)) ? "" : value; }
     private static IllegalStateException invalidPlan() { return new IllegalStateException("AI 出题计划 JSON 非法或字段缺失；未创建题目，请稍后重试。"); }
     private static boolean same(String left, String right) { return !normalize(left).isBlank() && normalize(left).equals(normalize(right)); }
     private static String normalize(String text) { return text == null ? "" : text.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT); }

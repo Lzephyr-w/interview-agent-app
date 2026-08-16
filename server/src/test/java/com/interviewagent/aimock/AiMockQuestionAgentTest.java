@@ -41,6 +41,16 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
+    void planAcceptsEquivalentModelJson() throws Exception {
+        var root = json.readTree(validPlan()).get("plan").deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("order", "1");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("type", "fundamental");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("projectName", "待补充");
+        assertEquals("FUNDAMENTAL", agent.parsePlan(root).getFirst().type());
+        assertEquals("", agent.parsePlan(root).getFirst().projectName());
+    }
+
+    @Test
     void sameProjectOrCompetencyIsRejected() {
         PlanItem plan = new PlanItem(7, "PROJECT", "性能验证", "订单平台", "React", "验证方法");
         List<QuestionHistory> history = List.of(new QuestionHistory("请说明订单平台的性能瓶颈。", "PROJECT", "瓶颈定位", "订单平台", "Vue"));

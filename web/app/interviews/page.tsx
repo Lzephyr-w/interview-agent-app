@@ -57,6 +57,22 @@ type Detail = {
   questions: Question[];
   reviews: Review[];
 };
+type ImportedQuestion = {
+  question: string;
+  answer: string;
+  orderIndex: number;
+  speakerEvidence: string;
+};
+type ImportTask = {
+  id: string;
+  status: string;
+  originalFilename: string;
+  sizeBytes: number;
+  transcript: string;
+  error: string;
+  questions: ImportedQuestion[];
+  finalInterviewId?: string;
+};
 
 const empty = {
   company: "",
@@ -142,6 +158,13 @@ export default function InterviewsPage() {
   const [dialog, setDialog] = useState<
     { kind: "interview" | "question" | "review"; id: string } | undefined
   >();
+  const [importTask, setImportTask] = useState<ImportTask>();
+  const [importQuestions, setImportQuestions] = useState<ImportedQuestion[]>(
+    [],
+  );
+  const [importingAudio, setImportingAudio] = useState(false);
+  const [analyzingImport, setAnalyzingImport] = useState(false);
+  const [draggingAudio, setDraggingAudio] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -180,6 +203,19 @@ export default function InterviewsPage() {
     void load();
     if (interviewId) void loadDetail(interviewId);
   }, [interviewId, mode]);
+  useEffect(() => {
+    if (mode !== "questions" || !detail) return;
+    const id = window.sessionStorage.getItem(
+      `interview-audio-import-id-${detail.interview.id}`,
+    );
+    if (!id) return;
+    void api<ImportTask>(`/api/v1/interview-imports/${id}`)
+      .then((task) => {
+        setImportTask(task);
+        setImportQuestions(task.questions);
+      })
+      .catch(() => window.sessionStorage.removeItem("interview-audio-import-id"));
+  }, [detail?.interview.id, mode]);
 
   async function saveInterview(event: FormEvent) {
     event.preventDefault();
@@ -201,6 +237,109 @@ export default function InterviewsPage() {
       setMessage("面试记录已保存。");
     } catch (cause) {
       setError(errorMessage(cause, "保存失败。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function uploadAudio(file?: File) {
+    if (!file || importingAudio) return;
+    if (file.size > 25 * 1024 * 1024) {
+      setError("录音超过 25 MiB，请缩短或压缩后重试。");
+      return;
+    }
+    setImportingAudio(true);
+    setError("");
+    setMessage("正在上传录音并等待转写…");
+    try {
+      const data = new FormData();
+      data.append("file", file);
+      if (!detail) return;
+      data.append("interviewId", detail.interview.id);
+      const task = await api<ImportTask>("/api/v1/interview-imports/audio", {
+        method: "POST",
+        body: data,
+      });
+      setImportTask(task);
+      setImportQuestions(task.questions);
+      window.sessionStorage.setItem(
+        `interview-audio-import-id-${detail.interview.id}`,
+        task.id,
+      );
+      setMessage(
+        task.status === "READY"
+          ? "转写与问答识别完成，请检查后保存。"
+          : "已保留转写结果，可重试分析或手工整理。",
+      );
+    } catch (cause) {
+      setError(errorMessage(cause, "录音上传或转写失败。"));
+    } finally {
+      setImportingAudio(false);
+    }
+  }
+  async function analyzeImported() {
+    if (!importTask || analyzingImport) return;
+    setAnalyzingImport(true);
+    setError("");
+    try {
+      const task = await api<ImportTask>(
+        `/api/v1/interview-imports/${importTask.id}/analyze`,
+        { method: "POST" },
+      );
+      setImportTask(task);
+      setImportQuestions(task.questions);
+      setMessage(
+        task.status === "READY"
+          ? "问答识别完成，请检查后保存。"
+          : "识别未完成，原始转写已保留，可继续手工整理。",
+      );
+    } catch (cause) {
+      setError(errorMessage(cause, "问答识别失败。"));
+    } finally {
+      setAnalyzingImport(false);
+    }
+  }
+  function updateImported(index: number, patch: Partial<ImportedQuestion>) {
+    setImportQuestions((items) =>
+      items.map((item, current) =>
+        current === index ? { ...item, ...patch } : item,
+      ),
+    );
+  }
+  function moveImported(index: number, direction: -1 | 1) {
+    setImportQuestions((items) => {
+      const target = index + direction;
+      if (target < 0 || target >= items.length) return items;
+      const next = [...items];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next.map((item, orderIndex) => ({ ...item, orderIndex: orderIndex + 1 }));
+    });
+  }
+  async function saveImported() {
+    if (!importTask || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const saved = await api<Detail>(
+        `/api/v1/interview-imports/${importTask.id}/confirm`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            questions: importQuestions.map((item, orderIndex) => ({
+              ...item,
+              orderIndex: orderIndex + 1,
+            })),
+          }),
+        },
+      );
+      window.sessionStorage.removeItem(
+        `interview-audio-import-id-${saved.interview.id}`,
+      );
+      setImportTask(undefined);
+      setImportQuestions([]);
+      await loadDetail(saved.interview.id);
+      setMessage("识别问答已加入本场面试，请继续检查或发起复盘。");
+    } catch (cause) {
+      setError(errorMessage(cause, "正式保存失败，未创建面试记录。"));
     } finally {
       setSaving(false);
     }
@@ -327,6 +466,42 @@ export default function InterviewsPage() {
     (item) => item.simulationType === activeGroup.type,
   );
   const questionReadOnly = detail?.interview.simulationType !== "REAL";
+  const audioImportPanel =
+    mode === "questions" && detail && !questionReadOnly ? (
+      <details className="fold-card audio-import" open={Boolean(importTask)}>
+        <summary>从录音导入问答</summary>
+        <p className="muted">上传录音 → 语音转写 → 识别问答 → 检查并加入本场问答。支持 WebM、Ogg、MP3、MP4/M4A、WAV，最大 25 MiB；服务端会校验文件内容。</p>
+        {!importTask && (
+          <label className={`audio-dropzone${draggingAudio ? " dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingAudio(true); }} onDragLeave={() => setDraggingAudio(false)} onDrop={(event) => { event.preventDefault(); setDraggingAudio(false); void uploadAudio(event.dataTransfer.files[0]); }}>
+            <span>{importingAudio ? "正在上传、转写与识别…" : "选择或拖放面试录音"}</span>
+            <input type="file" accept="audio/webm,audio/ogg,audio/mpeg,audio/mp4,audio/wav,.webm,.ogg,.mp3,.mp4,.m4a,.wav" disabled={importingAudio} onChange={(event) => void uploadAudio(event.target.files?.[0])} />
+          </label>
+        )}
+        {importTask && (
+          <div className="audio-import-result">
+            <p><strong>{importTask.originalFilename}</strong> · {(importTask.sizeBytes / 1024 / 1024).toFixed(1)} MiB</p>
+            <ol className="import-steps" aria-label="录音导入进度"><li className="done">上传录音</li><li className={importTask.transcript ? "done" : "current"}>语音转写</li><li className={importTask.status === "READY" ? "done" : "current"}>识别问答</li><li>检查并加入</li></ol>
+            {importTask.error && <p role="alert" className="form-error">{importTask.error}</p>}
+            {importTask.transcript && <details className="fold-card"><summary>查看原始转写文本</summary><pre className="transcript-preview">{importTask.transcript}</pre></details>}
+            {importTask.transcript && importTask.status !== "READY" && <button className="secondary-button" type="button" disabled={analyzingImport} onClick={() => void analyzeImported()}>{analyzingImport ? "正在重新识别…" : "重试问答识别"}</button>}
+            {importTask.transcript && (
+              <div className="import-questions">
+                <div className="section-heading"><h3>检查识别结果</h3><button className="secondary-button" type="button" onClick={() => setImportQuestions((items) => [...items, { question: "", answer: "", orderIndex: items.length + 1, speakerEvidence: "待确认" }])}>添加问答</button></div>
+                {importQuestions.map((item, index) => (
+                  <article className="question-card" key={`${item.orderIndex}-${index}`}>
+                    <div className="question-card-head"><strong>第 {index + 1} 题</strong><div className="item-actions"><button className="icon-button" type="button" aria-label="上移问题" disabled={index === 0} onClick={() => moveImported(index, -1)}>↑</button><button className="icon-button" type="button" aria-label="下移问题" disabled={index === importQuestions.length - 1} onClick={() => moveImported(index, 1)}>↓</button><button className="danger-button" type="button" onClick={() => setImportQuestions((items) => items.filter((_, current) => current !== index).map((value, orderIndex) => ({ ...value, orderIndex: orderIndex + 1 })))}>删除</button></div></div>
+                    <label className="field">问题<textarea value={item.question} onChange={(event) => updateImported(index, { question: event.target.value })} /></label>
+                    <label className="field">回答<textarea value={item.answer} onChange={(event) => updateImported(index, { answer: event.target.value })} placeholder="空回答会加入为“没答上”" /></label>
+                    {(item.answer.trim() === "" || item.speakerEvidence.includes("待确认")) && <p className="muted">待确认：{item.speakerEvidence || "未识别出明确回答"}</p>}
+                  </article>
+                ))}
+                <div className="form-actions"><button className="primary-button" type="button" disabled={saving || importQuestions.length === 0} onClick={() => void saveImported()}>{saving ? "正在加入…" : "确认并加入本场问答"}</button></div>
+              </div>
+            )}
+          </div>
+        )}
+      </details>
+    ) : null;
 
   return (
     <AppShell>
@@ -698,6 +873,7 @@ export default function InterviewsPage() {
                     去看复盘
                   </Link>
                 </div>
+                {audioImportPanel}
                 {!questionReadOnly && (
                   <details className="fold-card" open>
                     <summary>粘贴转写并批量分段</summary>

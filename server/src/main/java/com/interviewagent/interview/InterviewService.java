@@ -70,6 +70,24 @@ public class InterviewService {
     }
 
     @Transactional
+    public InterviewDetail createWithQuestions(String userId, InterviewRequest request, List<QuestionRequest> questionRequests) {
+        InterviewDetail created = create(userId, request, "REAL");
+        int order = 0;
+        for (QuestionRequest questionRequest : questionRequests) insertQuestion(created.interview().id(), order++, questionRequest);
+        return get(userId, created.interview().id());
+    }
+
+    @Transactional
+    public InterviewDetail appendQuestions(String userId, String interviewId, List<QuestionRequest> questionRequests) {
+        requireEditableQuestions(userId, interviewId);
+        int order = jdbc.sql("SELECT COUNT(*) FROM interview_questions WHERE interview_id = :id").param("id", interviewId).query(Integer.class).single();
+        for (QuestionRequest questionRequest : questionRequests) insertQuestion(interviewId, order++, questionRequest);
+        return get(userId, interviewId);
+    }
+
+    public void ensureEditableQuestions(String userId, String interviewId) { requireEditableQuestions(userId, interviewId); }
+
+    @Transactional
     InterviewDetail update(String userId, String id, InterviewRequest request) {
         ownedInterview(userId, id);
         InterviewSummary interview = validate(id, userId, request);

@@ -13,7 +13,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 public class ApiExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     ResponseEntity<ApiError> uploadTooLarge(MaxUploadSizeExceededException exception) {
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ApiError("UPLOAD_TOO_LARGE", "上传内容超过 10 MiB；录音请缩短回答，文件请压缩后重试。"));
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ApiError("UPLOAD_TOO_LARGE", "上传内容超过 25 MiB；录音请缩短或压缩后重试。"));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

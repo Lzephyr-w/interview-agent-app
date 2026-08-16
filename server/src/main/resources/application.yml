@@ -20,8 +20,8 @@ spring:
     create-schemas: true
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 12MB
+      max-file-size: 25MB
+      max-request-size: 27MB
 management:
   endpoints:
     web:
@@ -44,6 +44,8 @@ app:
     model: ${AI_REVIEW_MODEL:}
   ai-mock-audio:
     bucket: ${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}
+  interview-import-audio:
+    bucket: ${SUPABASE_INTERVIEW_IMPORT_AUDIO_BUCKET:${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}}
   transcription:
     url: ${AI_TRANSCRIPTION_API_URL:}
     api-key: ${AI_TRANSCRIPTION_API_KEY:}
