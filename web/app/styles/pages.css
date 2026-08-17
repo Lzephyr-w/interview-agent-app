@@ -389,6 +389,26 @@
   border: 1px solid var(--line);
   border-radius: 14px 4px 14px 4px;
 }
+.weakness-section .resource-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  align-items: start;
+}
+.weakness-section .resource-item > div:first-child {
+  min-width: 0;
+}
+.weakness-section .resource-item > .item-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 240px;
+  align-items: start;
+}
+.weakness-section .resource-item > .item-actions select {
+  grid-column: 1 / -1;
+}
+.weakness-section .resource-item > .item-actions button {
+  width: 100%;
+}
 .resource-item strong,
 .resource-item p {
   margin: 0;
@@ -648,21 +668,27 @@
 
 .ai-mock-hero {
   --hero-image: url("/images/headers/voice-mock.webp");
+  --hero-image-dark: url("/images/headers/voice-mock-recolor.webp");
 }
 .dashboard-hero {
   --hero-image: url("/images/headers/home.webp");
+  --hero-image-dark: url("/images/headers/home-recolor.webp");
 }
 .library-hero {
   --hero-image: url("/images/headers/library.webp");
+  --hero-image-dark: url("/images/headers/library-recolor.webp");
 }
 .interviews-hero {
   --hero-image: url("/images/headers/interviews.webp");
+  --hero-image-dark: url("/images/headers/interviews-recolor.webp");
 }
 .weaknesses-hero {
   --hero-image: url("/images/headers/weaknesses.webp");
+  --hero-image-dark: url("/images/headers/weaknesses-recolor.webp");
 }
 .text-mock-hero {
   --hero-image: url("/images/headers/text-mock.webp");
+  --hero-image-dark: url("/images/headers/text-mock-recolor.webp");
 }
 .ai-mock-clock {
   color: var(--orange);

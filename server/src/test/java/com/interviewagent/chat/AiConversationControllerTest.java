@@ -1,10 +1,8 @@
 package com.interviewagent.chat;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -13,13 +11,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.interviewagent.ai.AgentPythonClient;
 import com.interviewagent.interview.ReviewFailedException;
-import com.interviewagent.interview.ReviewModelClient;
 import com.interviewagent.material.ResumeFileService;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,7 +41,7 @@ class AiConversationControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcClient jdbc;
-    @MockBean ReviewModelClient model;
+    @MockBean AgentPythonClient agent;
     @SpyBean ResumeFileService resumeFiles;
 
     @Test
@@ -113,16 +108,17 @@ class AiConversationControllerTest {
         mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, question).with(jwt().jwt(token -> token.subject("user-b"))))
             .andExpect(status().isNotFound());
 
-        when(model.agent(anyList(), any(JsonNode.class))).thenThrow(new ReviewFailedException("AI 服务尚未配置，请联系管理员后重试。"));
+        when(agent.reply(anyString(), anyString(), anyList(), anyString()))
+            .thenThrow(new ReviewFailedException("AI 服务尚未配置，请联系管理员后重试。"))
+            .thenThrow(new IllegalStateException("provider details"))
+            .thenReturn("现有资料未提供指标，待补充具体量化结果后再组织回答。");
         mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, question).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.role").value("ASSISTANT"))
             .andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.content").value(""))
             .andExpect(jsonPath("$.replyToMessageId").value(question)).andExpect(jsonPath("$.messages").doesNotExist());
-        when(model.agent(anyList(), any(JsonNode.class))).thenThrow(new IllegalStateException("provider details"));
         mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, question).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED"))
             .andExpect(jsonPath("$.errorMessage").value("AI 回复失败，请重试。"));
-        doReturn(objectMapper.readTree("{\"role\":\"assistant\",\"content\":\"现有资料未提供指标，待补充具体量化结果后再组织回答。\"}")).when(model).agent(anyList(), any(JsonNode.class));
         mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, question).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.role").value("ASSISTANT"))
             .andExpect(jsonPath("$.status").value("COMPLETED"))
@@ -134,21 +130,6 @@ class AiConversationControllerTest {
             jdbc.sql("INSERT INTO ai_conversation_messages (id, conversation_id, role, content, status, client_request_id) VALUES (:id, :conversationId, 'USER', :content, 'SAVED', :requestId)")
                 .param("id", "history-" + index).param("conversationId", conversation).param("content", "历史消息-" + index).param("requestId", "history-request-" + index).update();
         }
-        String taskSaved = id(mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages", conversation).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"content\":\"请创建一个系统设计训练任务\",\"clientRequestId\":\"task-request\"}"))
-            .andExpect(status().isCreated()).andReturn(), "messages[15].id");
-        JsonNode toolCall = objectMapper.readTree("{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"call-task-1\",\"type\":\"function\",\"function\":{\"name\":\"create_training_task\",\"arguments\":\"{\\\"title\\\":\\\"练习容量估算\\\",\\\"weakness_tag\\\":\\\"系统设计\\\",\\\"action\\\":\\\"完成一次容量估算并说明架构取舍。\\\"}\"}}]}" );
-        JsonNode finalAnswer = objectMapper.readTree("{\"role\":\"assistant\",\"content\":\"已创建训练任务：练习容量估算。\"}");
-        when(model.agent(anyList(), any(JsonNode.class))).thenReturn(toolCall, finalAnswer);
-        mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, taskSaved).with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("COMPLETED")).andExpect(jsonPath("$.content").value("已创建训练任务：练习容量估算。"));
-        Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM training_tasks WHERE user_id = 'user-a' AND title = '练习容量估算'").query(Integer.class).single());
-
-        @SuppressWarnings("unchecked") ArgumentCaptor<List<Map<String, Object>>> agentMessages = ArgumentCaptor.forClass(List.class);
-        verify(model, times(5)).agent(agentMessages.capture(), any(JsonNode.class));
-        Assertions.assertTrue(agentMessages.getAllValues().stream().allMatch(value -> value.getFirst().get("content").toString().contains("候选人具有 Java 与 Spring Boot 项目经验。")));
-        Assertions.assertTrue(agentMessages.getAllValues().get(3).stream().anyMatch(value -> "历史消息-0".equals(value.get("content"))));
-
         mockMvc.perform(delete("/api/v1/ai-conversations/{id}", conversation).with(jwt().jwt(token -> token.subject("user-b")))).andExpect(status().isNotFound());
         mockMvc.perform(delete("/api/v1/ai-conversations/{id}", conversation).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isNoContent());
         Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM interview_packages WHERE id = :id").param("id", packageA).query(Integer.class).single());

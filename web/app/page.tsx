@@ -21,6 +21,7 @@ type Dashboard = {
   sprintItems: SprintItem[];
 };
 type Activity = {
+  id: string;
   type: string;
   title: string;
   detail: string;
@@ -281,7 +282,7 @@ export default function HomePage() {
                 ) : (
                   <ul className="dashboard-list">
                     {dashboard.recentActivities.map((item) => (
-                      <li key={`${item.type}-${item.targetPath}`}>
+                      <li key={item.id}>
                         <div>
                           <strong>{item.title}</strong>
                           <p>

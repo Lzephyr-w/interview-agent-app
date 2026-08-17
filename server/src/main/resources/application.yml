@@ -50,5 +50,8 @@ app:
     url: ${AI_TRANSCRIPTION_API_URL:}
     api-key: ${AI_TRANSCRIPTION_API_KEY:}
     model: ${AI_TRANSCRIPTION_MODEL:}
+  agent:
+    url: ${AGENT_SERVICE_URL:http://localhost:8090}
+    internal-key: ${AGENT_INTERNAL_KEY:}
   cors:
     allowed-origin: ${APP_CORS_ALLOWED_ORIGIN:http://localhost:3000}

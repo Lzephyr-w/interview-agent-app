@@ -46,6 +46,7 @@ class DashboardControllerTest {
             .andExpect(jsonPath("$.overview.pendingReviewCount").value(1))
             .andExpect(jsonPath("$.overview.pendingTrainingTaskCount").value(1))
             .andExpect(jsonPath("$.weaknesses[0].tag").value("系统设计"))
+            .andExpect(jsonPath("$.recentActivities[0].id").value("report-a"))
             .andExpect(jsonPath("$.recentActivities[0].title").value("公司a · 后端"))
             .andExpect(jsonPath("$.sprintItems[?(@.kind == 'TRAINING_TASK')].title").value(org.hamcrest.Matchers.hasItem("练习架构")));
     }

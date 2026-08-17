@@ -117,6 +117,7 @@
   );
 }
 .page-hero {
+  --page-hero-image: var(--hero-image);
   display: flex;
   min-height: clamp(260px, 22vw, 330px);
   flex-direction: column;
@@ -131,8 +132,34 @@
       rgb(8 28 21 / 26%) 72%,
       rgb(8 28 21 / 8%) 100%
     ),
-    var(--hero-image) center / cover no-repeat;
+    var(--page-hero-image) center / cover no-repeat;
   border-color: rgb(255 255 255 / 14%);
+}
+:root[data-theme="dark"] .page-hero {
+  --page-hero-image: var(--hero-image-dark);
+  background-image:
+    linear-gradient(
+      90deg,
+      rgb(8 28 21 / 95%) 0%,
+      rgb(8 28 21 / 84%) 46%,
+      rgb(8 28 21 / 42%) 78%,
+      rgb(8 28 21 / 28%) 100%
+    ),
+    var(--page-hero-image);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .page-hero {
+    --page-hero-image: var(--hero-image-dark);
+    background-image:
+      linear-gradient(
+        90deg,
+        rgb(8 28 21 / 95%) 0%,
+        rgb(8 28 21 / 84%) 46%,
+        rgb(8 28 21 / 42%) 78%,
+        rgb(8 28 21 / 28%) 100%
+      ),
+      var(--page-hero-image);
+  }
 }
 
 .page-hero .eyebrow {
@@ -150,6 +177,14 @@
   background: rgb(255 255 255 / 8%);
   border-color: rgb(255 255 255 / 28%);
   backdrop-filter: blur(8px);
+}
+.page-hero .text-link:hover,
+.page-hero .text-link:focus-visible,
+.page-hero .secondary-button:hover,
+.page-hero .secondary-button:focus-visible {
+  color: #fff;
+  background: rgb(143 186 163 / 32%);
+  border-color: rgb(143 186 163 / 72%);
 }
 .hero-actions {
   gap: 12px;

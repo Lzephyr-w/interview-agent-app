@@ -32,7 +32,7 @@ public class SecurityConfig {
         return http.csrf(csrf -> csrf.disable()).cors(cors -> {})
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(entryPoint))
-            .authorizeHttpRequests(auth -> auth.requestMatchers("/actuator/health").permitAll().anyRequest().authenticated())
+            .authorizeHttpRequests(auth -> auth.requestMatchers("/actuator/health", "/internal/agent/**").permitAll().anyRequest().authenticated())
             .oauth2ResourceServer(oauth -> oauth.authenticationEntryPoint(entryPoint).jwt(jwt -> {})).build();
     }
 

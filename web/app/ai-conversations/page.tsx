@@ -5,78 +5,21 @@ import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
 import { api } from "@/lib/api";
-
-type Package = {
-  id: string;
-  company: string;
-  role: string;
-  interviewRound: string;
-};
-type Interview = {
-  id: string;
-  company: string;
-  role: string;
-  interviewRound: string;
-  interviewTime: string;
-  simulationType: "REAL" | "AI_TEXT" | "AI_VOICE";
-};
-type Review = { id: string; createdAt: string };
-type InterviewDetail = { reviews: Review[] };
-type Weakness = { tag: string };
-type ContextSource = { type: string; label: string; state: string };
-type ConversationSummary = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-};
-type Conversation = ConversationSummary & {
-  contextSources: ContextSource[];
-};
-type Message = {
-  id: string;
-  role: "USER" | "ASSISTANT";
-  content: string;
-  status: "SAVED" | "PENDING" | "COMPLETED" | "FAILED";
-  errorMessage: string | null;
-  clientRequestId: string | null;
-  replyToMessageId: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-type ConversationDetail = { conversation: Conversation; messages: Message[] };
-
-const emptyForm = {
-  interviewPackageId: "",
-  interviewId: "",
-  reviewReportId: "",
-  weaknessTag: "",
-  title: "",
-};
-const interviewTypeLabel: Record<Interview["simulationType"], string> = {
-  REAL: "手动录入",
-  AI_TEXT: "AI 文本模拟",
-  AI_VOICE: "AI 语音模拟",
-};
-
-function errorMessage(cause: unknown, fallback: string) {
-  return cause instanceof Error ? cause.message : fallback;
-}
-
-function requestId() {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-function upsertMessage(messages: Message[], next: Message) {
-  const index = messages.findIndex(
-    (message) =>
-      message.id === next.id ||
-      (message.role === "ASSISTANT" &&
-        message.replyToMessageId === next.replyToMessageId),
-  );
-  if (index < 0) return [...messages, next];
-  return messages.map((message, current) => (current === index ? next : message));
-}
+import {
+  emptyForm,
+  errorMessage,
+  interviewTypeLabel,
+  requestId,
+  upsertMessage,
+  type ConversationDetail,
+  type ConversationSummary,
+  type Interview,
+  type InterviewDetail,
+  type Message,
+  type Package,
+  type Review,
+  type Weakness,
+} from "@/features/ai-conversations";
 
 type MarkdownBlock =
   | { type: "heading"; level: number; text: string }

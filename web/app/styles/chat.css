@@ -13,6 +13,7 @@
 }
 .chat-hero {
   --hero-image: url("/images/headers/conversations.webp");
+  --hero-image-dark: url("/images/headers/conversations-recolor.webp");
   min-height: 154px;
   margin: 14px 20px;
   padding: 22px 30px;

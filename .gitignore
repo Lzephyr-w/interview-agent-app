@@ -5,7 +5,11 @@ server/target/
 .m2/
 .env
 **/.env.local
+**/.env.*.local
 *.log
 *.err.log
+**/__pycache__/
+*.py[cod]
+*.egg-info/
 server/data/
 *.tsbuildinfo

@@ -9,8 +9,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.interviewagent.aimock.AiMockStorage;
-import com.interviewagent.aimock.AudioTranscriptionService;
+import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.storage.AiAudioStorage;
+import com.interviewagent.ai.storage.AudioTranscriptionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -28,7 +29,7 @@ class InterviewImportControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper json;
     @Autowired JdbcClient jdbc;
-    @MockBean AiMockStorage storage;
+    @MockBean AiAudioStorage storage;
     @MockBean AudioTranscriptionService transcription;
     @MockBean ReviewModelClient model;
 

@@ -5,7 +5,7 @@ import static com.interviewagent.interview.InterviewApi.QuestionRequest;
 import static com.interviewagent.mock.MockInterviewApi.*;
 
 import com.interviewagent.interview.InterviewService;
-import com.interviewagent.interview.ReviewModelClient;
+import com.interviewagent.ai.ReviewModelClient;
 import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;

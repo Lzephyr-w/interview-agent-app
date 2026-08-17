@@ -99,6 +99,12 @@
   .resource-item {
     display: grid;
   }
+  .weakness-section .resource-item {
+    grid-template-columns: 1fr;
+  }
+  .weakness-section .resource-item > .item-actions {
+    width: 100%;
+  }
   .interview-tab {
     display: grid;
     gap: 3px;

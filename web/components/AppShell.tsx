@@ -33,7 +33,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           {links.map((link) => (
             <Link
               className={
-                pathname === link.href ? "sidebar-link active" : "sidebar-link"
+                current?.href === link.href ? "sidebar-link active" : "sidebar-link"
               }
               href={link.href}
               key={link.href}

@@ -3,20 +3,17 @@ package com.interviewagent.chat;
 import static com.interviewagent.chat.AiConversationApi.*;
 
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.interviewagent.ai.AgentPythonClient;
 import com.interviewagent.interview.InterviewService;
 import com.interviewagent.interview.ReviewFailedException;
-import com.interviewagent.interview.ReviewModelClient;
 import com.interviewagent.material.MaterialService;
 import com.interviewagent.material.ResumeFileService;
-import com.interviewagent.weakness.WeaknessApi.TrainingTaskRequest;
 import com.interviewagent.weakness.WeaknessService;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -29,27 +26,19 @@ import org.springframework.transaction.annotation.Transactional;
 class AiConversationService {
     private static final int MAX_MESSAGE_CHARS = 8_000;
     private static final int MAX_REPLY_CHARS = 20_000;
-    private static final int MAX_AGENT_STEPS = 8;
-    private static final String AGENT_TOOLS = """
-        [
-          {"type":"function","function":{"name":"list_resources","description":"列出当前用户的一类业务资料。先列出再按 ID 读取详情。","parameters":{"type":"object","properties":{"resource_type":{"type":"string","enum":["interview_package","resume","resume_file","job_description","evidence_card","interview","weakness","training_task"]}},"required":["resource_type"],"additionalProperties":false}}},
-          {"type":"function","function":{"name":"get_resource","description":"读取当前用户指定业务资料的完整详情。","parameters":{"type":"object","properties":{"resource_type":{"type":"string","enum":["interview_package","resume","resume_file","job_description","evidence_card","interview","weakness","training_task"]},"id":{"type":"string"}},"required":["resource_type","id"],"additionalProperties":false}}},
-          {"type":"function","function":{"name":"create_training_task","description":"为当前用户创建训练任务。只在有助于完成用户明确请求时调用，并在最终回复中说明创建结果。","parameters":{"type":"object","properties":{"title":{"type":"string"},"weakness_tag":{"type":"string","enum":["技术基础","算法与数据结构","系统设计","项目深挖","业务理解","行为面","沟通表达","岗位匹配","简历风险","英语表达"]},"action":{"type":"string"},"source_interview_id":{"type":"string"},"source_review_report_id":{"type":"string"}},"required":["title","weakness_tag","action"],"additionalProperties":false}}}
-        ]
-        """;
 
     private final JdbcClient jdbc;
     private final ObjectMapper json;
-    private final ReviewModelClient model;
+    private final AgentPythonClient agent;
     private final ResumeFileService resumeFiles;
     private final MaterialService materials;
     private final InterviewService interviews;
     private final WeaknessService weaknesses;
 
-    AiConversationService(JdbcClient jdbc, ObjectMapper json, ReviewModelClient model, ResumeFileService resumeFiles, MaterialService materials, InterviewService interviews, WeaknessService weaknesses) {
+    AiConversationService(JdbcClient jdbc, ObjectMapper json, AgentPythonClient agent, ResumeFileService resumeFiles, MaterialService materials, InterviewService interviews, WeaknessService weaknesses) {
         this.jdbc = jdbc;
         this.json = json;
-        this.model = model;
+        this.agent = agent;
         this.resumeFiles = resumeFiles;
         this.materials = materials;
         this.interviews = interviews;
@@ -272,26 +261,7 @@ class AiConversationService {
     }
 
     private String runAgent(String userId, ConversationRow row) {
-        List<Map<String, Object>> agentMessages = agentMessages(userId, row);
-        JsonNode tools = jsonTree(AGENT_TOOLS);
-        for (int step = 0; step < MAX_AGENT_STEPS; step++) {
-            JsonNode response = model.agent(agentMessages, tools);
-            JsonNode calls = response.path("tool_calls");
-            if (!calls.isArray() || calls.isEmpty()) {
-                String answer = response.path("content").asText("").trim();
-                if (answer.isBlank()) throw new ReviewFailedException("AI Agent 未生成最终回复，请重试。");
-                return answer;
-            }
-            agentMessages.add(assistantToolMessage(response));
-            for (JsonNode call : calls) {
-                String callId = call.path("id").asText("");
-                String name = call.path("function").path("name").asText("");
-                JsonNode arguments = jsonTree(call.path("function").path("arguments").asText("{}"));
-                if (callId.isBlank() || name.isBlank()) throw new ReviewFailedException("AI Agent 工具调用格式无效，请重试。");
-                agentMessages.add(Map.of("role", "tool", "tool_call_id", callId, "content", jsonString(executeTool(userId, name, arguments))));
-            }
-        }
-        throw new ReviewFailedException("AI Agent 执行步骤过多，请缩小任务范围后重试。");
+        return agent.reply(userId, row.id(), agentMessages(userId, row), "");
     }
 
     private List<Map<String, Object>> agentMessages(String userId, ConversationRow row) {
@@ -301,108 +271,6 @@ class AiConversationService {
         jdbc.sql("SELECT role, content FROM ai_conversation_messages WHERE conversation_id = :id AND (role = 'USER' OR status = 'COMPLETED') ORDER BY created_at, id")
             .param("id", row.id()).query((rs, index) -> Map.<String, Object>of("role", "USER".equals(rs.getString("role")) ? "user" : "assistant", "content", rs.getString("content"))).list().forEach(result::add);
         return result;
-    }
-
-    private Map<String, Object> assistantToolMessage(JsonNode response) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("role", "assistant");
-        if (response.path("content").isTextual()) result.put("content", response.path("content").asText());
-        result.put("tool_calls", json.convertValue(response.path("tool_calls"), Object.class));
-        return result;
-    }
-
-    private Object executeTool(String userId, String name, JsonNode arguments) {
-        try {
-            return switch (name) {
-                case "list_resources" -> listResources(userId, requiredArgument(arguments, "resource_type"));
-                case "get_resource" -> getResource(userId, requiredArgument(arguments, "resource_type"), requiredArgument(arguments, "id"));
-                case "create_training_task" -> createTrainingTask(userId, arguments);
-                default -> Map.of("error", "不支持的工具：" + name);
-            };
-        } catch (IllegalArgumentException | NoSuchElementException exception) {
-            return Map.of("error", exception.getMessage());
-        }
-    }
-
-    private Object listResources(String userId, String type) {
-        return switch (type) {
-            case "interview_package" -> materials.interviewPackages(userId);
-            case "resume" -> materials.resumes(userId);
-            case "resume_file" -> resumeFiles.files(userId);
-            case "job_description" -> materials.jobDescriptions(userId);
-            case "evidence_card" -> materials.evidenceCards(userId);
-            case "interview" -> interviews.list(userId);
-            case "weakness" -> weaknesses.weaknesses(userId);
-            case "training_task" -> weaknesses.tasks(userId);
-            default -> throw new IllegalArgumentException("资料类型无效。");
-        };
-    }
-
-    private Object getResource(String userId, String type, String id) {
-        return switch (type) {
-            case "interview_package" -> materials.interviewPackage(userId, id);
-            case "resume" -> materials.resume(userId, id);
-            case "resume_file" -> resumeFile(userId, id);
-            case "job_description" -> materials.jobDescription(userId, id);
-            case "evidence_card" -> materials.evidenceCard(userId, id);
-            case "interview" -> interviews.get(userId, id);
-            case "weakness" -> weaknesses.weakness(userId, id);
-            case "training_task" -> weaknesses.task(userId, id);
-            default -> throw new IllegalArgumentException("资料类型无效。");
-        };
-    }
-
-    private Map<String, Object> resumeFile(String userId, String id) {
-        var metadata = resumeFiles.metadata(userId, id);
-        var parsed = resumeFiles.parsedText(userId, id);
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("metadata", metadata);
-        result.put("parsedStatus", parsed.status());
-        result.put("parsedText", parsed.text());
-        result.put("parsedTruncated", parsed.truncated());
-        result.put("parsedError", parsed.error());
-        return result;
-    }
-
-    private Object createTrainingTask(String userId, JsonNode arguments) {
-        String title = requiredArgument(arguments, "title");
-        String tag = requiredArgument(arguments, "weakness_tag");
-        String action = requiredArgument(arguments, "action");
-        String interviewId = optionalArgument(arguments, "source_interview_id");
-        String reviewId = optionalArgument(arguments, "source_review_report_id");
-        String existingId = existingTrainingTask(userId, title, tag, action, interviewId, reviewId);
-        if (existingId != null) return Map.of("status", "already_exists", "task", weaknesses.task(userId, existingId));
-        return Map.of("status", "created", "task", weaknesses.create(userId, new TrainingTaskRequest(title, tag, action, "NOT_STARTED", interviewId, reviewId)));
-    }
-
-    private String existingTrainingTask(String userId, String title, String tag, String action, String interviewId, String reviewId) {
-        var query = jdbc.sql("SELECT id FROM training_tasks WHERE user_id = :userId AND title = :title AND weakness_tag = :tag AND action = :action AND " +
-                (reviewId != null ? "source_review_report_id = :sourceId" : interviewId != null ? "source_review_report_id IS NULL AND source_interview_id = :sourceId" : "source_review_report_id IS NULL AND source_interview_id IS NULL") +
-                " ORDER BY created_at DESC LIMIT 1")
-            .param("userId", userId).param("title", title).param("tag", tag).param("action", action);
-        if (reviewId != null || interviewId != null) query = query.param("sourceId", reviewId != null ? reviewId : interviewId);
-        return query.query(String.class).optional().orElse(null);
-    }
-
-    private static String requiredArgument(JsonNode arguments, String name) {
-        String value = optionalArgument(arguments, name);
-        if (value == null) throw new IllegalArgumentException("工具参数 " + name + " 不能为空。");
-        return value;
-    }
-
-    private static String optionalArgument(JsonNode arguments, String name) {
-        String value = arguments.path(name).asText("").trim();
-        return value.isBlank() ? null : value;
-    }
-
-    private JsonNode jsonTree(String value) {
-        try { return json.readTree(value); }
-        catch (Exception exception) { throw new ReviewFailedException("AI Agent 工具参数格式无效，请重试。"); }
-    }
-
-    private String jsonString(Object value) {
-        try { return json.writeValueAsString(value); }
-        catch (Exception exception) { throw new IllegalStateException("无法序列化 Agent 工具结果。"); }
     }
 
     private java.util.Optional<PackageInfo> packageInfo(String userId, String id) {

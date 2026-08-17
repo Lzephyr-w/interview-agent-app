@@ -1,5 +1,6 @@
 package com.interviewagent.interview;
 
+import com.interviewagent.ai.ReviewModelClient;
 import static com.interviewagent.interview.InterviewApi.*;
 
 import com.fasterxml.jackson.core.type.TypeReference;

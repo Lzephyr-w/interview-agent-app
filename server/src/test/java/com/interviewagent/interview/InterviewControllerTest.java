@@ -1,5 +1,6 @@
 package com.interviewagent.interview;
 
+import com.interviewagent.ai.ReviewModelClient;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;

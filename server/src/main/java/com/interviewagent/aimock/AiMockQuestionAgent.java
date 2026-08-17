@@ -2,7 +2,7 @@ package com.interviewagent.aimock;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.interviewagent.interview.ReviewModelClient;
+import com.interviewagent.ai.ReviewModelClient;
 import com.interviewagent.interview.ReviewFailedException;
 import java.util.*;
 import org.springframework.stereotype.Component;

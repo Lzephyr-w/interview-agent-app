@@ -125,7 +125,23 @@ mvn -B -ntp -s .mvn/settings.xml spring-boot:run
 http://localhost:8080/actuator/health
 ```
 
-### 3.7 启动前端
+### 3.7 启动 Python Agent
+
+Agent 是独立进程，不嵌入 Java。先准备 `agent/.env.local`（不要提交），至少设置与 `server/.env.local` 相同的 `AGENT_INTERNAL_KEY`，以及 `AGENT_MODEL_API_URL`、`AGENT_MODEL_API_KEY`、`AGENT_MODEL`：
+
+```powershell
+cd agent
+Copy-Item .env.example .env.local
+$env:AGENT_INTERNAL_KEY = "replace-with-the-same-secret-as-server"
+$env:AGENT_MODEL_API_URL = "https://your-provider/v1/chat/completions"
+$env:AGENT_MODEL_API_KEY = "replace-with-secret"
+$env:AGENT_MODEL = "your-model"
+python -m interview_agent.server
+```
+
+如未安装开发依赖，可在 `agent` 目录执行 `python -m pip install -e ".[test]"`。Agent 默认监听 `127.0.0.1:8090`；Java 通过 `X-Agent-Key` 调用 Agent，Agent 查询资料和创建训练任务时再通过同一密钥调用 Java 的 `/internal/agent/tools`，浏览器始终只调用 Java。
+
+### 3.8 启动前端
 
 在第二个终端执行：
 
@@ -136,7 +152,7 @@ pnpm dev
 
 前端默认地址为 `http://localhost:3000`。打开该地址后使用已准备好的 Supabase 邮箱和密码登录。
 
-### 3.8 运行质量检查
+### 3.9 运行质量检查
 
 ```powershell
 # 前端类型检查
@@ -152,3 +168,13 @@ mvn -B -ntp -s .mvn/settings.xml test
 ```
 
 后端测试使用 H2 和测试配置，不需要连接真实 Supabase 数据库；AI、Storage 和转写的完整联调需要配置对应服务。
+
+### 3.10 一键启动
+
+Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行：
+
+```powershell
+.\start-dev.ps1
+```
+
+脚本会分别打开 Python Agent、Java 后端和 Next.js 前端终端。首次使用前先复制并填写 `agent/.env.local`；脚本不会自动生成或覆盖密钥。

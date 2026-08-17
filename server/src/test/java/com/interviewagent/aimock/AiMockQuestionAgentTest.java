@@ -11,7 +11,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.interviewagent.interview.ReviewModelClient;
+import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.storage.AiAudioStorage;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class AiMockQuestionAgentTest {
     @Autowired JdbcClient jdbc;
     @Autowired MockMvc mockMvc;
     @MockBean ReviewModelClient model;
-    @MockBean AiMockStorage storage;
+    @MockBean AiAudioStorage storage;
 
     @Test
     void planContainsRequiredDifferentTypes() throws Exception {

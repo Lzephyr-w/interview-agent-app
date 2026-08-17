@@ -4,8 +4,9 @@ import static com.interviewagent.interview.InterviewApi.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.interviewagent.aimock.AiMockStorage;
-import com.interviewagent.aimock.AudioTranscriptionService;
+import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.storage.AiAudioStorage;
+import com.interviewagent.ai.storage.AudioTranscriptionService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -22,13 +23,13 @@ class InterviewImportService {
     private static final int MAX_TRANSCRIPT_CHARS = 72_000;
     private static final int CHUNK_CHARS = 24_000;
     private final JdbcClient jdbc;
-    private final AiMockStorage storage;
+    private final AiAudioStorage storage;
     private final AudioTranscriptionService transcription;
     private final ReviewModelClient model;
     private final InterviewService interviews;
     private final ObjectMapper json;
 
-    InterviewImportService(JdbcClient jdbc, AiMockStorage storage, AudioTranscriptionService transcription, ReviewModelClient model, InterviewService interviews, ObjectMapper json) {
+    InterviewImportService(JdbcClient jdbc, AiAudioStorage storage, AudioTranscriptionService transcription, ReviewModelClient model, InterviewService interviews, ObjectMapper json) {
         this.jdbc = jdbc; this.storage = storage; this.transcription = transcription; this.model = model; this.interviews = interviews; this.json = json;
     }
 

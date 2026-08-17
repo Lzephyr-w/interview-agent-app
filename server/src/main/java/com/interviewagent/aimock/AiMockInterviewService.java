@@ -3,6 +3,8 @@ package com.interviewagent.aimock;
 import static com.interviewagent.aimock.AiMockInterviewApi.*;
 import static com.interviewagent.interview.InterviewApi.*;
 import com.interviewagent.interview.InterviewService;
+import com.interviewagent.ai.storage.AiAudioStorage;
+import com.interviewagent.ai.storage.AudioTranscriptionService;
 import static com.interviewagent.aimock.AiMockQuestionAgent.*;
 import java.net.URI;
 import java.net.http.*;
@@ -23,10 +25,10 @@ class AiMockInterviewService {
     private static final long MAX_AUDIO_BYTES = 10 * 1024 * 1024;
     private static final int MAX_TRANSCRIPT_CHARS = 40_000;
     private static final int LEGACY_QUESTION_LIMIT = 3;
-    private final JdbcClient jdbc; private final InterviewService interviews; private final AiMockQuestionAgent questionAgent; private final AiMockStorage storage;
+    private final JdbcClient jdbc; private final InterviewService interviews; private final AiMockQuestionAgent questionAgent; private final AiAudioStorage storage;
     private final String transcriptionUrl, transcriptionKey, transcriptionModel, volcengineSpeechKey;
     private final AudioTranscriptionService transcription;
-    AiMockInterviewService(JdbcClient jdbc, InterviewService interviews, AiMockQuestionAgent questionAgent, AiMockStorage storage, AudioTranscriptionService transcription, @Value("${app.transcription.url:}") String transcriptionUrl, @Value("${app.transcription.api-key:}") String transcriptionKey, @Value("${app.transcription.model:}") String transcriptionModel, @Value("${VOLCENGINE_SPEECH_API_KEY:}") String volcengineSpeechKey) { this.jdbc = jdbc; this.interviews = interviews; this.questionAgent = questionAgent; this.storage = storage; this.transcription = transcription; this.transcriptionUrl = transcriptionUrl; this.transcriptionKey = transcriptionKey; this.transcriptionModel = transcriptionModel; this.volcengineSpeechKey = volcengineSpeechKey; }
+    AiMockInterviewService(JdbcClient jdbc, InterviewService interviews, AiMockQuestionAgent questionAgent, AiAudioStorage storage, AudioTranscriptionService transcription, @Value("${app.transcription.url:}") String transcriptionUrl, @Value("${app.transcription.api-key:}") String transcriptionKey, @Value("${app.transcription.model:}") String transcriptionModel, @Value("${VOLCENGINE_SPEECH_API_KEY:}") String volcengineSpeechKey) { this.jdbc = jdbc; this.interviews = interviews; this.questionAgent = questionAgent; this.storage = storage; this.transcription = transcription; this.transcriptionUrl = transcriptionUrl; this.transcriptionKey = transcriptionKey; this.transcriptionModel = transcriptionModel; this.volcengineSpeechKey = volcengineSpeechKey; }
 
     @Transactional Session create(String userId, StartRequest request) {
         String packageId = required(request.interviewPackageId(), "面试包");

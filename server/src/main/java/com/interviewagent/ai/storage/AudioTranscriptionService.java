@@ -1,4 +1,4 @@
-package com.interviewagent.aimock;
+package com.interviewagent.ai.storage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -26,9 +26,7 @@ public class AudioTranscriptionService {
             String body = json.writeValueAsString(Map.of("user", Map.of("uid", userId), "audio", Map.of("data", Base64.getEncoder().encodeToString(bytes)), "request", Map.of("model_name", "bigmodel", "enable_itn", true, "enable_punc", true)));
             HttpResponse<String> response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create("https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash")).timeout(Duration.ofSeconds(60)).header("Content-Type", "application/json").header("X-Api-Key", volcengineKey).header("X-Api-Resource-Id", "volc.bigasr.auc_turbo").header("X-Api-Request-Id", UUID.randomUUID().toString()).header("X-Api-Sequence", "-1").POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
             if (!"20000000".equals(response.headers().firstValue("X-Api-Status-Code").orElse(""))) throw new IllegalStateException("转写服务请求失败，请稍后重试。");
-            String text = json.readTree(response.body()).path("result").path("text").asText("").trim();
-            if (text.isBlank()) throw new IllegalStateException("转写服务未返回有效文本，请重新上传或手工整理。");
-            return text;
+            return text(json.readTree(response.body()).path("result").path("text").asText(""));
         } catch (IllegalStateException exception) { throw exception; } catch (Exception exception) { throw new IllegalStateException("转写服务超时或失败，请稍后重试。", exception); }
     }
     private String openAi(byte[] bytes, String type) {
@@ -40,9 +38,8 @@ public class AudioTranscriptionService {
             System.arraycopy(head, 0, body, 0, head.length); System.arraycopy(bytes, 0, body, head.length, bytes.length); System.arraycopy(tail, 0, body, head.length + bytes.length, tail.length);
             HttpResponse<String> response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(60)).header("Authorization", "Bearer " + key).header("Content-Type", "multipart/form-data; boundary=" + boundary).POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) throw new IllegalStateException("转写服务请求失败，请稍后重试。");
-            String text = json.readTree(response.body()).path("text").asText("").trim();
-            if (text.isBlank()) throw new IllegalStateException("转写服务未返回有效文本，请重新上传或手工整理。");
-            return text;
+            return text(json.readTree(response.body()).path("text").asText(""));
         } catch (IllegalStateException exception) { throw exception; } catch (Exception exception) { throw new IllegalStateException("转写服务超时或失败，请稍后重试。", exception); }
     }
+    private static String text(String value) { String result = value.trim(); if (result.isBlank()) throw new IllegalStateException("转写服务未返回有效文本，请重新上传或手工整理。"); return result; }
 }

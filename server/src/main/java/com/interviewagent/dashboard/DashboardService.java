@@ -57,7 +57,7 @@ class DashboardService {
 
     private List<Activity> activities(String userId) {
         return jdbc.sql("SELECT * FROM (SELECT 'REVIEW' type, r.id activity_id, i.company || ' · ' || i.role title, 'AI 复盘' detail, '/interviews/' || i.id || '/review' target_path, r.created_at occurred_at FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId UNION ALL SELECT CASE WHEN i.interview_type = 'MOCK' THEN 'MOCK' ELSE 'INTERVIEW' END, i.id, i.company || ' · ' || i.role, CASE WHEN i.interview_type = 'MOCK' THEN 'AI 模拟记录' ELSE '真实面试记录' END, '/interviews/' || i.id, i.updated_at FROM interviews i WHERE i.user_id = :userId) activity ORDER BY occurred_at DESC LIMIT 6")
-            .param("userId", userId).query((rs, row) -> new Activity(rs.getString("type"), rs.getString("title"), rs.getString("detail"), rs.getString("target_path"), rs.getObject("occurred_at", OffsetDateTime.class))).list();
+            .param("userId", userId).query((rs, row) -> new Activity(rs.getString("activity_id"), rs.getString("type"), rs.getString("title"), rs.getString("detail"), rs.getString("target_path"), rs.getObject("occurred_at", OffsetDateTime.class))).list();
     }
 
     private List<WeaknessFocus> weaknesses(String userId) {
