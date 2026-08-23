@@ -3,8 +3,6 @@ package com.interviewagent.ai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.interview.ReviewFailedException;
-import java.net.InetSocketAddress;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -22,7 +20,7 @@ public class ReviewModelClient {
     private final String url;
     private final String apiKey;
     private final String model;
-    private final HttpClient http = httpClient();
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public ReviewModelClient(ObjectMapper json, @Value("${app.review-model.url:}") String url, @Value("${app.review-model.api-key:}") String apiKey, @Value("${app.review-model.model:}") String model) {
         this.json = json; this.url = url; this.apiKey = apiKey; this.model = model;
@@ -76,12 +74,5 @@ public class ReviewModelClient {
         String clean = value.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
         int start = clean.indexOf('{'), end = clean.lastIndexOf('}');
         return start >= 0 && end > start ? clean.substring(start, end + 1) : clean;
-    }
-
-    private static HttpClient httpClient() {
-        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10));
-        String proxy = System.getenv("HTTPS_PROXY"); if (proxy == null || proxy.isBlank()) proxy = System.getenv("HTTP_PROXY");
-        if (proxy != null && !proxy.isBlank()) { URI uri = URI.create(proxy); int port = uri.getPort() > 0 ? uri.getPort() : 80; builder.proxy(ProxySelector.of(new InetSocketAddress(uri.getHost(), port))); }
-        return builder.build();
     }
 }

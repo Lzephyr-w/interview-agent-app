@@ -34,7 +34,7 @@ class AiMockInterviewService {
         String packageId = required(request.interviewPackageId(), "面试包");
         PackageInfo p = jdbc.sql("SELECT id, company, role, interview_round FROM interview_packages WHERE id=:id AND user_id=:user").param("id", packageId).param("user", userId).query((rs, row) -> new PackageInfo(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4))).optional().orElseThrow(AiMockInterviewService::notFound);
         Materials materials=materials(userId,p.id,p.company,p.role,p.round); String plan=questionAgent.serialize(questionAgent.plan(materials));
-        String id = UUID.randomUUID().toString(); OffsetDateTime expires = OffsetDateTime.now();
+        String id = UUID.randomUUID().toString(); OffsetDateTime expires = OffsetDateTime.now().plusMinutes(50);
         jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,question_plan) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:plan)").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("plan",plan).update();
         addQuestion(userId, id, 0); return detail(userId,id);
     }
