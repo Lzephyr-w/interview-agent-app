@@ -53,8 +53,11 @@ cd interview-agent-app
 
 ### 3.2 准备 Supabase
 
-1. 创建 Supabase 项目，并在 Authentication 中准备一个邮箱/密码用户。当前前端没有单独的注册页。
-2. 创建以下私有 Storage bucket，保持 Public 关闭：
+本项目将 Supabase Auth、Supabase Storage 和业务数据库分开使用：邮箱/密码登录由 Supabase Auth 负责，业务数据可以使用本地 H2 或 Supabase PostgreSQL。
+
+1. 创建 Supabase 项目，并在 Authentication → Users → Add user 中准备邮箱/密码用户。当前前端没有单独的注册页；其他开发者使用同一个项目时，可以为每个人创建独立账号。
+2. 在 Project Settings → API 中获取 Project URL 和 anon/publishable key，分别填写到 `web/.env.local` 和 `server/.env.local`。anon/publishable key 可以出现在前端，Service Role Key 不可以。
+3. 如果要使用文件上传或录音功能，创建以下私有 Storage bucket，保持 Public 关闭：
 
    - `resume-files`：简历原文件
    - `ai-mock-audio`：AI 录音模拟和真实面试录音导入文件
@@ -66,9 +69,12 @@ cd interview-agent-app
 ```powershell
 Copy-Item web/.env.example web/.env.local
 Copy-Item server/.env.example server/.env.local
+Copy-Item agent/.env.example agent/.env.local
 ```
 
-编辑 `web/.env.local`：
+分别编辑三个配置文件。不要把真实密钥、数据库密码或 `.env.local` 文件提交到 Git。
+
+#### `web/.env.local`
 
 | 变量 | 说明 |
 | --- | --- |
@@ -76,13 +82,26 @@ Copy-Item server/.env.example server/.env.local
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase 公共 anon/publishable key，不能填 Service Role Key |
 
-编辑 `server/.env.local`：
+最小配置示例：
+
+```env
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8080
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
+```
+
+修改后需要重启前端开发服务器。
+
+#### `server/.env.local`
 
 | 变量 | 说明 |
 | --- | --- |
+| `APP_CORS_ALLOWED_ORIGIN` | 前端地址，默认 `http://localhost:3000` |
 | `SUPABASE_URL` | Supabase Project URL，必填 |
 | `SUPABASE_STORAGE_URL` | 通常为 `${SUPABASE_URL}/storage/v1` |
 | `SUPABASE_STORAGE_SERVICE_KEY` | 服务端访问私有 bucket 的 Service Role Key，不能提交到 Git |
+| `SUPABASE_RESUME_FILES_BUCKET` | 简历文件 bucket，默认 `resume-files` |
+| `SUPABASE_AI_MOCK_AUDIO_BUCKET` | AI 模拟和面试录音 bucket，默认 `ai-mock-audio` |
 | `AI_REVIEW_API_URL` | OpenAI 兼容 Chat Completions 地址；AI 复盘和模拟功能需要 |
 | `AI_REVIEW_API_KEY` | AI 模型服务端密钥 |
 | `AI_REVIEW_MODEL` | AI 模型名 |
@@ -90,6 +109,22 @@ Copy-Item server/.env.example server/.env.local
 | `AI_TRANSCRIPTION_API_KEY` | 音频转写服务密钥 |
 | `AI_TRANSCRIPTION_MODEL` | 音频转写模型名 |
 | `VOLCENGINE_SPEECH_API_KEY` | 可选的火山引擎转写密钥，与 OpenAI 兼容转写二选一 |
+| `AGENT_SERVICE_URL` | Python Agent 地址，默认 `http://localhost:8090` |
+| `AGENT_INTERNAL_KEY` | Java 与 Python Agent 之间的共享密钥，必须与 `agent/.env.local` 相同 |
+
+最小 H2 配置示例：
+
+```env
+APP_CORS_ALLOWED_ORIGIN=http://localhost:3000
+SUPABASE_URL=https://your-project-ref.supabase.co
+
+# H2 模式下不要填写这三项；删除或注释 server/.env.example 中对应的行。
+# SPRING_DATASOURCE_URL=...
+# SPRING_DATASOURCE_USERNAME=...
+# SPRING_DATASOURCE_PASSWORD=...
+```
+
+`SUPABASE_STORAGE_SERVICE_KEY` 只在文件上传、下载或录音功能中需要；AI 和转写变量只在调用对应功能时需要。未使用的可选变量可以留空，但不能原样保留 `replace-with-*` 占位值。
 
 默认可将 `SUPABASE_JWT_SECRET`、`SUPABASE_JWT_JWK_KID`、`SUPABASE_JWT_JWK_X`、`SUPABASE_JWT_JWK_Y` 留空，后端通过 Supabase JWKS 校验 JWT；Legacy HS256 或网络受限时再填写对应项。示例中的 `replace-with-*` 不能原样保留。
 
@@ -98,13 +133,48 @@ Copy-Item server/.env.example server/.env.local
 - **H2 内存数据库**：从 `server/.env.local` 删除或注释 `SPRING_DATASOURCE_URL`、`SPRING_DATASOURCE_USERNAME`、`SPRING_DATASOURCE_PASSWORD` 三行，使用 `application.yml` 默认值。
 - **Supabase PostgreSQL**：填写上述三个变量，JDBC URL 建议包含 `sslmode=require&currentSchema=interview_agent`。
 
-不要提交 `server/.env.local`、`web/.env.local`、Service Role Key、数据库密码或模型密钥。
+H2 数据只存在 Java 进程内存中，后端重启后业务数据会丢失；Supabase Auth 中的登录账号不会丢失。邮箱登录不依赖 PostgreSQL 配置，但仍需要 `web/.env.local` 中的 Supabase URL/anon key，以及 `server/.env.local` 中的 `SUPABASE_URL`。
+
+#### `agent/.env.local`
+
+| 变量 | 说明 |
+| --- | --- |
+| `AGENT_INTERNAL_KEY` | 与 `server/.env.local` 中的值完全相同，用于内部鉴权 |
+| `AGENT_HOST` | Agent 监听地址，本机保持 `127.0.0.1` |
+| `AGENT_PORT` | Agent 端口，默认 `8090` |
+| `JAVA_AGENT_TOOL_URL` | Java Agent 工具接口，默认 `http://localhost:8080/internal/agent/tools` |
+| `AGENT_MODEL_API_URL` | OpenAI 兼容 Chat Completions 地址 |
+| `AGENT_MODEL_API_KEY` | Agent 使用的模型服务密钥 |
+| `AGENT_MODEL` | Agent 使用的模型名 |
+
+示例：
+
+```env
+AGENT_INTERNAL_KEY=use-the-same-random-secret-as-server
+AGENT_HOST=127.0.0.1
+AGENT_PORT=8090
+JAVA_AGENT_TOOL_URL=http://localhost:8080/internal/agent/tools
+AGENT_MODEL_API_URL=https://your-provider/v1/chat/completions
+AGENT_MODEL_API_KEY=your-agent-model-key
+AGENT_MODEL=your-model-name
+```
+
+Agent 的模型配置只在使用 AI 对话等 Agent 功能时需要；`AGENT_INTERNAL_KEY` 必须和 Java 后端配置一致。
+
+不要提交 `server/.env.local`、`web/.env.local`、`agent/.env.local`、Service Role Key、数据库密码或模型密钥。
 
 ### 3.4 安装前端依赖
 
 ```powershell
 cd web
 pnpm install
+```
+
+如需使用 Python Agent，在 `agent` 目录安装依赖：
+
+```powershell
+cd ..\agent
+python -m pip install -e ".[test]"
 ```
 
 ### 3.5 初始化数据库
@@ -128,15 +198,10 @@ http://localhost:8080/actuator/health
 
 ### 3.7 启动 Python Agent
 
-Agent 是独立进程，不嵌入 Java。先准备 `agent/.env.local`（不要提交），至少设置与 `server/.env.local` 相同的 `AGENT_INTERNAL_KEY`，以及 `AGENT_MODEL_API_URL`、`AGENT_MODEL_API_KEY`、`AGENT_MODEL`：
+Agent 是独立进程，不嵌入 Java。先按上面的说明准备 `agent/.env.local`，其中 `AGENT_INTERNAL_KEY` 必须与 `server/.env.local` 相同：
 
 ```powershell
 cd agent
-Copy-Item .env.example .env.local
-$env:AGENT_INTERNAL_KEY = "replace-with-the-same-secret-as-server"
-$env:AGENT_MODEL_API_URL = "https://your-provider/v1/chat/completions"
-$env:AGENT_MODEL_API_KEY = "replace-with-secret"
-$env:AGENT_MODEL = "your-model"
 python -m interview_agent.server
 ```
 
