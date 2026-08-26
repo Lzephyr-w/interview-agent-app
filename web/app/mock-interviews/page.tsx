@@ -41,6 +41,7 @@ type MockInterview = {
   formalInterviewId: string | null;
   currentQuestion: Question | null;
   questions: Question[];
+  task: { id: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
 
 const emptyForm = { packageId: "", company: "", role: "", round: "" };
@@ -75,6 +76,20 @@ export default function MockInterviewsPage() {
       }
     }
     void bootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.task || session.task.status === "FAILED") return;
+    const timer = window.setInterval(() => {
+      void api<MockInterview>(`/api/v1/mock-interviews/${session.id}`).then(setSession).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [session?.id, session?.task?.id, session?.task?.status]);
+
+  useEffect(() => {
+    void api<MockInterview>("/api/v1/mock-interviews")
+      .then(setSession)
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -203,6 +218,19 @@ export default function MockInterviewsPage() {
     }
   }
 
+  async function retryTask() {
+    if (!session?.task) return;
+    setSaving(true);
+    try {
+      await api(`/api/v1/ai-mock-tasks/${session.task.id}/retry`, { method: "POST" });
+      setSession(await api<MockInterview>(`/api/v1/mock-interviews/${session.id}`));
+    } catch (cause) {
+      setError(message(cause, "重试失败，请稍后重试。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function finish() {
     if (session) setDialog("finish");
   }
@@ -275,7 +303,18 @@ export default function MockInterviewsPage() {
                     已完成 {session.completedQuestions} 题（含追问）· 每道主问题最多追问 1 次
                   </span>
                 </div>
-                {session.currentQuestion ? (
+                {session.task?.status === "FAILED" ? (
+                  <div className="mock-complete">
+                    <h3>AI 处理失败</h3>
+                    <p className="error">{session.task.error || "后台处理失败，请重试。"}</p>
+                    <button className="primary-button" type="button" onClick={() => void retryTask()} disabled={saving}>重试</button>
+                  </div>
+                ) : session.task ? (
+                  <div className="mock-complete" role="status">
+                    <h3>正在准备下一步…</h3>
+                    <p className="muted">AI 正在生成题目或反馈，页面会自动更新。</p>
+                  </div>
+                ) : session.currentQuestion ? (
                   <form className="mock-question" onSubmit={submitAnswer}>
                     <p className="profile-label">
                       {session.currentQuestion.questionKind === "FOLLOW_UP"

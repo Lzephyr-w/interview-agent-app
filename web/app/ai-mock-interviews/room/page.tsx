@@ -31,6 +31,7 @@ type Session = {
   finalInterviewId: string | null;
   totalQuestions: number;
   currentQuestion: Question | null;
+  task: { id: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
 const QUESTION_LIMIT = 10;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
@@ -103,6 +104,17 @@ export default function AiMockInterviewRoomPage() {
         setError(errorText(caught, "加载面试信息失败。")),
       );
   }, []);
+  useEffect(() => {
+    if (!selected) return;
+    void api<Session>("/api/v1/ai-mock-interviews").then(setSession).catch(() => undefined);
+  }, [selected?.id]);
+  useEffect(() => {
+    if (!session?.task || session.task.status === "FAILED") return;
+    const timer = window.setInterval(() => {
+      void api<Session>(`/api/v1/ai-mock-interviews/${session.id}`).then(setSession).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [session?.id, session?.task?.id, session?.task?.status]);
   useEffect(() => () => window.speechSynthesis?.cancel(), [current?.id]);
   useEffect(() => {
     if (current && spokenQuestion.current !== current.id) {
@@ -135,6 +147,7 @@ export default function AiMockInterviewRoomPage() {
       !session ||
       remaining !== 0 ||
       busy ||
+      session.task ||
       expiredQuestion.current === current.id
     )
       return;
@@ -144,7 +157,7 @@ export default function AiMockInterviewRoomPage() {
       stopRecording();
       return;
     }
-    void api<Session>(`/api/v1/ai-mock-interviews/${session.id}`)
+    void api<Session>(`/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/expire`, { method: "POST" })
       .then(setSession)
       .catch((caught: unknown) =>
         setError(errorText(caught, "题目已超时，请刷新后继续。")),
@@ -188,6 +201,18 @@ export default function AiMockInterviewRoomPage() {
       setNotice("面试已开始，第一题正在朗读。");
     } catch (caught) {
       setError(errorText(caught, "AI 模拟无法开始。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function retryTask() {
+    if (!session?.task) return;
+    setBusy(true);
+    try {
+      await api(`/api/v1/ai-mock-tasks/${session.task.id}/retry`, { method: "POST" });
+      setSession(await api<Session>(`/api/v1/ai-mock-interviews/${session.id}`));
+    } catch (caught) {
+      setError(errorText(caught, "重试失败，请稍后重试。"));
     } finally {
       setBusy(false);
     }
@@ -479,6 +504,17 @@ export default function AiMockInterviewRoomPage() {
             </Link>
           )}
         </section>
+      ) : session.task?.status === "FAILED" ? (
+        <section className="ai-room-brief ai-room-result">
+          <h1>AI 处理失败</h1>
+          <p className="ai-room-error">{session.task.error || "后台处理失败，请重试。"}</p>
+          <button className="ai-room-primary" onClick={() => void retryTask()} disabled={busy}>重试</button>
+        </section>
+      ) : session.task ? (
+        <section className="ai-room-brief ai-room-result" role="status">
+          <h1>正在准备下一步…</h1>
+          <p>题目、转写或下一题正在后台处理，页面会自动更新。</p>
+        </section>
       ) : current ? (
         <section className="ai-room-stage">
           <div className="ai-room-question">
@@ -503,7 +539,7 @@ export default function AiMockInterviewRoomPage() {
               </button>
             )}
             <h1>{current.questionText}</h1>
-            {busy ? (
+            {busy || session.task ? (
               <p className="ai-room-processing">正在提交回答并准备下一题…</p>
             ) : recording ? (
               <>

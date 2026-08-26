@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AiMockTaskWorker;
 import com.interviewagent.ai.storage.AiAudioStorage;
 import java.util.List;
 import java.util.UUID;
@@ -22,15 +23,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.mock.web.MockMultipartFile;
 
-@SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "spring.datasource.url=jdbc:h2:mem:ai-mock-agent-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
+@SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "app.ai-mock-task.poll-ms=600000", "spring.datasource.url=jdbc:h2:mem:ai-mock-agent-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
 @AutoConfigureMockMvc
 class AiMockQuestionAgentTest {
     @Autowired AiMockQuestionAgent agent;
     @Autowired ObjectMapper json;
     @Autowired JdbcClient jdbc;
     @Autowired MockMvc mockMvc;
+    @Autowired AiMockTaskWorker worker;
     @MockBean ReviewModelClient model;
     @MockBean AiAudioStorage storage;
 
@@ -63,20 +66,35 @@ class AiMockQuestionAgentTest {
     void invalidPlanCreatesNeitherSessionNorQuestion() throws Exception {
         String packageId = packageFor("user-a");
         when(model.replyJson(anyString())).thenReturn(json.readTree("{\"plan\":[]}"));
-        mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
-            .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("计划 JSON 非法")));
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='user-a'").query(Integer.class).single());
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions").query(Integer.class).single());
+        MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+        worker.run();
+        String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
+        mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("计划 JSON 非法")));
+        mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-b"))))
+            .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/ai-mock-tasks/{id}/retry", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("PENDING"));
+        worker.run();
+        assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='user-a'").query(Integer.class).single());
+        String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
 
     @Test
     void invalidQuestionJsonCreatesNeitherSessionNorQuestion() throws Exception {
         String packageId = packageFor("invalid-question-user");
         when(model.replyJson(anyString())).thenReturn(json.readTree(validPlan()), json.readTree("{\"type\":\"FUNDAMENTAL\"}"));
-        mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
-            .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("缺少必填字段")));
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions").query(Integer.class).single());
+        MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
+            .andExpect(status().isCreated()).andReturn();
+        worker.run();
+        String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
+        mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("缺少必填字段")));
+        assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
+        String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
 
     @Test
@@ -86,6 +104,18 @@ class AiMockQuestionAgentTest {
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order) VALUES(:id,:session,'浏览器事件循环如何工作？','OPEN',0)").param("id", questionId).param("session", sessionId).update();
         mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("legacy-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.totalQuestions").value(3)).andExpect(jsonPath("$.currentQuestion.questionType").value("FUNDAMENTAL")).andExpect(jsonPath("$.currentQuestion.competency").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    void expiredQuestionGetOnlyReadsAndDoesNotGenerate() throws Exception {
+        String packageId = packageFor("expired-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'expired-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+            .param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_expires_at) VALUES(:id,:session,'过期题目','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
+            .param("id", questionId).param("session", sessionId).update();
+        mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("expired-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.id").value(questionId)).andExpect(jsonPath("$.currentQuestion.state").value("OPEN"));
+        verify(model, never()).replyJson(anyString());
     }
 
     @Test
@@ -100,6 +130,12 @@ class AiMockQuestionAgentTest {
         verify(storage, never()).upload(anyString(), anyString(), org.mockito.ArgumentMatchers.any(byte[].class));
 
         mockMvc.perform(multipart("/api/v1/ai-mock-interviews/{id}/questions/{questionId}/audio", sessionId, questionId).file(wav).with(jwt().jwt(token -> token.subject("audio-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.audio.status").value("TRANSCRIBING"));
+        mockMvc.perform(multipart("/api/v1/ai-mock-interviews/{id}/questions/{questionId}/audio", sessionId, questionId).file(wav).with(jwt().jwt(token -> token.subject("audio-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.audio.status").value("TRANSCRIBING"));
+        verify(storage).upload(anyString(), anyString(), org.mockito.ArgumentMatchers.any(byte[].class));
+        worker.run();
+        mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("audio-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.audio.status").value("FAILED"));
         String assetId = jdbc.sql("SELECT id FROM ai_mock_audio_assets WHERE user_id='audio-user'").query(String.class).single();
         mockMvc.perform(delete("/api/v1/ai-mock-audio-assets/{id}", assetId).with(jwt().jwt(token -> token.subject("other-user"))))

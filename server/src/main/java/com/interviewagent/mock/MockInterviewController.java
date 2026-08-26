@@ -25,6 +25,11 @@ public class MockInterviewController {
         return service.get(jwt.getSubject(), id);
     }
 
+    @GetMapping
+    MockInterview active(@AuthenticationPrincipal Jwt jwt) {
+        return service.active(jwt.getSubject());
+    }
+
     @PostMapping("/{id}/answer")
     MockInterview answer(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestBody AnswerRequest request) {
         return service.answer(jwt.getSubject(), id, request);

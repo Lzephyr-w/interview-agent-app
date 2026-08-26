@@ -1,5 +1,6 @@
 package com.interviewagent.mock;
 
+import com.interviewagent.ai.AiTaskApi.Task;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -17,6 +18,6 @@ public final class MockInterviewApi {
         String mode, boolean aiAvailable, String aiMessage, int totalQuestions,
         int completedQuestions, int currentQuestionIndex, String formalInterviewId,
         OffsetDateTime createdAt, OffsetDateTime updatedAt, MockQuestion currentQuestion,
-        List<MockQuestion> questions
+        List<MockQuestion> questions, Task task
     ) {}
 }

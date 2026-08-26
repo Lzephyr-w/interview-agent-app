@@ -6,6 +6,8 @@ import static com.interviewagent.mock.MockInterviewApi.*;
 
 import com.interviewagent.interview.InterviewService;
 import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AiMockTaskService;
+import com.interviewagent.ai.AiMockTaskService.ClaimedTask;
 import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -28,11 +30,13 @@ public class MockInterviewService {
     private final JdbcClient jdbc;
     private final InterviewService interviews;
     private final ReviewModelClient model;
+    private final AiMockTaskService tasks;
 
-    MockInterviewService(JdbcClient jdbc, InterviewService interviews, ReviewModelClient model) {
+    MockInterviewService(JdbcClient jdbc, InterviewService interviews, ReviewModelClient model, AiMockTaskService tasks) {
         this.jdbc = jdbc;
         this.interviews = interviews;
         this.model = model;
+        this.tasks = tasks;
     }
 
     @Transactional
@@ -44,13 +48,18 @@ public class MockInterviewService {
         String round = limited(fallback(request.interviewRound(), selected.interviewRound()), "面试轮次", 200);
         jdbc.sql("INSERT INTO mock_interviews (id, user_id, interview_package_id, company, role, interview_round, status, total_questions) VALUES (:id, :userId, :packageId, :company, :role, :round, 'RUNNING', :total)")
             .param("id", id).param("userId", userId).param("packageId", selected.id()).param("company", company).param("role", role).param("round", round).param("total", MAIN_QUESTION_LIMIT).update();
-        addMainQuestion(userId, id);
+        tasks.enqueue(userId, "MOCK_CREATE", id, null);
         return detail(userId, id);
     }
 
     public MockInterview get(String userId, String id) {
         owned(userId, id);
         return detail(userId, id);
+    }
+
+    public MockInterview active(String userId) {
+        return jdbc.sql("SELECT id FROM mock_interviews WHERE user_id=:user AND status='RUNNING' ORDER BY updated_at DESC LIMIT 1")
+            .param("user", userId).query(String.class).optional().map(id -> detail(userId, id)).orElseThrow(MockInterviewService::notFound);
     }
 
     @Transactional
@@ -64,11 +73,10 @@ public class MockInterviewService {
         String assessment = enumValue(request.selfAssessment(), "回答标记", ASSESSMENTS);
         String answer = limited(optional(request.answerText()), "回答", MAX_ANSWER_CHARS);
         if (answer.isBlank() && !assessment.equals("UNANSWERED")) throw new IllegalArgumentException("回答不能为空，未作答请使用跳过。");
-        String feedback = feedback(question.questionText(), answer);
-        jdbc.sql("UPDATE mock_interview_questions SET answer_text = :answer, ai_feedback = :feedback, self_assessment = :assessment, state = 'ANSWERED', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND mock_interview_id = :sessionId AND state = 'OPEN'")
-            .param("answer", answer).param("feedback", feedback).param("assessment", assessment).param("id", question.id()).param("sessionId", id).update();
-        if (question.questionKind().equals("MAIN")) addFollowup(userId, id, question, answer);
-        else addMainQuestion(userId, id);
+        int updated = jdbc.sql("UPDATE mock_interview_questions SET answer_text = :answer, self_assessment = :assessment, state = 'ANSWERED', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND mock_interview_id = :sessionId AND state = 'OPEN'")
+            .param("answer", answer).param("assessment", assessment).param("id", question.id()).param("sessionId", id).update();
+        if (updated == 0) return detail(userId, id);
+        tasks.enqueue(userId, "MOCK_ANSWER", id, question.id());
         moveCursor(id);
         return detail(userId, id);
     }
@@ -80,9 +88,10 @@ public class MockInterviewService {
         MockQuestion current = currentQuestion(id);
         if (questionId != null && !questionId.equals(current == null ? null : current.id())) throw new IllegalArgumentException("请按当前问题顺序跳过。");
         if (current == null) return detail(userId, id);
-        jdbc.sql("UPDATE mock_interview_questions SET answer_text = '', self_assessment = 'UNANSWERED', state = 'SKIPPED', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND state = 'OPEN'")
+        int updated = jdbc.sql("UPDATE mock_interview_questions SET answer_text = '', self_assessment = 'UNANSWERED', state = 'SKIPPED', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND state = 'OPEN'")
             .param("id", current.id()).update();
-        addMainQuestion(userId, id);
+        if (updated == 0) return detail(userId, id);
+        tasks.enqueue(userId, "MOCK_NEXT", id, current.id());
         moveCursor(id);
         return detail(userId, id);
     }
@@ -91,6 +100,7 @@ public class MockInterviewService {
     public MockInterview finish(String userId, String id) {
         MockSession session = owned(userId, id);
         if (session.finished()) return detail(userId, id);
+        if (tasks.latest(userId, id) != null) throw new IllegalStateException("AI 正在处理中，请等待完成后再保存。");
         jdbc.sql("UPDATE mock_interview_questions SET answer_text = '', self_assessment = 'UNANSWERED', state = 'SKIPPED', updated_at = CURRENT_TIMESTAMP WHERE mock_interview_id = :id AND state = 'OPEN'")
             .param("id", id).update();
         List<QuestionRequest> questions = new ArrayList<>();
@@ -105,6 +115,7 @@ public class MockInterviewService {
     }
 
     public void delete(String userId, String id) {
+        tasks.deleteForResource(userId, id);
         if (jdbc.sql("DELETE FROM mock_interviews WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).update() == 0) throw notFound();
     }
 
@@ -113,8 +124,36 @@ public class MockInterviewService {
         List<MockQuestion> all = questions(id);
         MockQuestion current = all.stream().filter(item -> item.state().equals("OPEN")).findFirst().orElse(null);
         int completed = (int) all.stream().filter(item -> item.state().equals("ANSWERED") || item.state().equals("SKIPPED")).count();
-        int currentIndex = current == null ? MAIN_QUESTION_LIMIT : mainIndex(all, current);
-        return new MockInterview(session.id(), session.company(), session.role(), session.interviewRound(), session.status(), "AI", true, "AI 将基于当前面试包的已解析简历、JD 和证据卡出题；缺失资料会标记为待补充。", MAIN_QUESTION_LIMIT, completed, currentIndex, session.formalInterviewId(), session.createdAt(), session.updatedAt(), current, all);
+        var task = tasks.latest(userId, id);
+        int currentIndex = current == null ? (task == null ? MAIN_QUESTION_LIMIT : Math.min(MAIN_QUESTION_LIMIT, completed + 1)) : mainIndex(all, current);
+        return new MockInterview(session.id(), session.company(), session.role(), session.interviewRound(), session.status(), "AI", true, "AI 将基于当前面试包的已解析简历、JD 和证据卡出题；缺失资料会标记为待补充。", MAIN_QUESTION_LIMIT, completed, currentIndex, session.formalInterviewId(), session.createdAt(), session.updatedAt(), current, all, task);
+    }
+
+    public void processTask(ClaimedTask task) {
+        switch (task.taskType()) {
+            case "MOCK_CREATE" -> addMainQuestion(task.userId(), task.resourceId());
+            case "MOCK_ANSWER" -> processAnswer(task.userId(), task.resourceId(), task.relatedId());
+            case "MOCK_NEXT" -> processNext(task.userId(), task.resourceId(), task.relatedId());
+            default -> throw new IllegalStateException("后台任务类型无效，请稍后重试。");
+        }
+    }
+
+    private void processAnswer(String userId, String sessionId, String questionId) {
+        MockQuestion answered = question(sessionId, questionId);
+        if (answered.state().equals("ANSWERED") && answered.aiFeedback().isBlank()) {
+            jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
+                .param("feedback", feedback(answered.questionText(), answered.answerText())).param("id", questionId).update();
+        }
+        if (answered.state().equals("ANSWERED")) {
+            if (answered.questionKind().equals("MAIN")) addFollowup(userId, sessionId, answered, answered.answerText());
+            else addMainQuestion(userId, sessionId);
+            moveCursor(sessionId);
+        }
+    }
+
+    private void processNext(String userId, String sessionId, String questionId) {
+        if (question(sessionId, questionId).state().equals("SKIPPED")) addMainQuestion(userId, sessionId);
+        moveCursor(sessionId);
     }
 
     private void addMainQuestion(String userId, String sessionId) {
@@ -129,6 +168,7 @@ public class MockInterviewService {
             addMainQuestion(userId, sessionId);
             return;
         }
+        if (questions(sessionId).stream().anyMatch(item -> main.id().equals(item.parentQuestionId()))) return;
         MockSession session = owned(userId, sessionId);
         List<MockQuestion> history = questions(sessionId);
         insertQuestion(UUID.randomUUID().toString(), sessionId, uniqueQuestion(followupPrompt(userId, session, main, answer, history), history), "FOLLOW_UP", main.id(), "OPEN", nextOrder(history));

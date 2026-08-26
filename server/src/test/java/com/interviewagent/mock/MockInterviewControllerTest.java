@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AiMockTaskWorker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,12 +22,13 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "spring.datasource.url=jdbc:h2:mem:mock-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
+@SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "app.ai-mock-task.poll-ms=600000", "spring.datasource.url=jdbc:h2:mem:mock-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
 @AutoConfigureMockMvc
 class MockInterviewControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcClient jdbc;
+    @Autowired AiMockTaskWorker worker;
     @MockBean ReviewModelClient model;
 
     @BeforeEach
@@ -56,7 +58,9 @@ class MockInterviewControllerTest {
 
         MvcResult created = mockMvc.perform(post("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"interviewPackageId\":\"" + packageA + "\",\"company\":\"A 公司\",\"role\":\"后端\",\"interviewRound\":\"技术一面\"}"))
-            .andExpect(status().isCreated()).andExpect(jsonPath("$.aiAvailable").value(true)).andExpect(jsonPath("$.totalQuestions").value(4)).andExpect(jsonPath("$.currentQuestion.questionKind").value("MAIN")).andReturn();
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.aiAvailable").value(true)).andExpect(jsonPath("$.totalQuestions").value(4)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+        worker.run();
+        created = mockMvc.perform(get("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andReturn();
         JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString());
         String sessionId = session.get("id").asText();
         String firstQuestionId = session.get("currentQuestion").get("id").asText();
@@ -69,15 +73,19 @@ class MockInterviewControllerTest {
 
         MvcResult answered = mockMvc.perform(post("/api/v1/mock-interviews/{id}/answer", sessionId).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"questionId\":\"" + firstQuestionId + "\",\"answerText\":\"我负责缓存方案和上线验证。\",\"selfAssessment\":\"GOOD\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1)).andExpect(jsonPath("$.questions[0].aiFeedback").isNotEmpty()).andExpect(jsonPath("$.currentQuestion.questionKind").value("FOLLOW_UP")).andReturn();
+            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+        worker.run();
+        answered = mockMvc.perform(get("/api/v1/mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].aiFeedback").isNotEmpty()).andExpect(jsonPath("$.currentQuestion.questionKind").value("FOLLOW_UP")).andReturn();
         String followupId = objectMapper.readTree(answered.getResponse().getContentAsString()).get("currentQuestion").get("id").asText();
 
         mockMvc.perform(post("/api/v1/mock-interviews/{id}/answer", sessionId).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"questionId\":\"" + firstQuestionId + "\",\"answerText\":\"重复提交\",\"selfAssessment\":\"GOOD\"}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1));
-        mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", sessionId).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
+        MvcResult skippedFollowup = mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", sessionId).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"questionId\":\"" + followupId + "\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(2)).andExpect(jsonPath("$.questions[1].answerText").value("")).andExpect(jsonPath("$.questions[1].state").value("SKIPPED"));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(2)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+        worker.run();
+        mockMvc.perform(get("/api/v1/mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.questions[1].answerText").value("")).andExpect(jsonPath("$.questions[1].state").value("SKIPPED"));
 
         MvcResult finished = mockMvc.perform(post("/api/v1/mock-interviews/{id}/finish", sessionId).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FINISHED")).andExpect(jsonPath("$.formalInterviewId").isNotEmpty()).andReturn();
@@ -101,18 +109,22 @@ class MockInterviewControllerTest {
         MvcResult created = mockMvc.perform(post("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"interviewPackageId\":\"" + packageA + "\"}"))
             .andExpect(status().isCreated()).andReturn();
+        worker.run();
+        created = mockMvc.perform(get("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andReturn();
         JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString());
 
         MvcResult skipped = mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", session.get("id").asText()).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
             .content("{\"questionId\":\"" + session.get("currentQuestion").get("id").asText() + "\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1))
-            .andExpect(jsonPath("$.currentQuestion.questionKind").value("MAIN"))
-            .andExpect(jsonPath("$.currentQuestionIndex").value(2)).andExpect(jsonPath("$.totalQuestions").value(4)).andReturn();
+            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+        worker.run();
+        skipped = mockMvc.perform(get("/api/v1/mock-interviews/{id}", session.get("id").asText()).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.questionKind").value("MAIN")).andExpect(jsonPath("$.currentQuestionIndex").value(2)).andExpect(jsonPath("$.totalQuestions").value(4)).andReturn();
         for (int index = 0; index < 3; index++) {
             JsonNode current = objectMapper.readTree(skipped.getResponse().getContentAsString()).get("currentQuestion");
             skipped = mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", session.get("id").asText()).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                     .content("{\"questionId\":\"" + current.get("id").asText() + "\"}"))
                 .andExpect(status().isOk()).andReturn();
+            worker.run();
+            skipped = mockMvc.perform(get("/api/v1/mock-interviews/{id}", session.get("id").asText()).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andReturn();
         }
         JsonNode completed = objectMapper.readTree(skipped.getResponse().getContentAsString());
         org.junit.jupiter.api.Assertions.assertEquals(4, completed.get("questions").size());

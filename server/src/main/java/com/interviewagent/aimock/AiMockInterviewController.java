@@ -15,6 +15,7 @@ class AiMockInterviewController {
     @PostMapping @ResponseStatus(HttpStatus.CREATED) Session create(@AuthenticationPrincipal Jwt jwt, @RequestBody StartRequest request) { return service.create(jwt.getSubject(), request); }
     @GetMapping("/{id}") Session get(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.get(jwt.getSubject(), id); }
     @PostMapping("/{id}/questions/{questionId}/start-answer") Session startAnswer(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId) { return service.startAnswer(jwt.getSubject(), id, questionId); }
+    @PostMapping("/{id}/questions/{questionId}/expire") Session expire(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId) { return service.expire(jwt.getSubject(), id, questionId); }
     @PostMapping("/{id}/questions/{questionId}/audio") Session audio(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId, @RequestParam("file") MultipartFile file) { return service.audio(jwt.getSubject(), id, questionId, file); }
     @PostMapping("/{id}/questions/{questionId}/confirm-answer") Session confirm(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId, @RequestBody ConfirmRequest request) { return service.confirm(jwt.getSubject(), id, questionId, request); }
     @PostMapping("/{id}/finish") Session finish(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.finish(jwt.getSubject(), id); }
