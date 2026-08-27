@@ -230,6 +230,9 @@ export default function HomePage() {
                 <Link className="text-link" href="/mock-interviews">
                   开始 AI 文本模拟
                 </Link>
+                <Link className="text-link" href="/ai-mock-interviews">
+                  开始 AI 语音模拟
+                </Link>
               </div>
             </section>
 

@@ -26,7 +26,7 @@ function Start-DevTerminal([string]$directory, [string]$command) {
 
 $agentSource = Join-Path $agent "src"
 $env:PYTHONPATH = $agentSource
-Start-DevTerminal $agent "python -m interview_agent.server"
+Start-DevTerminal $agent "py -3.10 -m interview_agent.server"
 Start-DevTerminal $server "mvn -B -ntp -s .mvn/settings.xml spring-boot:run"
 Start-DevTerminal $web "pnpm dev"
 

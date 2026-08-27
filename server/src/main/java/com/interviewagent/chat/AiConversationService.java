@@ -60,7 +60,8 @@ class AiConversationService {
         String interviewId = optional(request.interviewId());
         String reviewReportId = optional(request.reviewReportId());
         String weaknessTag = optional(request.weaknessTag());
-        if (interviewId != null) ownedInterview(userId, interviewId);
+        String interviewPackageId = interviewId == null ? null : ownedInterview(userId, interviewId);
+        if (interviewId != null && packageId != null && !packageId.equals(interviewPackageId)) throw new IllegalArgumentException("关联面试必须属于所选面试包。");
         if (reviewReportId != null) {
             if (interviewId == null) throw new IllegalArgumentException("关联复盘时必须同时关联其面试记录。");
             String reportInterviewId = ownedReview(userId, reviewReportId);
@@ -279,8 +280,8 @@ class AiConversationService {
             .param("id", id).param("userId", userId).query((rs, row) -> new PackageInfo(rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("resume_file_id"), rs.getString("job_description_id"), rs.getString("jd_company"), rs.getString("jd_role"), rs.getString("jd_content"), rs.getString("original_filename"))).optional();
     }
 
-    private void ownedInterview(String userId, String id) {
-        if (jdbc.sql("SELECT COUNT(*) FROM interviews WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).query(Integer.class).single() == 0) throw notFound();
+    private String ownedInterview(String userId, String id) {
+        return jdbc.sql("SELECT interview_package_id FROM interviews WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).query(String.class).optional().orElseThrow(AiConversationService::notFound);
     }
 
     private String ownedReview(String userId, String id) {

@@ -224,6 +224,20 @@ export default function AiConversationsPage() {
       content.scrollTop = content.scrollHeight;
   }, []);
 
+  const availableInterviews = form.interviewPackageId
+    ? interviews.filter(
+        (item) => item.interviewPackageId === form.interviewPackageId,
+      )
+    : interviews;
+  const availablePackages = form.interviewId
+    ? packages.filter(
+        (item) =>
+          item.id ===
+          interviews.find((interview) => interview.id === form.interviewId)
+            ?.interviewPackageId,
+      )
+    : packages;
+
   function updateAutoScroll() {
     const content = contentScrollRef.current;
     if (content)
@@ -288,7 +302,13 @@ export default function AiConversationsPage() {
   }
 
   async function selectInterview(interviewId: string) {
-    setForm({ ...form, interviewId, reviewReportId: "" });
+    const selected = interviews.find((item) => item.id === interviewId);
+    setForm({
+      ...form,
+      interviewPackageId: selected?.interviewPackageId ?? form.interviewPackageId,
+      interviewId,
+      reviewReportId: "",
+    });
     setReviews([]);
     if (!interviewId) return;
     try {
@@ -299,6 +319,21 @@ export default function AiConversationsPage() {
     } catch (cause) {
       setError(errorMessage(cause, "复盘选项加载失败，请稍后重试。"));
     }
+  }
+
+  function selectPackage(interviewPackageId: string) {
+    const keepInterview = interviews.some(
+      (item) =>
+        item.id === form.interviewId &&
+        item.interviewPackageId === interviewPackageId,
+    );
+    setForm({
+      ...form,
+      interviewPackageId,
+      interviewId: keepInterview ? form.interviewId : "",
+      reviewReportId: "",
+    });
+    if (!keepInterview) setReviews([]);
   }
 
   async function createConversation(event: FormEvent) {
@@ -610,14 +645,11 @@ export default function AiConversationsPage() {
                             <select
                               value={form.interviewPackageId}
                               onChange={(event) =>
-                                setForm({
-                                  ...form,
-                                  interviewPackageId: event.target.value,
-                                })
+                                selectPackage(event.target.value)
                               }
                             >
                               <option value="">不指定，由 Agent 自主查询</option>
-                              {packages.map((item) => (
+                              {availablePackages.map((item) => (
                                 <option key={item.id} value={item.id}>
                                   {item.company} · {item.role} ·{" "}
                                   {item.interviewRound}
@@ -634,7 +666,7 @@ export default function AiConversationsPage() {
                               }
                             >
                               <option value="">不关联</option>
-                              {interviews.map((item) => (
+                              {availableInterviews.map((item) => (
                                 <option key={item.id} value={item.id}>
                                   【{interviewTypeLabel[item.simulationType]}】
                                   {new Date(item.interviewTime).toLocaleString()}

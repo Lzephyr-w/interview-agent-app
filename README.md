@@ -32,13 +32,13 @@ AI 简历助手是一个面向求职准备的前后端分离应用。它集中�
 | 前端 | Next.js 15.2.4、React 19.0.0、TypeScript 5.8.2 |
 | 后端 | Java 21、Spring Boot 3.4.3、Spring Security、Spring JDBC |
 | 数据库 | PostgreSQL / Supabase PostgreSQL；未配置数据库连接时默认使用 H2 内存数据库 |
-| 数据库迁移 | Flyway，当前迁移脚本为 V1 至 V18 |
+| 数据库迁移 | Flyway，当前迁移脚本为 V1 至 V20 |
 | 文件解析 | Apache PDFBox 3.0.8、Apache POI 5.5.1 |
 | 认证与存储 | Supabase Auth、Supabase 私有 Storage |
-| AI | OpenAI 兼容 Chat Completions API；OpenAI 兼容音频转写 API 或火山引擎音频转写 |
+| AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；OpenAI 兼容音频转写 API 或火山引擎音频转写 |
 | 测试 | JUnit 5、Spring Boot Test、Spring Security Test、H2 |
 
-最低环境：Node.js 20+、pnpm 9+、JDK 21+、Maven 3.9+、Git。
+最低环境：Node.js 20+、pnpm 9+、JDK 21+、Maven 3.9+、Python 3.10+、Git。
 
 需要一个 Supabase 项目用于 Auth；使用简历上传或录音功能时还需要私有 Storage bucket。后端默认使用 H2 内存数据库，因此最小本地启动不要求另外安装 PostgreSQL；重启后 H2 数据会丢失。需要持久化数据时配置 Supabase PostgreSQL。
 
@@ -179,7 +179,7 @@ python -m pip install -e ".[test]"
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建 `interview_agent` schema，并按顺序执行 V1 至 V18；已执行的迁移文件不要修改。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建 `interview_agent` schema，并按顺序执行 V1 至 V20；已执行的迁移文件不要修改。
 
 ### 3.6 启动后端
 
@@ -205,7 +205,7 @@ cd agent
 python -m interview_agent.server
 ```
 
-如未安装开发依赖，可在 `agent` 目录执行 `python -m pip install -e ".[test]"`。Agent 默认监听 `127.0.0.1:8090`；Java 通过 `X-Agent-Key` 调用 Agent，Agent 查询资料和创建训练任务时再通过同一密钥调用 Java 的 `/internal/agent/tools`，浏览器始终只调用 Java。
+该安装命令会安装 Python 3.10+ 所需的 LangChain、`langchain-openai` 和测试依赖。Agent 默认监听 `127.0.0.1:8090`；Java 通过 `X-Agent-Key` 调用 Agent，Agent 查询资料和创建训练任务时再通过同一密钥调用 Java 的 `/internal/agent/tools`，浏览器始终只调用 Java。
 
 ### 3.8 启动前端
 
@@ -231,6 +231,10 @@ pnpm run build
 # 后端测试
 cd ..\server
 mvn -B -ntp -s .mvn/settings.xml test
+
+# Python Agent 测试
+cd ..\agent
+py -3.10 -m pytest
 ```
 
 后端测试使用 H2 和测试配置，不需要连接真实 Supabase 数据库；AI、Storage 和转写的完整联调需要配置对应服务。

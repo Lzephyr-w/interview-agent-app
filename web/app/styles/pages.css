@@ -1130,6 +1130,12 @@
 .ai-room-result {
   text-align: center;
 }
+.ai-room-loading {
+  width: 48px;
+  height: 48px;
+  margin-top: 16px;
+  animation: ai-room-loading-spin 3s linear infinite;
+}
 .ai-room-result .ai-room-primary {
   display: inline-block;
   width: auto;
@@ -1313,7 +1319,7 @@
   position: relative;
   display: flex;
   justify-content: center;
-  width: 48px;
+  width: 62px;
   margin: 14px auto 0;
 }
 .ai-room-mic {
@@ -1509,7 +1515,7 @@
   border: 1px solid rgb(255 255 255 / 34%);
   border-radius: 50%;
   content: "";
-  animation: ai-room-pulse 1.8s ease-out infinite;
+  animation: ai-room-pulse 3s ease-out infinite;
 }
 .ai-room-stop {
   box-shadow:
@@ -1534,6 +1540,11 @@
   }
   100% {
     opacity: 0;
+  }
+}
+@keyframes ai-room-loading-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 @media (max-width: 700px) {

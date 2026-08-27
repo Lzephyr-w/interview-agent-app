@@ -65,8 +65,8 @@ public class ReviewModelClient {
     private static String content(JsonNode response) {
         JsonNode message = response.path("choices").path(0).path("message");
         JsonNode value = message.path("content");
-        if (value.isTextual()) return value.asText().trim();
-        if (value.isArray()) { StringBuilder result = new StringBuilder(); for (JsonNode part : value) result.append(part.path("text").asText(part.asText(""))); return result.toString().trim(); }
+        if (value.isTextual() && !value.asText().isBlank()) return value.asText().trim();
+        if (value.isArray()) { StringBuilder result = new StringBuilder(); for (JsonNode part : value) result.append(part.path("text").asText(part.asText(""))); if (!result.isEmpty()) return result.toString().trim(); }
         return message.path("reasoning_content").asText("").trim();
     }
 
