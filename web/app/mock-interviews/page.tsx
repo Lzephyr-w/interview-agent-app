@@ -54,6 +54,7 @@ export default function MockInterviewsPage() {
   const [packages, setPackages] = useState<Package[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [session, setSession] = useState<MockInterview>();
+  const [pendingSession, setPendingSession] = useState<MockInterview>();
   const [answer, setAnswer] = useState("");
   const [answerError, setAnswerError] = useState("");
   const [assessment, setAssessment] = useState("UNCERTAIN");
@@ -61,7 +62,7 @@ export default function MockInterviewsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [dialog, setDialog] = useState<"finish" | "abandon" | null>(null);
+  const [dialog, setDialog] = useState<"finish" | "abandon" | "resume" | null>(null);
 
   useEffect(() => {
     async function bootstrap() {
@@ -88,7 +89,10 @@ export default function MockInterviewsPage() {
 
   useEffect(() => {
     void api<MockInterview>("/api/v1/mock-interviews")
-      .then(setSession)
+      .then((active) => {
+        setPendingSession(active);
+        setDialog("resume");
+      })
       .catch(() => undefined);
   }, []);
 
@@ -202,14 +206,16 @@ export default function MockInterviewsPage() {
     }
   }
 
-  async function abandonConfirmed() {
-    if (!session) return;
+  async function abandonConfirmed(target = session) {
+    if (!target) return;
     setSaving(true);
     try {
-      await api<void>(`/api/v1/mock-interviews/${session.id}`, {
+      await api<void>(`/api/v1/mock-interviews/${target.id}`, {
         method: "DELETE",
       });
       setSession(undefined);
+      setPendingSession(undefined);
+      setDialog(null);
       setNotice("未完成模拟已放弃。");
     } catch (cause) {
       setError(message(cause, "放弃失败，请稍后重试。"));
@@ -312,7 +318,7 @@ export default function MockInterviewsPage() {
                 ) : session.task ? (
                   <div className="mock-complete" role="status">
                     <h3>正在准备下一步…</h3>
-                    <p className="muted">AI 正在生成题目或反馈，页面会自动更新。</p>
+                    <p className="muted">AI 正在生成题目或反馈...</p>
                   </div>
                 ) : session.currentQuestion ? (
                   <form className="mock-question" onSubmit={submitAnswer}>
@@ -554,31 +560,48 @@ export default function MockInterviewsPage() {
       <ConfirmDialog
         open={dialog !== null}
         title={
-          dialog === "finish" ? "是否保存此面试？" : "取消这场 AI 文本模拟？"
+          dialog === "finish"
+            ? "是否保存此面试？"
+            : dialog === "resume"
+              ? "检测到未完成的文本模拟"
+              : "取消这场 AI 文本模拟？"
         }
         description={
           dialog === "finish"
             ? "结束后会保存为正式面试记录，已提交的问题和回答会保留，结果默认为未知。"
-            : "已提交内容不会保存为正式面试记录，当前文字模拟会话将被放弃。"
+            : dialog === "resume"
+              ? "是否继续上一次未完成的面试？"
+              : "已提交内容不会保存为正式面试记录，当前文字模拟会话将被放弃。"
         }
         confirmLabel={
           dialog === "finish"
               ? "保存为面试记录"
-              : "取消不保存"
+              : dialog === "resume"
+                ? "继续面试"
+                : "取消不保存"
         }
-        cancelLabel="再想想"
+        cancelLabel={dialog === "resume" ? "取消" : "再想想"}
         confirmTone={dialog === "abandon" ? "danger" : "primary"}
         busy={saving}
         onConfirm={() => {
           if (dialog === "finish") {
             setDialog(null);
             void finishConfirmed();
-          } else {
+          } else if (dialog === "resume") {
+            setSession(pendingSession);
+            setPendingSession(undefined);
             setDialog(null);
+          } else {
             void abandonConfirmed();
           }
         }}
-        onCancel={() => setDialog(null)}
+        onCancel={() => {
+          if (dialog === "resume") {
+            void abandonConfirmed(pendingSession);
+            return;
+          }
+          setDialog(null);
+        }}
       />
     </AppShell>
   );

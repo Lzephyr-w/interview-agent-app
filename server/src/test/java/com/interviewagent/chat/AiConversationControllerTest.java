@@ -50,6 +50,8 @@ class AiConversationControllerTest {
         String packageB = packageFor("user-b");
         String interviewA = interviewFor("user-a", packageA);
         String interviewB = interviewFor("user-b", packageB);
+        String otherPackageA = packageFor("user-a");
+        String otherInterviewA = interviewFor("user-a", otherPackageA);
         jdbc.sql("INSERT INTO review_reports (id, interview_id, readiness, summary, weakness_tags) VALUES ('review-a', :interview, '准备不足', '指标待补充', '[\"项目深挖\"]')")
             .param("interview", interviewA).update();
         jdbc.sql("INSERT INTO mock_interviews (id, user_id, interview_package_id, company, role, interview_round, status, total_questions) VALUES ('mock-a', 'user-a', :packageId, 'A 公司', '后端', '技术一面', 'RUNNING', 6)")
@@ -95,6 +97,9 @@ class AiConversationControllerTest {
         mockMvc.perform(post("/api/v1/ai-conversations").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"interviewPackageId\":\"" + packageB + "\",\"interviewId\":\"" + interviewB + "\",\"reviewReportId\":\"review-a\"}"))
             .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/ai-conversations").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"interviewPackageId\":\"" + packageA + "\",\"interviewId\":\"" + otherInterviewA + "\"}"))
+            .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").value("关联面试必须属于所选面试包。"));
         mockMvc.perform(get("/api/v1/ai-conversations/{id}", conversation).with(jwt().jwt(token -> token.subject("user-b")))).andExpect(status().isNotFound());
 
         String request = "request-" + UUID.randomUUID();

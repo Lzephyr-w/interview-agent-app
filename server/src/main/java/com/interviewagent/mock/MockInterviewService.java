@@ -126,7 +126,7 @@ public class MockInterviewService {
         int completed = (int) all.stream().filter(item -> item.state().equals("ANSWERED") || item.state().equals("SKIPPED")).count();
         var task = tasks.latest(userId, id);
         int currentIndex = current == null ? (task == null ? MAIN_QUESTION_LIMIT : Math.min(MAIN_QUESTION_LIMIT, completed + 1)) : mainIndex(all, current);
-        return new MockInterview(session.id(), session.company(), session.role(), session.interviewRound(), session.status(), "AI", true, "AI 将基于当前面试包的已解析简历、JD 和证据卡出题；缺失资料会标记为待补充。", MAIN_QUESTION_LIMIT, completed, currentIndex, session.formalInterviewId(), session.createdAt(), session.updatedAt(), current, all, task);
+        return new MockInterview(session.id(), session.company(), session.role(), session.interviewRound(), session.status(), "AI", true, "AI 将基于当前面试包的已解析简历、JD 和证据卡出题。", MAIN_QUESTION_LIMIT, completed, currentIndex, session.formalInterviewId(), session.createdAt(), session.updatedAt(), current, all, task);
     }
 
     public void processTask(ClaimedTask task) {

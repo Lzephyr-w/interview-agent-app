@@ -10,6 +10,7 @@ export type Interview = {
   role: string;
   interviewRound: string;
   interviewTime: string;
+  interviewPackageId: string | null;
   simulationType: "REAL" | "AI_TEXT" | "AI_VOICE";
 };
 export type Review = { id: string; createdAt: string };

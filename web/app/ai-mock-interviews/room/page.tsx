@@ -105,10 +105,6 @@ export default function AiMockInterviewRoomPage() {
       );
   }, []);
   useEffect(() => {
-    if (!selected) return;
-    void api<Session>("/api/v1/ai-mock-interviews").then(setSession).catch(() => undefined);
-  }, [selected?.id]);
-  useEffect(() => {
     if (!session?.task || session.task.status === "FAILED") return;
     const timer = window.setInterval(() => {
       void api<Session>(`/api/v1/ai-mock-interviews/${session.id}`).then(setSession).catch(() => undefined);
@@ -120,6 +116,7 @@ export default function AiMockInterviewRoomPage() {
     if (current && spokenQuestion.current !== current.id) {
       spokenQuestion.current = current.id;
       speak();
+      if (current.sortOrder === 1) setNotice("面试已开始，第一题正在朗读。");
     }
   }, [current?.id]);
   useEffect(() => {
@@ -198,7 +195,6 @@ export default function AiMockInterviewRoomPage() {
         body: JSON.stringify({ interviewPackageId: selected.id }),
       });
       setSession(created);
-      setNotice("面试已开始，第一题正在朗读。");
     } catch (caught) {
       setError(errorText(caught, "AI 模拟无法开始。"));
     } finally {
@@ -512,8 +508,8 @@ export default function AiMockInterviewRoomPage() {
         </section>
       ) : session.task ? (
         <section className="ai-room-brief ai-room-result" role="status">
-          <h1>正在准备下一步…</h1>
-          <p>题目、转写或下一题正在后台处理，页面会自动更新。</p>
+          <h1>题目加载中…</h1>
+          <img className="ai-room-loading" src="/images/loading-spinner.png" alt="" />
         </section>
       ) : current ? (
         <section className="ai-room-stage">

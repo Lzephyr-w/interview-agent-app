@@ -6,38 +6,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.request import Request, urlopen
 
+from langchain_openai import ChatOpenAI
+
 from .agent import AgentError, AgentRuntime
 
 
 logger = logging.getLogger(__name__)
-
-
-class ModelClient:
-    def __init__(self, url: str, key: str, model: str):
-        self.url, self.key, self.model = url, key, model
-
-    def complete(self, messages, tools):
-        if not all((self.url, self.key, self.model)):
-            raise AgentError("AI Agent 服务尚未配置，请联系管理员后重试。")
-        body = json.dumps({
-            "model": self.model, "temperature": 0.2, "messages": messages,
-            "tools": tools, "tool_choice": "auto",
-        }).encode("utf-8")
-        request = Request(self.url, data=body, headers={
-            "Authorization": "Bearer " + self.key,
-            "Content-Type": "application/json",
-        })
-        try:
-            with urlopen(request, timeout=60) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            message = payload.get("choices", [{}])[0].get("message") or {}
-            if not message.get("content") and not message.get("tool_calls"):
-                raise AgentError("AI Agent 返回格式无效，请重试。")
-            return message
-        except AgentError:
-            raise
-        except Exception as exc:
-            raise AgentError("AI Agent 超时或请求失败，请稍后重试。") from exc
 
 
 class JavaToolClient:
@@ -79,7 +53,8 @@ class Handler(BaseHTTPRequestHandler):
             if not user_id or not isinstance(request.get("messages"), list):
                 raise ValueError("Agent 请求格式无效。")
             runtime = self.runtime_factory(user_id)
-            answer = runtime.reply(request["messages"], request.get("context", ""))
+            answer = runtime.reply(request["messages"], request.get("context", ""), user_id, str(request.get("conversationId") or ""))
+            logger.info("agent_request user_id=%s conversation_id=%s model_calls=%s tool_calls=%s elapsed_ms=%s", user_id, request.get("conversationId", ""), runtime.metrics.get("model_calls", 0), runtime.metrics.get("tool_calls", 0), runtime.metrics.get("elapsed_ms", 0))
             self._write(200, {"content": answer})
         except (AgentError, ValueError) as exc:
             self._write(502, {"error": str(exc)})
@@ -117,12 +92,23 @@ def main():
     key = os.getenv("AGENT_INTERNAL_KEY", "")
     Handler.internal_key = key
     Handler.runtime_factory = staticmethod(lambda user_id: AgentRuntime(
-        ModelClient(os.getenv("AGENT_MODEL_API_URL", ""), os.getenv("AGENT_MODEL_API_KEY", ""), os.getenv("AGENT_MODEL", "")),
+        model_from_env(),
         JavaToolClient(os.getenv("JAVA_AGENT_TOOL_URL", "http://localhost:8080/internal/agent/tools"), key, user_id),
     ))
     server = ThreadingHTTPServer((os.getenv("AGENT_HOST", "127.0.0.1"), int(os.getenv("AGENT_PORT", "8090"))), Handler)
     print("Interview Agent listening on http://%s:%s" % server.server_address, flush=True)
     server.serve_forever()
+
+
+def model_from_env():
+    url, key, model = os.getenv("AGENT_MODEL_API_URL", ""), os.getenv("AGENT_MODEL_API_KEY", ""), os.getenv("AGENT_MODEL", "")
+    if not all((url, key, model)):
+        raise AgentError("AI Agent 服务尚未配置，请联系管理员后重试。")
+    return ChatOpenAI(
+        model=model, api_key=key, base_url=url.removesuffix("/chat/completions"),
+        temperature=0.2, timeout=60, max_retries=1, max_completion_tokens=2048,
+        use_responses_api=False,
+    )
 
 
 if __name__ == "__main__":

@@ -119,6 +119,32 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
+    void questionCannotExpireBeforeAnswerStarts() throws Exception {
+        String packageId = packageFor("not-started-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'not-started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+            .param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_expires_at) VALUES(:id,:session,'尚未回答的首题','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
+            .param("id", questionId).param("session", sessionId).update();
+
+        mockMvc.perform(post("/api/v1/ai-mock-interviews/{id}/questions/{questionId}/expire", sessionId, questionId).with(jwt().jwt(token -> token.subject("not-started-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.id").value(questionId));
+        assertEquals("OPEN", jdbc.sql("SELECT state FROM ai_mock_interview_questions WHERE id=:id").param("id", questionId).query(String.class).single());
+    }
+
+    @Test
+    void startedQuestionStillExpires() throws Exception {
+        String packageId = packageFor("started-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+            .param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_started_at,answer_expires_at) VALUES(:id,:session,'已开始且超时的题目','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '6' MINUTE,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
+            .param("id", questionId).param("session", sessionId).update();
+
+        mockMvc.perform(post("/api/v1/ai-mock-interviews/{id}/questions/{questionId}/expire", sessionId, questionId).with(jwt().jwt(token -> token.subject("started-user"))))
+            .andExpect(status().isOk());
+        assertEquals("SKIPPED", jdbc.sql("SELECT state FROM ai_mock_interview_questions WHERE id=:id").param("id", questionId).query(String.class).single());
+    }
+
+    @Test
     void audioUploadAndDeleteRequireOwnership() throws Exception {
         String packageId = packageFor("audio-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'audio-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)").param("id", sessionId).param("package", packageId).update();
