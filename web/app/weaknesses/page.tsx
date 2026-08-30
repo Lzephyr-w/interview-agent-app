@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -60,6 +60,7 @@ function messageOf(cause: unknown, fallback: string) {
 export default function WeaknessesPage() {
   const [analysis, setAnalysis] = useState<Analysis>();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [activePanel, setActivePanel] = useState<"analysis" | "tasks">("analysis");
   const [draft, setDraft] = useState(emptyDraft);
   const [editing, setEditing] = useState<Task>();
   const [loading, setLoading] = useState(true);
@@ -69,6 +70,7 @@ export default function WeaknessesPage() {
   const [dialog, setDialog] = useState<Task>();
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const initialLoadStarted = useRef(false);
 
   async function load() {
     setLoading(true);
@@ -88,6 +90,8 @@ export default function WeaknessesPage() {
   }
 
   useEffect(() => {
+    if (initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
     void load();
   }, []);
 
@@ -106,6 +110,7 @@ export default function WeaknessesPage() {
   }
 
   function beginCreate(item: Weakness, evidence: Evidence) {
+    setActivePanel("tasks");
     setEditing(undefined);
     setMessage("");
     setDraft({
@@ -117,10 +122,11 @@ export default function WeaknessesPage() {
       sourceInterviewId: evidence.interviewId,
       sourceReviewReportId: evidence.reviewReportId ?? "",
     });
-    document.getElementById("training-task-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("weakness-panel-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function beginEdit(task: Task) {
+    setActivePanel("tasks");
     setEditing(task);
     setMessage("");
     setDraft({
@@ -132,7 +138,7 @@ export default function WeaknessesPage() {
       sourceInterviewId: task.source?.interviewId ?? "",
       sourceReviewReportId: task.source?.reviewReportId ?? "",
     });
-    document.getElementById("training-task-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("weakness-panel-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function saveTask(event: FormEvent) {
@@ -212,7 +218,18 @@ export default function WeaknessesPage() {
           <section className="library-section"><p className="muted">正在加载分析和训练任务…</p></section>
         ) : (
           <>
-            <section className="library-section weakness-section weakness-report">
+            <section className="library-section weakness-workspace">
+            <div className="interview-tabs" id="weakness-panel-tabs" role="tablist" aria-label="薄弱点页面内容">
+              <button className={`interview-tab${activePanel === "analysis" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "analysis"} onClick={() => setActivePanel("analysis")}>
+                <strong>AI 分析</strong>
+                <small>{analysis?.items.length ?? 0} 项</small>
+              </button>
+              <button className={`interview-tab${activePanel === "tasks" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "tasks"} onClick={() => setActivePanel("tasks")}>
+                <strong>训练任务</strong>
+                <small>{tasks.length} 条</small>
+              </button>
+            </div>
+            {activePanel === "analysis" ? <div className="weakness-report">
               <div className="section-heading">
                 <div>
                   <p className="profile-label">CURRENT SNAPSHOT</p>
@@ -261,7 +278,8 @@ export default function WeaknessesPage() {
                   ))}
                 </div>
               )}
-            </section>
+            </div> : <>
+            <div className="training-task-panels">
             <section className="library-section weakness-section" id="training-task-editor">
               <div className="section-heading">
                 <div>
@@ -293,7 +311,7 @@ export default function WeaknessesPage() {
                         <p><span className="task-tag">{task.weaknessTag}</span> · 创建于 {new Date(task.createdAt).toLocaleString()}</p>
                         <p className="task-action">{task.action}</p>
                         {task.source?.questionText && <p>具体问题：{task.source.questionText}</p>}
-                        {task.source?.label && <p>来源：{task.source.label} {task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}`}>查看面试</Link>} {task.source.reviewReportId && task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}/review`}>查看复盘</Link>}</p>}
+                        {task.source?.label && <p className="task-source">来源：{task.source.label} {task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}`}>查看面试</Link>} {task.source.reviewReportId && task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}/review`}>查看复盘</Link>}</p>}
                       </div>
                       <div className="item-actions">
                         <select aria-label={`更新${task.title}状态`} value={task.status} onChange={(event) => void updateStatus(task, event.target.value as Task["status"])}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
@@ -304,6 +322,9 @@ export default function WeaknessesPage() {
                   ))}
                 </ul>
               )}
+            </section>
+            </div>
+            </>}
             </section>
           </>
         )}

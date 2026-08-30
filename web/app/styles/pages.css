@@ -446,6 +446,17 @@
 .weakness-section {
   margin-top: 20px;
 }
+.weakness-workspace {
+  margin-top: 26px;
+}
+.weakness-workspace > .interview-tabs {
+  margin-bottom: 20px;
+}
+.training-task-panels {
+  display: grid;
+  margin-top: 20px;
+  align-items: start;
+}
 .weakness-report {
   display: grid;
   gap: 18px;
@@ -540,6 +551,10 @@
   white-space: pre-wrap;
 }
 .resource-item .task-action + p {
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.resource-item .task-source {
   margin-top: 16px;
   padding-top: 12px;
 }

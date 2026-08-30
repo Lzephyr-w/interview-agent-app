@@ -105,6 +105,9 @@
   .weakness-report-item {
     padding: 16px;
   }
+  .training-task-panels {
+    grid-template-columns: 1fr;
+  }
   .weakness-report-item-heading {
     display: grid;
   }
