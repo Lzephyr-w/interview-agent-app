@@ -15,7 +15,7 @@ export type Interview = {
 };
 export type Review = { id: string; createdAt: string };
 export type InterviewDetail = { reviews: Review[] };
-export type Weakness = { tag: string };
+export type Weakness = { tag: string; title: string };
 export type ContextSource = { type: string; label: string; state: string };
 export type ConversationSummary = { id: string; title: string; createdAt: string; updatedAt: string };
 export type Conversation = ConversationSummary & { contextSources: ContextSource[] };

@@ -15,6 +15,8 @@ class WeaknessController {
     WeaknessController(WeaknessService service) { this.service = service; }
 
     @GetMapping("/weaknesses") List<WeaknessItem> weaknesses(@AuthenticationPrincipal Jwt jwt) { return service.weaknesses(jwt.getSubject()); }
+    @GetMapping("/weaknesses/analysis") WeaknessAnalysis analysis(@AuthenticationPrincipal Jwt jwt) { return service.analysis(jwt.getSubject()); }
+    @PostMapping("/weaknesses/analysis") WeaknessAnalysis analyze(@AuthenticationPrincipal Jwt jwt) { return service.analyze(jwt.getSubject()); }
     @GetMapping("/weaknesses/{tag}") WeaknessItem weakness(@AuthenticationPrincipal Jwt jwt, @PathVariable String tag) { return service.weakness(jwt.getSubject(), tag); }
     @GetMapping("/training-tasks") List<TrainingTask> tasks(@AuthenticationPrincipal Jwt jwt) { return service.tasks(jwt.getSubject()); }
     @GetMapping("/training-tasks/{id}") TrainingTask task(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.task(jwt.getSubject(), id); }

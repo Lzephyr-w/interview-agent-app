@@ -256,9 +256,9 @@ class AiConversationService {
 
     private void addWeaknessContext(String userId, String weaknessTag, ContextBuilder context) {
         if (weaknessTag == null) return;
-        int count = weaknessCount(userId, weaknessTag);
-        if (count == 0) context.unavailable("薄弱点标签", weaknessTag + "（来源已删除）");
-        else context.add("薄弱点标签", weaknessTag, "薄弱点标签：" + weaknessTag + "，当前复盘出现次数：" + count + "。仅根据已有复盘解释，缺失证据写待补充。");
+        var item = weaknesses.weaknesses(userId).stream().filter(value -> value.tag().equals(weaknessTag)).findFirst().orElse(null);
+        if (item == null) context.unavailable("薄弱点标签", weaknessTag + "（尚未分析或分析已过期）");
+        else context.add("薄弱点标签", item.title(), "薄弱点标签：" + item.tag() + "\n诊断：" + item.diagnosis() + "\n下一步：" + item.action());
     }
 
     private String runAgent(String userId, ConversationRow row) {
@@ -289,12 +289,7 @@ class AiConversationService {
             .param("id", id).param("userId", userId).query(String.class).optional().orElseThrow(AiConversationService::notFound);
     }
 
-    private boolean hasWeaknessTag(String userId, String tag) { return weaknessCount(userId, tag) > 0; }
-
-    private int weaknessCount(String userId, String tag) {
-        return (int) jdbc.sql("SELECT r.weakness_tags FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId")
-            .param("userId", userId).query(String.class).list().stream().filter(tags -> stringList(tags).contains(tag)).count();
-    }
+    private boolean hasWeaknessTag(String userId, String tag) { return weaknesses.weaknesses(userId).stream().anyMatch(item -> item.tag().equals(tag)); }
 
     private EvidenceText evidenceText(ResultSet rs) throws SQLException {
         String label = rs.getString("project_name");

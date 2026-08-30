@@ -12,12 +12,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
+import com.interviewagent.ai.ReviewModelClient;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "spring.datasource.url=jdbc:h2:mem:dashboard-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
 @AutoConfigureMockMvc
 class DashboardControllerTest {
     @Autowired MockMvc mockMvc;
     @Autowired JdbcClient jdbc;
+    @MockBean ReviewModelClient model;
 
     @BeforeEach void clearData() {
         jdbc.sql("DELETE FROM sprint_checklist_items").update();
@@ -45,10 +49,11 @@ class DashboardControllerTest {
             .andExpect(jsonPath("$.overview.resumeFileCount").value(1))
             .andExpect(jsonPath("$.overview.pendingReviewCount").value(1))
             .andExpect(jsonPath("$.overview.pendingTrainingTaskCount").value(1))
-            .andExpect(jsonPath("$.weaknesses[0].tag").value("系统设计"))
+            .andExpect(jsonPath("$.weaknesses").isEmpty())
             .andExpect(jsonPath("$.recentActivities[0].id").value("report-a"))
             .andExpect(jsonPath("$.recentActivities[0].title").value("公司a · 后端"))
             .andExpect(jsonPath("$.sprintItems[?(@.kind == 'TRAINING_TASK')].title").value(org.hamcrest.Matchers.hasItem("练习架构")));
+        verifyNoInteractions(model);
     }
 
     @Test void manualSprintItemIsOwnedAndNeverChangesItsSourceData() throws Exception {

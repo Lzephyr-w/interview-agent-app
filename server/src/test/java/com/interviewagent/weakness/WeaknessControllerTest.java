@@ -1,153 +1,167 @@
 package com.interviewagent.weakness;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.interviewagent.ai.ReviewModelClient;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
 @SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "spring.datasource.url=jdbc:h2:mem:weakness-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
 @AutoConfigureMockMvc
 class WeaknessControllerTest {
     @Autowired MockMvc mockMvc;
-    @Autowired ObjectMapper objectMapper;
+    @Autowired ObjectMapper json;
     @Autowired JdbcClient jdbc;
+    @MockBean ReviewModelClient model;
 
     @BeforeEach void clearData() {
+        jdbc.sql("DELETE FROM weakness_analyses").update();
         jdbc.sql("DELETE FROM training_tasks").update();
         jdbc.sql("DELETE FROM interviews").update();
-        jdbc.sql("DELETE FROM interview_package_evidence_cards").update();
         jdbc.sql("DELETE FROM interview_packages").update();
         jdbc.sql("DELETE FROM resume_files").update();
-        jdbc.sql("DELETE FROM resumes").update();
         jdbc.sql("DELETE FROM job_descriptions").update();
-        jdbc.sql("DELETE FROM project_evidence_cards").update();
     }
-    @Test void aggregatesOnlyOwnedReviewsAndDeduplicatesTags() throws Exception {
-        String interviewA = createInterview("user-a", packageFor("user-a"));
-        String interviewB = createInterview("user-b", packageFor("user-b"));
-        String reportA = insertReport(interviewA, "[\"项目深挖\",\"项目深挖\",\"系统设计\"]", "report-a");
-        insertReport(interviewA, "[\"项目深挖\"]", "report-a-2");
-        insertReport(interviewB, "[\"项目深挖\"]", "report-b");
+
+    @Test void persistsOnlyValidatedItemsAndUsesCurrentUsersLatestReview() throws Exception {
+        Seed a = seed("user-a", "a", "缓存如何保证一致性？");
+        insertReview(a.interview(), "old-a", "旧复盘", a.question());
+        insertReview(a.interview(), "z-new-a", "最新复盘", a.question());
+        Seed b = seed("user-b", "b", "B 的私有问题？");
+        insertReview(b.interview(), "review-b", "B 复盘", b.question());
+        doReturn(output("已根据当前回答生成分析。", "系统设计", "缓存一致性回答缺少边界与验证", a.question())).when(model).replyJson(anyString());
+
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.stale").value(false))
+            .andExpect(jsonPath("$.items.length()").value(1)).andExpect(jsonPath("$.items[0].title").value("缓存一致性回答缺少边界与验证"))
+            .andExpect(jsonPath("$.items[0].evidence[0].questionId").value(a.question()))
+            .andExpect(jsonPath("$.items[0].evidence[0].reviewReportId").value("z-new-a"))
+            .andExpect(jsonPath("$.items[0].evidence[0].interviewId").value(a.interview()));
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(model).replyJson(prompt.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains(a.question()));
+        org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains(b.question()));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("最新复盘"));
+        org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains("旧复盘"));
 
         mockMvc.perform(get("/api/v1/weaknesses").with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$[0].tag").value("项目深挖")).andExpect(jsonPath("$[0].count").value(2)).andExpect(jsonPath("$[0].sources.length()").value(2)).andExpect(jsonPath("$[1].tag").value("系统设计"));
-        mockMvc.perform(get("/api/v1/weaknesses").with(jwt().jwt(token -> token.subject("user-b"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$[0].tag").value("项目深挖")).andExpect(jsonPath("$[0].count").value(1)).andExpect(jsonPath("$[0].sources[0].reviewReportId").value("report-b"));
-        org.junit.jupiter.api.Assertions.assertEquals("report-a", reportA);
+            .andExpect(status().isOk()).andExpect(jsonPath("$[0].tag").value("系统设计"));
+        mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-b"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items").isEmpty());
+        verify(model, never()).replyJson(org.mockito.ArgumentMatchers.contains("B 的私有问题"));
     }
 
-    @Test void isolatesTasksAndKeepsSnapshotWhenSourceReviewIsDeleted() throws Exception {
-        String interviewA = createInterview("user-a", packageFor("user-a"));
-        insertReport(interviewA, "[\"项目深挖\"]", "report-source");
-        String task = id(mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"补充项目指标\",\"weaknessTag\":\"项目深挖\",\"action\":\"补充一组可验证指标。\",\"status\":\"NOT_STARTED\",\"sourceReviewReportId\":\"report-source\"}"))
-            .andExpect(status().isCreated()).andExpect(jsonPath("$.source.interviewId").value(interviewA)).andReturn());
+    @Test void rejectsInvalidOutputWithoutOverwritingStableSnapshot() throws Exception {
+        Seed a = seed("user-a", "a", "如何验证缓存？");
+        insertReview(a.interview(), "review-a", "复盘", a.question());
+        doReturn(output("稳定分析", "系统设计", "缓存回答缺少验证", a.question())).when(model).replyJson(anyString());
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-b")))).andExpect(status().isNotFound());
-        mockMvc.perform(put("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"越权\",\"weaknessTag\":\"项目深挖\",\"action\":\"x\",\"status\":\"COMPLETED\"}")).andExpect(status().isNotFound());
-        mockMvc.perform(delete("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-b")))).andExpect(status().isNotFound());
-        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"关联他人\",\"weaknessTag\":\"项目深挖\",\"action\":\"x\",\"status\":\"NOT_STARTED\",\"sourceInterviewId\":\"" + interviewA + "\"}")).andExpect(status().isNotFound());
+        for (String invalid : new String[] {
+            "{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"a\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]},{\"tag\":\"项目深挖\",\"title\":\"d\",\"diagnosis\":\"e\",\"action\":\"f\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}",
+            "{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"无效\",\"title\":\"a\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}",
+            "{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"a\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"unknown\",\"reason\":\"x\"}]}]}",
+            "{\"summary\":\"通过概率很高\",\"weaknesses\":[]}",
+            "{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"" + "x".repeat(121) + "\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}"
+        }) {
+            doReturn(json.readTree(invalid)).when(model).replyJson(anyString());
+            mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isBadGateway());
+            mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("稳定分析"));
+        }
+    }
 
-        mockMvc.perform(delete("/api/v1/interviews/{id}/reviews/{reviewId}", interviewA, "report-source").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isNoContent());
-        mockMvc.perform(get("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk())
-            .andExpect(jsonPath("$.title").value("补充项目指标")).andExpect(jsonPath("$.source.interviewId").value(interviewA)).andExpect(jsonPath("$.source.reviewReportId").value(org.hamcrest.Matchers.nullValue()));
-        mockMvc.perform(put("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"补充项目指标\",\"weaknessTag\":\"项目深挖\",\"action\":\"补充一组可验证指标。\",\"status\":\"COMPLETED\",\"sourceInterviewId\":\"" + interviewA + "\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.completedAt").isNotEmpty());
-        mockMvc.perform(delete("/api/v1/interviews/{id}", interviewA).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isNoContent());
-        mockMvc.perform(get("/api/v1/training-tasks/{id}", task).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.source").value(org.hamcrest.Matchers.nullValue()));
+    @Test void marksSnapshotStaleForQuestionReviewInterviewAndResumeChanges() throws Exception {
+        Seed a = seed("user-a", "a", "问题一？");
+        insertReview(a.interview(), "review-a", "复盘", a.question());
+        doReturn(output("分析", "系统设计", "标题", a.question())).when(model).replyJson(anyString());
+        analyze("user-a");
+        jdbc.sql("UPDATE interview_questions SET answer_text = '已修改' WHERE id = :id").param("id", a.question()).update();
+        stale("user-a");
+        analyze("user-a");
+        jdbc.sql("INSERT INTO interview_questions (id, interview_id, question_text, answer_text, self_assessment, sort_order) VALUES ('extra-question', :interview, '新增问题？', '回答', 'PARTIAL', 2)").param("interview", a.interview()).update();
+        stale("user-a");
+        analyze("user-a");
+        jdbc.sql("DELETE FROM interview_questions WHERE id = 'extra-question'").update();
+        stale("user-a");
+        analyze("user-a");
+        Seed extraInterview = seed("user-a", "extra", "另一场问题？");
+        stale("user-a");
+        analyze("user-a");
+        jdbc.sql("DELETE FROM interviews WHERE id = :id").param("id", extraInterview.interview()).update();
+        stale("user-a");
+        analyze("user-a");
+        jdbc.sql("UPDATE resume_files SET parsed_status = 'READY', parsed_text = '新的简历正文' WHERE id = :id").param("id", a.resume()).update();
+        stale("user-a");
+        analyze("user-a");
+        jdbc.sql("DELETE FROM review_reports WHERE id = 'review-a'").update();
+        stale("user-a");
         mockMvc.perform(get("/api/v1/weaknesses").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
     }
 
-    @Test void returnsAuditableRuleAndMissingEvidenceFallback() throws Exception {
-        String interview = createInterview("user-a", packageFor("user-a"));
-        insertReport(interview, "[\"系统设计\"]", "report-rule");
-        mockMvc.perform(get("/api/v1/weaknesses").with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$[0].suggestion.action").value("练习需求、容量、架构、取舍与可靠性的结构化回答。"))
-            .andExpect(jsonPath("$[0].suggestion.missingEvidence").value("待补充"));
+    @Test void tasksKeepExactQuestionAndRejectCrossUserOrMismatchedSources() throws Exception {
+        Seed a = seed("user-a", "a", "A 问题？");
+        insertReview(a.interview(), "review-a", "复盘", a.question());
+        Seed b = seed("user-b", "b", "B 问题？");
+        insertReview(b.interview(), "review-b", "复盘", b.question());
+        String correct = "{\"title\":\"练习\",\"weaknessTag\":\"系统设计\",\"action\":\"补充边界\",\"status\":\"NOT_STARTED\",\"sourceQuestionId\":\"" + a.question() + "\",\"sourceInterviewId\":\"" + a.interview() + "\",\"sourceReviewReportId\":\"review-a\"}";
+        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON).content(correct))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.source.questionId").value(a.question())).andExpect(jsonPath("$.source.questionText").value("A 问题？"));
+        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON).content(correct)).andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON).content(correct.replace("review-a", "review-b"))).andExpect(status().isNotFound());
+        jdbc.sql("DELETE FROM interviews WHERE id = :id").param("id", a.interview()).update();
+        assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM training_tasks WHERE user_id = 'user-a'").query(Integer.class).single());
+        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM training_tasks WHERE source_question_id IS NOT NULL").query(Integer.class).single());
     }
 
-    @Test void detailIsOwnedAndPrefersExistingQuestionReviewAdvice() throws Exception {
-        String interviewA = createInterview("user-a", packageFor("user-a"));
-        String questionA = id(mockMvc.perform(post("/api/v1/interviews/{id}/questions", interviewA).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"questionText\":\"项目指标是什么？\",\"answerText\":\"待补充\",\"selfAssessment\":\"UNANSWERED\"}"))
-            .andExpect(status().isCreated()).andReturn());
-        jdbc.sql("UPDATE interviews SET interview_type = 'MOCK' WHERE id = :id").param("id", interviewA).update();
-        insertReport(interviewA, "[\"项目深挖\"]", "report-detail");
-        jdbc.sql("INSERT INTO question_reviews (id, review_report_id, interview_question_id, evaluation, answer_evidence, missing_evidence, improvement_action, recommended_answer_structure, possible_followups) VALUES ('qr-detail', 'report-detail', :question, '待补充', '待补充', '指标待补充', '补充一组真实指标。', '背景-行动-结果', '[]')")
-            .param("question", questionA).update();
-
-        mockMvc.perform(get("/api/v1/weaknesses/{tag}", "项目深挖").with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.count").value(1))
-            .andExpect(jsonPath("$.suggestion.action").value("补充一组真实指标。"))
-            .andExpect(jsonPath("$.suggestion.reason").value("优先沿用已有复盘中的逐题改进动作。"))
-            .andExpect(jsonPath("$.sources[0].interviewId").value(interviewA))
-            .andExpect(jsonPath("$.sources[0].interviewType").value("MOCK"))
-            .andExpect(jsonPath("$.sources[0].evidence[0].questionText").value("项目指标是什么？"))
-            .andExpect(jsonPath("$.sources[0].evidence[0].missingEvidence").value("指标待补充"));
-        mockMvc.perform(get("/api/v1/weaknesses/{tag}", "项目深挖").with(jwt().jwt(token -> token.subject("user-b"))))
-            .andExpect(status().isNotFound());
+    private void stale(String user) throws Exception {
+        mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject(user))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.stale").value(true)).andExpect(jsonPath("$.items").isEmpty());
     }
 
-    @Test void rejectsForeignReviewAssociationAndUnknownTaskTag() throws Exception {
-        String interviewA = createInterview("user-a", packageFor("user-a"));
-        String interviewB = createInterview("user-b", packageFor("user-b"));
-        insertReport(interviewA, "[\"项目深挖\"]", "report-a-owned");
-        insertReport(interviewB, "[\"项目深挖\"]", "report-b-owned");
-
-        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"越权复盘\",\"weaknessTag\":\"项目深挖\",\"action\":\"x\",\"status\":\"NOT_STARTED\",\"sourceReviewReportId\":\"report-b-owned\"}"))
-            .andExpect(status().isNotFound());
-        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"越权复盘\",\"weaknessTag\":\"项目深挖\",\"action\":\"x\",\"status\":\"NOT_STARTED\",\"sourceReviewReportId\":\"report-a-owned\"}"))
-            .andExpect(status().isNotFound());
-        mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"title\":\"自由标签\",\"weaknessTag\":\"自定义\",\"action\":\"x\",\"status\":\"NOT_STARTED\"}"))
-            .andExpect(status().isBadRequest());
+    private void analyze(String user) throws Exception {
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject(user)))).andExpect(status().isOk());
     }
 
-    private String insertReport(String interviewId, String tags, String reportId) {
-        jdbc.sql("INSERT INTO review_reports (id, interview_id, readiness, summary, weakness_tags) VALUES (:id, :interviewId, '准备不足', '待补充', :tags)")
-            .param("id", reportId).param("interviewId", interviewId).param("tags", tags).update();
-        return reportId;
+    private JsonNode output(String summary, String tag, String title, String questionId) throws Exception {
+        return json.readTree("{\"summary\":\"" + summary + "\",\"weaknesses\":[{\"tag\":\"" + tag + "\",\"title\":\"" + title + "\",\"diagnosis\":\"回答缺少边界。\",\"action\":\"补充验证步骤。\",\"evidence\":[{\"questionId\":\"" + questionId + "\",\"reason\":\"回答没有说明验证。\"}]}]}");
     }
 
-    private String packageFor(String user) throws Exception {
-        String resumeFile = resumeFile(user);
-        String jd = id(createResource("/api/v1/job-descriptions", user, "{\"company\":\"公司\",\"role\":\"后端\",\"content\":\"Spring\"}"));
-        return id(createResource("/api/v1/interview-packages", user, "{\"company\":\"公司\",\"role\":\"后端\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFile + "\",\"jobDescriptionId\":\"" + jd + "\",\"evidenceCardIds\":[]}"));
+    private Seed seed(String user, String suffix, String text) {
+        String resume = "resume-" + suffix;
+        String packageId = "package-" + suffix;
+        String interview = "interview-" + suffix;
+        String question = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO resume_files (id, user_id, original_filename, content_type, size_bytes, object_path, parsed_status, parsed_text) VALUES (:id, :user, 'resume.pdf', 'application/pdf', 1, :path, 'READY', :text)").param("id", resume).param("user", user).param("path", resume).param("text", "简历 " + suffix).update();
+        jdbc.sql("INSERT INTO interview_packages (id, user_id, company, role, interview_round, resume_file_id) VALUES (:id, :user, :company, '后端', '技术一面', :resume)").param("id", packageId).param("user", user).param("company", "公司" + suffix).param("resume", resume).update();
+        jdbc.sql("INSERT INTO interviews (id, user_id, interview_package_id, company, role, interview_round, interview_time, status, result, interview_type) VALUES (:id, :user, :package, :company, '后端', '技术一面', CURRENT_TIMESTAMP, 'REVIEWED', 'UNKNOWN', 'REAL')").param("id", interview).param("user", user).param("package", packageId).param("company", "公司" + suffix).update();
+        jdbc.sql("INSERT INTO interview_questions (id, interview_id, question_text, answer_text, self_assessment, sort_order) VALUES (:id, :interview, :text, '回答', 'PARTIAL', 1)").param("id", question).param("interview", interview).param("text", text).update();
+        return new Seed(resume, interview, question);
     }
 
-    private String resumeFile(String user) {
-        String id = java.util.UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO resume_files (id, user_id, original_filename, content_type, size_bytes, object_path) VALUES (:id, :userId, 'resume.pdf', 'application/pdf', 8, :path)")
-            .param("id", id).param("userId", user).param("path", "resumes/" + id + ".pdf").update();
-        return id;
+    private void insertReview(String interview, String report, String summary, String question) {
+        jdbc.sql("INSERT INTO review_reports (id, interview_id, readiness, summary, weakness_tags) VALUES (:id, :interview, :readiness, :summary, :tags)")
+            .param("id", report).param("interview", interview).param("readiness", "待补充").param("summary", summary).param("tags", "[\"系统设计\"]").update();
+        jdbc.sql("INSERT INTO question_reviews (id, review_report_id, interview_question_id, evaluation, answer_evidence, missing_evidence, improvement_action, recommended_answer_structure, possible_followups) VALUES (:id, :report, :question, '待补充', '待补充', '待补充', '补充验证', '结论-依据', '[]')").param("id", UUID.randomUUID().toString()).param("report", report).param("question", question).update();
     }
 
-    private String createInterview(String user, String packageId) throws Exception {
-        return id(mockMvc.perform(post("/api/v1/interviews").with(jwt().jwt(token -> token.subject(user))).contentType(MediaType.APPLICATION_JSON)
-            .content("{\"company\":\"公司\",\"role\":\"后端\",\"interviewRound\":\"技术一面\",\"interviewTime\":\"2026-08-08T10:00:00+08:00\",\"interviewPackageId\":\"" + packageId + "\",\"status\":\"PENDING_REVIEW\",\"result\":\"UNKNOWN\"}"))
-            .andExpect(status().isCreated()).andReturn());
-    }
-
-    private MvcResult createResource(String path, String user, String body) throws Exception {
-        return mockMvc.perform(post(path).with(jwt().jwt(token -> token.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated()).andReturn();
-    }
-
-    private String id(MvcResult result) throws Exception { JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString()); return body.has("id") ? body.get("id").asText() : body.path("interview").path("id").asText(); }
+    private record Seed(String resume, String interview, String question) {}
 }

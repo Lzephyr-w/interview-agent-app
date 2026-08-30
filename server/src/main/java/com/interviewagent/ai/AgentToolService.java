@@ -84,16 +84,16 @@ public class AgentToolService {
 
     private Object createTrainingTask(String userId, JsonNode arguments) {
         String title = required(arguments, "title"), tag = required(arguments, "weakness_tag"), action = required(arguments, "action");
-        String interviewId = optional(arguments, "source_interview_id"), reviewId = optional(arguments, "source_review_report_id");
-        String existingId = existingTrainingTask(userId, title, tag, action, interviewId, reviewId);
+        String questionId = optional(arguments, "source_question_id"), interviewId = optional(arguments, "source_interview_id"), reviewId = optional(arguments, "source_review_report_id");
+        String existingId = existingTrainingTask(userId, title, tag, action, questionId, interviewId, reviewId);
         if (existingId != null) return Map.of("status", "already_exists", "task", weaknesses.task(userId, existingId));
-        return Map.of("status", "created", "task", weaknesses.create(userId, new TrainingTaskRequest(title, tag, action, "NOT_STARTED", interviewId, reviewId)));
+        return Map.of("status", "created", "task", weaknesses.create(userId, new TrainingTaskRequest(title, tag, action, "NOT_STARTED", questionId, interviewId, reviewId)));
     }
 
-    private String existingTrainingTask(String userId, String title, String tag, String action, String interviewId, String reviewId) {
-        var query = jdbc.sql("SELECT id FROM training_tasks WHERE user_id = :userId AND title = :title AND weakness_tag = :tag AND action = :action AND " + (reviewId != null ? "source_review_report_id = :sourceId" : interviewId != null ? "source_review_report_id IS NULL AND source_interview_id = :sourceId" : "source_review_report_id IS NULL AND source_interview_id IS NULL") + " ORDER BY created_at DESC LIMIT 1")
+    private String existingTrainingTask(String userId, String title, String tag, String action, String questionId, String interviewId, String reviewId) {
+        var query = jdbc.sql("SELECT id FROM training_tasks WHERE user_id = :userId AND title = :title AND weakness_tag = :tag AND action = :action AND " + (questionId != null ? "source_question_id = :sourceId" : reviewId != null ? "source_question_id IS NULL AND source_review_report_id = :sourceId" : interviewId != null ? "source_question_id IS NULL AND source_review_report_id IS NULL AND source_interview_id = :sourceId" : "source_question_id IS NULL AND source_review_report_id IS NULL AND source_interview_id IS NULL") + " ORDER BY created_at DESC LIMIT 1")
             .param("userId", userId).param("title", title).param("tag", tag).param("action", action);
-        if (reviewId != null || interviewId != null) query = query.param("sourceId", reviewId != null ? reviewId : interviewId);
+        if (questionId != null || reviewId != null || interviewId != null) query = query.param("sourceId", questionId != null ? questionId : reviewId != null ? reviewId : interviewId);
         return query.query(String.class).optional().orElse(null);
     }
 

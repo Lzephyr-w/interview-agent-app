@@ -2,15 +2,12 @@ package com.interviewagent.dashboard;
 
 import static com.interviewagent.dashboard.DashboardApi.*;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.interviewagent.weakness.WeaknessService;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -23,9 +20,9 @@ import org.springframework.stereotype.Service;
 class DashboardService {
     private static final Set<String> TARGET_PATHS = Set.of("/library", "/interviews", "/interviews/new", "/mock-interviews", "/weaknesses", "/ai-conversations");
     private final JdbcClient jdbc;
-    private final ObjectMapper json;
+    private final WeaknessService weaknessService;
 
-    DashboardService(JdbcClient jdbc, ObjectMapper json) { this.jdbc = jdbc; this.json = json; }
+    DashboardService(JdbcClient jdbc, WeaknessService weaknessService) { this.jdbc = jdbc; this.weaknessService = weaknessService; }
 
     Dashboard dashboard(String userId) {
         return new Dashboard(overview(userId), activities(userId), weaknesses(userId), sprintItems(userId));
@@ -61,12 +58,8 @@ class DashboardService {
     }
 
     private List<WeaknessFocus> weaknesses(String userId) {
-        Map<String, Focus> focuses = new LinkedHashMap<>();
-        jdbc.sql("SELECT r.weakness_tags, r.created_at FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId ORDER BY r.created_at DESC")
-            .param("userId", userId).query((rs, row) -> new ReviewTags(rs.getString("weakness_tags"), rs.getObject("created_at", OffsetDateTime.class))).list()
-            .forEach(report -> new LinkedHashSet<>(tags(report.tags())).forEach(tag -> focuses.computeIfAbsent(tag, ignored -> new Focus()).add(report.createdAt())));
-        return focuses.entrySet().stream().sorted(Comparator.<Map.Entry<String, Focus>>comparingInt(entry -> entry.getValue().count).reversed().thenComparing(entry -> entry.getValue().latest, Comparator.reverseOrder())).limit(3)
-            .map(entry -> new WeaknessFocus(entry.getKey(), entry.getValue().count, "/weaknesses/" + java.net.URLEncoder.encode(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8))).toList();
+        return weaknessService.weaknesses(userId).stream()
+            .map(item -> new WeaknessFocus(item.tag(), item.title(), "/weaknesses#" + java.net.URLEncoder.encode(item.tag(), java.nio.charset.StandardCharsets.UTF_8))).toList();
     }
 
     private List<SprintItem> sprintItems(String userId) {
@@ -79,7 +72,7 @@ class DashboardService {
             .param("userId", userId).query((rs, row) -> new SprintItem("interview-" + rs.getString("id"), "PENDING_REVIEW", "复盘：" + rs.getString("company") + " · " + rs.getString("role"), "已有真实面试记录，尚未完成 AI 复盘。", "待复盘真实面试", "/interviews/" + rs.getString("id") + "/review", 70, "TODO", false, null)).list().forEach(items::add);
         jdbc.sql("SELECT id, company, role FROM mock_interviews WHERE user_id = :userId AND status = 'RUNNING' ORDER BY updated_at DESC LIMIT 1")
             .param("userId", userId).query((rs, row) -> new SprintItem("mock-" + rs.getString("id"), "MOCK", "继续 AI 文本模拟：" + rs.getString("company") + " · " + rs.getString("role"), "继续当前未完成的模拟练习。", "AI 文本模拟", "/mock-interviews", 60, "TODO", false, null)).list().forEach(items::add);
-        weaknesses(userId).stream().map(item -> new SprintItem("weakness-" + item.tag(), "WEAKNESS", "聚焦薄弱点：" + item.tag(), "已在历史复盘中出现 " + item.count() + " 次。", "复盘薄弱点", item.targetPath(), 50, "TODO", false, null)).forEach(items::add);
+        weaknesses(userId).stream().map(item -> new SprintItem("weakness-" + item.tag(), "WEAKNESS", "聚焦薄弱点：" + item.title(), "查看 AI 汇总分析中的具体题目证据。", "AI 薄弱点分析", item.targetPath(), 50, "TODO", false, null)).forEach(items::add);
         return items.stream().sorted(Comparator.comparing((SprintItem item) -> !"TODO".equals(item.status())).thenComparing(SprintItem::priority, Comparator.reverseOrder())).limit(10).toList();
     }
 
@@ -98,11 +91,8 @@ class DashboardService {
         if (!"TODO".equals(status) && !"DONE".equals(status)) throw new IllegalArgumentException("状态值无效。");
         return new ValidItem(title, description == null ? "" : description, targetPath == null ? "" : targetPath, priority, status);
     }
-    private List<String> tags(String value) { try { return json.readValue(value, new TypeReference<>() {}); } catch (Exception exception) { return List.of(); } }
     private static String required(String value, String label) { String result = optional(value); if (result == null) throw new IllegalArgumentException(label + "不能为空。"); return result; }
     private static String optional(String value) { return value == null || value.isBlank() ? null : value.trim(); }
     private static NoSuchElementException notFound() { return new NoSuchElementException("资源不存在或无权访问。"); }
     private record ValidItem(String title, String description, String targetPath, int priority, String status) {}
-    private record ReviewTags(String tags, OffsetDateTime createdAt) {}
-    private static final class Focus { int count; OffsetDateTime latest = OffsetDateTime.MIN; void add(OffsetDateTime time) { count++; if (time.isAfter(latest)) latest = time; } }
 }

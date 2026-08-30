@@ -28,7 +28,7 @@ type Activity = {
   targetPath: string;
   occurredAt: string;
 };
-type Weakness = { tag: string; count: number; targetPath: string };
+type Weakness = { tag: string; title: string; targetPath: string };
 type SprintItem = {
   id: string;
   kind: string;
@@ -312,7 +312,7 @@ export default function HomePage() {
                 </div>
                 {dashboard.weaknesses.length === 0 ? (
                   <p className="muted">
-                    完成一次 AI 复盘后，这里会显示当前高频薄弱点。
+                    完成一次 AI 弱项分析后，这里会显示具体薄弱点。
                   </p>
                 ) : (
                   <ul className="dashboard-list focus-list">
@@ -320,7 +320,7 @@ export default function HomePage() {
                       <li key={item.tag}>
                         <div>
                           <strong>{item.tag}</strong>
-                          <p>在历史复盘中出现 {item.count} 次</p>
+                          <p>{item.title}</p>
                         </div>
                         <Link className="text-link" href={item.targetPath}>
                           查看建议
