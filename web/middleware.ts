@@ -7,9 +7,7 @@ export function middleware(request: NextRequest) {
   if (!loggedIn && !isLogin) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
-  if (loggedIn && isLogin) {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
+  // ponytail: Cookie cannot prove a client-only session, so /login stays reachable for recovery.
   return NextResponse.next();
 }
 
