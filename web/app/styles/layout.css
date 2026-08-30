@@ -86,9 +86,14 @@
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(14px);
 }
-.app-topbar > div {
+.topbar-title {
   display: grid;
   gap: 2px;
+}
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 .app-topbar strong {
   font-family: Georgia, "Songti SC", serif;

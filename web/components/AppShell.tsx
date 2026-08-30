@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
+import { signOut } from "@/lib/auth";
 
 const links = [
   { href: "/", label: "首页", hint: "概览" },
@@ -17,9 +18,17 @@ const links = [
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const current = links.find((link) =>
     link.href === "/" ? pathname === "/" : pathname.startsWith(link.href),
   );
+
+  function logout() {
+    void signOut();
+    router.replace("/login");
+    router.refresh();
+  }
+
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
@@ -52,11 +61,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
         }
       >
         <header className="app-topbar">
-          <div>
+          <div className="topbar-title">
             <span className="topbar-kicker">INTERVIEW ASSISTANT</span>
             <strong>{current?.label ?? "面试助手"}</strong>
           </div>
-          <ThemeToggle />
+          <div className="topbar-actions">
+            <ThemeToggle />
+            <button className="theme-toggle" type="button" onClick={logout}>
+              退出登录
+            </button>
+          </div>
         </header>
         {children}
       </div>

@@ -58,7 +58,7 @@ cd interview-agent-app
 
 本项目将 Supabase Auth、Supabase Storage 和业务数据库分开使用：邮箱/密码登录由 Supabase Auth 负责，业务数据可以使用本地 H2 或 Supabase PostgreSQL。
 
-1. 创建 Supabase 项目，并在 Authentication → Users → Add user 中准备邮箱/密码用户。当前前端没有单独的注册页；其他开发者使用同一个项目时，可以为每个人创建独立账号。
+1. 创建 Supabase 项目。在 Authentication → Providers → Email 中启用 Email provider 和 Confirm email；在 Authentication → URL Configuration 中将 Site URL 设为 `http://localhost:3000`，并将 `http://localhost:3000/**` 加入 Redirect URLs（部署时替换为实际前端地址）。用户可在登录页点击“注册账号”创建邮箱/密码账号，完成验证邮件后再登录。
 2. 在 Project Settings → API 中获取 Project URL 和 anon/publishable key，分别填写到 `web/.env.local` 和 `server/.env.local`。anon/publishable key 可以出现在前端，Service Role Key 不可以。
 3. 如果要使用文件上传或录音功能，创建以下私有 Storage bucket，保持 Public 关闭：
 
@@ -219,7 +219,7 @@ cd web
 pnpm dev
 ```
 
-前端默认地址为 `http://localhost:3000`。打开该地址后使用已准备好的 Supabase 邮箱和密码登录。
+前端默认地址为 `http://localhost:3000`。打开该地址后可使用已有 Supabase 邮箱和密码登录，或在登录页注册并完成邮箱验证后登录。
 
 ### 3.9 运行质量检查
 

@@ -131,6 +131,51 @@ select:focus {
   border-color: var(--orange);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 20%, transparent);
 }
+input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.field-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.password-field {
+  position: relative;
+  display: block;
+}
+.password-field input {
+  padding-right: 48px;
+}
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  transform: translateY(-50%);
+}
+.password-toggle:hover {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
 .primary-button {
   width: 100%;
   padding: 10px 10px;
@@ -143,4 +188,24 @@ select:focus {
 }
 .primary-button:hover {
   filter: brightness(1.08);
+}
+.auth-switch {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+}
+.auth-link {
+  padding: 0;
+  margin-left: 6px;
+  color: var(--green);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.auth-link:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--orange) 35%, transparent);
+  border-radius: 4px;
 }

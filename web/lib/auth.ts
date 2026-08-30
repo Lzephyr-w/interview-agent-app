@@ -2,6 +2,13 @@ export type Session = { accessToken: string; expiresAt: number };
 
 const sessionKey = "interview_agent.session";
 
+type AuthResponse = {
+  access_token?: string;
+  expires_in?: number;
+  error_description?: string;
+  msg?: string;
+};
+
 function clearSession() {
   localStorage.removeItem(sessionKey);
   document.cookie =
@@ -16,6 +23,15 @@ function supabaseConfig() {
       "尚未配置 Supabase 登录。请填写 web/.env.local 后重启前端。",
     );
   return { url, anonKey };
+}
+
+function saveSession(accessToken: string, expiresIn: number) {
+  const session = {
+    accessToken,
+    expiresAt: Date.now() + expiresIn * 1000,
+  };
+  localStorage.setItem(sessionKey, JSON.stringify(session));
+  document.cookie = `interview_agent_authenticated=1; path=/; max-age=${expiresIn}; samesite=lax`;
 }
 
 export function getSession(): Session | null {
@@ -39,23 +55,42 @@ export async function signIn(email: string, password: string) {
     headers: { "Content-Type": "application/json", apikey: anonKey },
     body: JSON.stringify({ email, password }),
   });
-  const body = (await response.json().catch(() => ({}))) as {
-    access_token?: string;
-    expires_in?: number;
-    error_description?: string;
-    msg?: string;
-  };
+  const body = (await response.json().catch(() => ({}))) as AuthResponse;
   if (!response.ok || !body.access_token || !body.expires_in)
     throw new Error(
       body.error_description ?? body.msg ?? "登录失败，请检查邮箱和密码。",
     );
 
-  const session = {
-    accessToken: body.access_token,
-    expiresAt: Date.now() + body.expires_in * 1000,
-  };
-  localStorage.setItem(sessionKey, JSON.stringify(session));
-  document.cookie = `interview_agent_authenticated=1; path=/; max-age=${body.expires_in}; samesite=lax`;
+  saveSession(body.access_token, body.expires_in);
+}
+
+export async function signUp(email: string, password: string) {
+  clearSession();
+  const { url, anonKey } = supabaseConfig();
+  let response: Response;
+  try {
+    response = await fetch(`${url}/auth/v1/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: anonKey },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    throw new Error("注册暂时无法完成，请稍后重试。");
+  }
+  const body = (await response.json().catch(() => ({}))) as AuthResponse;
+  if (!response.ok) throw new Error("注册暂时无法完成，请稍后重试。");
+
+  if (
+    typeof body.access_token === "string" &&
+    body.access_token.length > 0 &&
+    typeof body.expires_in === "number" &&
+    Number.isFinite(body.expires_in) &&
+    body.expires_in > 0
+  ) {
+    saveSession(body.access_token, body.expires_in);
+    return { needsEmailConfirmation: false };
+  }
+  return { needsEmailConfirmation: true };
 }
 
 export async function signOut() {
