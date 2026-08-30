@@ -1,10 +1,6 @@
 # AI 简历助手
 
 AI 简历助手是面向求职准备的前后端分离应用，围绕简历、岗位 JD、项目证据和面试记录构建可追溯的准备闭环。它提供 AI 文本与语音模拟、录音转写、智能复盘、薄弱点训练及 AI Agent 对话，帮助用户完成从资料整理、模拟练习到复盘改进的全流程准备。
-<img width="2880" height="1325" alt="p1" src="https://github.com/user-attachments/assets/9a0ff783-77cd-4baa-9205-36b79a26ef7c" />
-<img width="2880" height="1325" alt="p3" src="https://github.com/user-attachments/assets/9cd38888-e08c-4738-9b36-7853220744d7" />
-<img width="2880" height="1325" alt="p2" src="https://github.com/user-attachments/assets/96ab3e2f-2509-449b-a48b-d69af37a2f54" />
-
 
 ## 1. 项目简介与核心功能
 
@@ -12,13 +8,21 @@ AI 简历助手是面向求职准备的前后端分离应用，围绕简历、�
 
 - **账户与权限**：使用 Supabase Auth 邮箱/密码登录；前端携带 JWT，后端校验 JWT 并按当前用户隔离数据。
 - **首页仪表盘**：展示资料、面试包、待复盘、训练任务等概览，汇总近期活动和薄弱点，并支持维护冲刺清单。
+<img
+  width="100%"
+  alt="p1"
+  src="https://github.com/user-attachments/assets/9a0ff783-77cd-4baa-9205-36b79a26ef7c"
+/>
 - **资料库**：上传、预览、下载和删除 PDF、DOC、DOCX 简历文件；服务端提取简历文本。支持管理岗位 JD、项目证据卡和面试包，并将资料组合到一次面试中。
 - **真实面试记录**：创建、编辑和删除面试；维护问题、回答和自评；支持粘贴转写文本按空行分段；支持上传录音、语音转写、AI 识别问答后检查并加入面试记录。
 - **AI 复盘**：根据面试问题、回答和关联资料生成复盘报告、准备度、逐题建议和薄弱点标签；支持查看和删除历史复盘。
 - **AI 文本模拟**：基于面试包资料生成 4 道主问题；回答主问题后最多生成 1 道追问，支持跳过、逐题 AI 反馈，并在完成后保存为正式面试记录。
 - **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
+   <img width="100%" alt="p3" src="https://github.com/user-attachments/assets/9cd38888-e08c-4738-9b36-7853220744d7" />
 - **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历生成最多 3 个具体薄弱点；每项可追溯到具体题目，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
+   <img  width="100%" alt="image" src="https://github.com/user-attachments/assets/74a29e59-ef82-46aa-8b81-4f1eaa301606" />
 - **AI 对话**：创建带可选面试包、面试、复盘或薄弱点上下文的会话；保存历史消息，调用 AI 回复，并支持删除会话。
+   <img  width="100%" alt="p2" src="https://github.com/user-attachments/assets/96ab3e2f-2509-449b-a48b-d69af37a2f54" />
 - **私有文件存储**：简历文件和录音通过服务端访问 Supabase 私有 Storage；浏览器不接触 Service Role Key。
 
 ### 当前边界
