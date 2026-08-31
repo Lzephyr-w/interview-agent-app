@@ -9,6 +9,7 @@ server/target/
 *.log
 *.err.log
 **/__pycache__/
+**/.venv/
 *.py[cod]
 *.egg-info/
 server/data/
