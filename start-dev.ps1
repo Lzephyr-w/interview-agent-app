@@ -24,11 +24,106 @@ function Start-DevTerminal([string]$directory, [string]$command) {
     ) | Out-Null
 }
 
+function Resolve-CommandPath([string[]]$names) {
+    foreach ($name in $names) {
+        $command = Get-Command -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $command) {
+            if (-not [string]::IsNullOrWhiteSpace($command.Source)) {
+                return $command.Source
+            }
+            return $command.Path
+        }
+    }
+    return $null
+}
+
+function Find-PortableExecutable([string[]]$roots, [string]$fileName) {
+    foreach ($rootPath in $roots) {
+        if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) {
+            continue
+        }
+
+        $candidate = Get-ChildItem -LiteralPath $rootPath -Filter $fileName -File -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object -Property FullName |
+            Select-Object -First 1
+        if ($null -ne $candidate) {
+            return $candidate.FullName
+        }
+    }
+    return $null
+}
+
+function ConvertTo-PowerShellLiteral([string]$value) {
+    return "'" + $value.Replace("'", "''") + "'"
+}
+
 $agentSource = Join-Path $agent "src"
 $env:PYTHONPATH = $agentSource
-Start-DevTerminal $agent "py -3.10 -m interview_agent.server"
-Start-DevTerminal $server "mvn -B -ntp -s .mvn/settings.xml spring-boot:run"
+
+$agentPython = Join-Path $agent ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $agentPython -PathType Leaf)) {
+    $agentPython = Resolve-CommandPath @("python.exe", "python")
+}
+if ([string]::IsNullOrWhiteSpace($agentPython)) {
+    throw "Python was not found. Install Python 3.10+ or create agent/.venv."
+}
+
+$portableRoots = @(
+    (Join-Path ([System.IO.Path]::GetTempPath()) "interview-agent-tools"),
+    (Join-Path $root "tools"),
+    (Join-Path $root ".tools")
+)
+
+$mavenCommand = Resolve-CommandPath @("mvn.cmd", "mvn")
+if ([string]::IsNullOrWhiteSpace($mavenCommand)) {
+    $mavenCommand = Find-PortableExecutable $portableRoots "mvn.cmd"
+}
+if ([string]::IsNullOrWhiteSpace($mavenCommand)) {
+    throw "Maven was not found. Add Maven to PATH or extract it to $($portableRoots[0]), $($portableRoots[1]), or $($portableRoots[2])."
+}
+
+$javaHome = $env:JAVA_HOME
+$javaCommand = $null
+$javaCompilerCommand = $null
+if (-not [string]::IsNullOrWhiteSpace($javaHome)) {
+    $javaCandidate = Join-Path $javaHome "bin\java.exe"
+    $javaCompilerCandidate = Join-Path $javaHome "bin\javac.exe"
+    if ((Test-Path -LiteralPath $javaCandidate -PathType Leaf) -and (Test-Path -LiteralPath $javaCompilerCandidate -PathType Leaf)) {
+        $javaCommand = $javaCandidate
+        $javaCompilerCommand = $javaCompilerCandidate
+    }
+}
+if ([string]::IsNullOrWhiteSpace($javaCommand)) {
+    $javaCompilerCommand = Resolve-CommandPath @("javac.exe", "javac")
+    if (-not [string]::IsNullOrWhiteSpace($javaCompilerCommand)) {
+        $javaHome = Split-Path (Split-Path $javaCompilerCommand -Parent) -Parent
+        $javaCommand = Join-Path $javaHome "bin\java.exe"
+    }
+}
+if ([string]::IsNullOrWhiteSpace($javaCommand)) {
+    $javaCompilerCommand = Find-PortableExecutable $portableRoots "javac.exe"
+    if (-not [string]::IsNullOrWhiteSpace($javaCompilerCommand)) {
+        $javaHome = Split-Path (Split-Path $javaCompilerCommand -Parent) -Parent
+        $javaCommand = Join-Path $javaHome "bin\java.exe"
+    }
+}
+if ([string]::IsNullOrWhiteSpace($javaCommand) -or -not (Test-Path -LiteralPath $javaCommand -PathType Leaf)) {
+    throw "JDK was not found. Install JDK 17+, add it to PATH, or extract it to $($portableRoots[0]), $($portableRoots[1]), or $($portableRoots[2])."
+}
+
+$agentCommand = "& $(ConvertTo-PowerShellLiteral $agentPython) -m interview_agent.server"
+$serverCommand = "& $(ConvertTo-PowerShellLiteral $mavenCommand) -B -ntp -s .mvn/settings.xml spring-boot:run"
+if (-not [string]::IsNullOrWhiteSpace($javaHome) -and (Test-Path -LiteralPath (Join-Path $javaHome "bin\java.exe") -PathType Leaf)) {
+    $javaHomeLiteral = ConvertTo-PowerShellLiteral $javaHome
+    $serverCommand = "`$env:JAVA_HOME=$javaHomeLiteral; `$env:Path=($(ConvertTo-PowerShellLiteral (Join-Path $javaHome 'bin')) + ';' + `$env:Path); $serverCommand"
+}
+
+Start-DevTerminal $agent $agentCommand
+Start-DevTerminal $server $serverCommand
 Start-DevTerminal $web "pnpm dev"
 
+Write-Host "Python: $agentPython"
+Write-Host "Maven: $mavenCommand"
+Write-Host "JDK: $javaCommand"
 Write-Host "Started Python Agent, Java server, and Next.js web." -ForegroundColor Green
 Write-Host "Web: http://localhost:3000  Java: http://localhost:8080  Agent: http://localhost:8090"
