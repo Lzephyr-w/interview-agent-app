@@ -15,8 +15,6 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:}
   flyway:
     enabled: true
-    default-schema: ${APP_DATABASE_SCHEMA:PUBLIC}
-    schemas: ${APP_DATABASE_SCHEMA:PUBLIC}
     create-schemas: true
   servlet:
     multipart:

@@ -126,7 +126,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
 APP_CORS_ALLOWED_ORIGIN=http://localhost:3000
 SUPABASE_URL=https://your-project-ref.supabase.co
 
-# H2 模式下不要填写这三项；删除或注释 server/.env.example 中对应的行。
+# H2 模式下不要填写下面三项；删除或注释 server/.env.example 中对应的行。
+# H2 自动使用 PUBLIC schema，无需设置 APP_DATABASE_SCHEMA。
 # SPRING_DATASOURCE_URL=...
 # SPRING_DATASOURCE_USERNAME=...
 # SPRING_DATASOURCE_PASSWORD=...
@@ -138,8 +139,8 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 
 数据库配置二选一：
 
-- **H2 内存数据库**：从 `server/.env.local` 删除或注释 `SPRING_DATASOURCE_URL`、`SPRING_DATASOURCE_USERNAME`、`SPRING_DATASOURCE_PASSWORD` 三行，使用 `application.yml` 默认值。
-- **Supabase PostgreSQL**：填写上述三个变量，JDBC URL 建议包含 `sslmode=require&currentSchema=interview_agent`。
+- **H2 内存数据库**：从 `server/.env.local` 删除或注释 `SPRING_DATASOURCE_URL`、`SPRING_DATASOURCE_USERNAME`、`SPRING_DATASOURCE_PASSWORD` 三行，后端自动使用 `PUBLIC` schema。
+- **Supabase PostgreSQL**：填写数据库变量；后端自动读取 JDBC URL 中的 `currentSchema`。如果 URL 没有该参数，再设置 `APP_DATABASE_SCHEMA` 作为覆盖值。
 
 H2 数据只存在 Java 进程内存中，后端重启后业务数据会丢失；Supabase Auth 中的登录账号不会丢失。邮箱登录不依赖 PostgreSQL 配置，但仍需要 `web/.env.local` 中的 Supabase URL/anon key，以及 `server/.env.local` 中的 `SUPABASE_URL`。
 
@@ -187,7 +188,7 @@ python -m pip install -e ".[test]"
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建 `interview_agent` schema，并执行仓库中的 V1 至 V20、V22 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
 
 ### 3.6 启动后端
 
