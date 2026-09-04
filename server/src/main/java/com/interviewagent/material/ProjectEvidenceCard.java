@@ -1,7 +1,6 @@
 package com.interviewagent.material;
 
 public record ProjectEvidenceCard(
-    String id, String projectName, String backgroundAndRole, String goalAndMetrics,
-    String constraintsAndTradeoffs, String personalContribution, String resultAndRetrospective,
-    String applicableQuestionTypes
+    String id, String projectName, String technologyStack,
+    String projectDescriptionAndResponsibilities, String projectHighlights
 ) {}

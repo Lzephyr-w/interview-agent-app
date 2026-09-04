@@ -74,26 +74,26 @@ public class MaterialService {
     public void deleteJobDescription(String userId, String id) { delete("job_descriptions", userId, id); }
 
     public List<ProjectEvidenceCard> evidenceCards(String userId) {
-        return jdbc.sql("SELECT id, project_name, background_and_role, goal_and_metrics, constraints_and_tradeoffs, personal_contribution, result_and_retrospective, applicable_question_types FROM project_evidence_cards WHERE user_id = :userId ORDER BY updated_at DESC")
+        return jdbc.sql("SELECT id, project_name, technology_stack, project_description_and_responsibilities, project_highlights FROM project_evidence_cards WHERE user_id = :userId ORDER BY updated_at DESC")
             .param("userId", userId).query(ProjectEvidenceCard.class).list();
     }
 
     public ProjectEvidenceCard evidenceCard(String userId, String id) {
-        return jdbc.sql("SELECT id, project_name, background_and_role, goal_and_metrics, constraints_and_tradeoffs, personal_contribution, result_and_retrospective, applicable_question_types FROM project_evidence_cards WHERE id = :id AND user_id = :userId")
+        return jdbc.sql("SELECT id, project_name, technology_stack, project_description_and_responsibilities, project_highlights FROM project_evidence_cards WHERE id = :id AND user_id = :userId")
             .param("id", id).param("userId", userId).query(ProjectEvidenceCard.class).optional().orElseThrow(MaterialService::notFound);
     }
 
     public ProjectEvidenceCard createEvidenceCard(String userId, EvidenceCardRequest request) {
         String id = UUID.randomUUID().toString();
         ProjectEvidenceCard card = card(id, request);
-        jdbc.sql("INSERT INTO project_evidence_cards (id, user_id, project_name, background_and_role, goal_and_metrics, constraints_and_tradeoffs, personal_contribution, result_and_retrospective, applicable_question_types) VALUES (:id, :userId, :projectName, :backgroundAndRole, :goalAndMetrics, :constraintsAndTradeoffs, :personalContribution, :resultAndRetrospective, :applicableQuestionTypes)")
+        jdbc.sql("INSERT INTO project_evidence_cards (id, user_id, project_name, technology_stack, project_description_and_responsibilities, project_highlights) VALUES (:id, :userId, :projectName, :technologyStack, :projectDescriptionAndResponsibilities, :projectHighlights)")
             .paramSource(cardParameters(card, userId)).update();
         return card;
     }
 
     public ProjectEvidenceCard updateEvidenceCard(String userId, String id, EvidenceCardRequest request) {
         ProjectEvidenceCard card = card(id, request);
-        if (jdbc.sql("UPDATE project_evidence_cards SET project_name = :projectName, background_and_role = :backgroundAndRole, goal_and_metrics = :goalAndMetrics, constraints_and_tradeoffs = :constraintsAndTradeoffs, personal_contribution = :personalContribution, result_and_retrospective = :resultAndRetrospective, applicable_question_types = :applicableQuestionTypes, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId")
+        if (jdbc.sql("UPDATE project_evidence_cards SET project_name = :projectName, technology_stack = :technologyStack, project_description_and_responsibilities = :projectDescriptionAndResponsibilities, project_highlights = :projectHighlights, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId")
             .paramSource(cardParameters(card, userId)).update() == 0) throw notFound();
         return card;
     }
@@ -153,11 +153,11 @@ public class MaterialService {
     }
 
     private ProjectEvidenceCard card(String id, EvidenceCardRequest request) {
-        return new ProjectEvidenceCard(id, required(request.projectName(), "项目名称", 200), required(request.backgroundAndRole(), "背景与角色", 12_000), required(request.goalAndMetrics(), "目标与指标", 12_000), required(request.constraintsAndTradeoffs(), "约束与取舍", 12_000), required(request.personalContribution(), "个人贡献", 12_000), required(request.resultAndRetrospective(), "结果与复盘", 12_000), required(request.applicableQuestionTypes(), "适用问题类型", 2_000));
+        return new ProjectEvidenceCard(id, required(request.projectName(), "项目名称", 200), required(request.technologyStack(), "技术栈", 2_000), required(request.projectDescriptionAndResponsibilities(), "项目描述与职责", 12_000), required(request.projectHighlights(), "项目亮点", 12_000));
     }
 
     private Map<String, String> cardParameters(ProjectEvidenceCard card, String userId) {
-        return Map.of("id", card.id(), "userId", userId, "projectName", card.projectName(), "backgroundAndRole", card.backgroundAndRole(), "goalAndMetrics", card.goalAndMetrics(), "constraintsAndTradeoffs", card.constraintsAndTradeoffs(), "personalContribution", card.personalContribution(), "resultAndRetrospective", card.resultAndRetrospective(), "applicableQuestionTypes", card.applicableQuestionTypes());
+        return Map.of("id", card.id(), "userId", userId, "projectName", card.projectName(), "technologyStack", card.technologyStack(), "projectDescriptionAndResponsibilities", card.projectDescriptionAndResponsibilities(), "projectHighlights", card.projectHighlights());
     }
 
     private void delete(String table, String userId, String id) {

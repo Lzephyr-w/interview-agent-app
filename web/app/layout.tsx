@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import InlineConstraintValidation from "../components/InlineConstraintValidation";
 import "./styles/globals.css";
 
 export const metadata: Metadata = {
@@ -11,7 +12,10 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <InlineConstraintValidation />
+        {children}
+      </body>
     </html>
   );
 }

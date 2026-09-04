@@ -25,12 +25,9 @@ type JobDescription = {
 type EvidenceCard = {
   id: string;
   projectName: string;
-  backgroundAndRole: string;
-  goalAndMetrics: string;
-  constraintsAndTradeoffs: string;
-  personalContribution: string;
-  resultAndRetrospective: string;
-  applicableQuestionTypes: string;
+  technologyStack: string;
+  projectDescriptionAndResponsibilities: string;
+  projectHighlights: string;
 };
 type InterviewPackage = {
   id: string;
@@ -47,12 +44,9 @@ type Tab =
 const emptyJobDescription = { company: "", role: "", content: "" };
 const emptyEvidenceCard = {
   projectName: "",
-  backgroundAndRole: "",
-  goalAndMetrics: "",
-  constraintsAndTradeoffs: "",
-  personalContribution: "",
-  resultAndRetrospective: "",
-  applicableQuestionTypes: "",
+  technologyStack: "",
+  projectDescriptionAndResponsibilities: "",
+  projectHighlights: "",
 };
 const emptyPackage = {
   company: "",
@@ -74,15 +68,18 @@ function Field({
   value,
   onChange,
   multiline = false,
+  hint,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   multiline?: boolean;
+  hint?: string;
 }) {
   return (
     <label className="field">
       {label}
+      {hint && <small className="field-hint">{hint}</small>}
       {multiline ? (
         <textarea
           required
@@ -471,62 +468,34 @@ export default function LibraryPage() {
                       }
                     />
                     <Field
-                      label="背景与角色"
+                      label="项目描述与职责"
                       multiline
-                      value={evidenceCard.backgroundAndRole}
-                      onChange={(backgroundAndRole) =>
-                        setEvidenceCard({ ...evidenceCard, backgroundAndRole })
-                      }
-                    />
-                    <Field
-                      label="目标与指标"
-                      multiline
-                      value={evidenceCard.goalAndMetrics}
-                      onChange={(goalAndMetrics) =>
-                        setEvidenceCard({ ...evidenceCard, goalAndMetrics })
-                      }
-                    />
-                    <Field
-                      label="技术约束与方案取舍"
-                      multiline
-                      value={evidenceCard.constraintsAndTradeoffs}
-                      onChange={(constraintsAndTradeoffs) =>
+                      value={evidenceCard.projectDescriptionAndResponsibilities}
+                      onChange={(projectDescriptionAndResponsibilities) =>
                         setEvidenceCard({
                           ...evidenceCard,
-                          constraintsAndTradeoffs,
+                          projectDescriptionAndResponsibilities,
                         })
                       }
                     />
                     <Field
-                      label="个人贡献"
+                      label="项目亮点"
                       multiline
-                      value={evidenceCard.personalContribution}
-                      onChange={(personalContribution) =>
+                      hint="可按亮点分条填写，每行一个亮点"
+                      value={evidenceCard.projectHighlights}
+                      onChange={(projectHighlights) =>
                         setEvidenceCard({
                           ...evidenceCard,
-                          personalContribution,
+                          projectHighlights,
                         })
                       }
                     />
                     <Field
-                      label="结果与复盘"
-                      multiline
-                      value={evidenceCard.resultAndRetrospective}
-                      onChange={(resultAndRetrospective) =>
-                        setEvidenceCard({
-                          ...evidenceCard,
-                          resultAndRetrospective,
-                        })
-                      }
-                    />
-                    <Field
-                      label="适用问题类型"
-                      value={evidenceCard.applicableQuestionTypes}
-                      onChange={(applicableQuestionTypes) =>
-                        setEvidenceCard({
-                          ...evidenceCard,
-                          applicableQuestionTypes,
-                        })
+                      label="技术栈"
+                      hint="示例：React、TypeScript、Spring Boot、MySQL"
+                      value={evidenceCard.technologyStack}
+                      onChange={(technologyStack) =>
+                        setEvidenceCard({ ...evidenceCard, technologyStack })
                       }
                     />
                     <div className="form-actions">
@@ -547,16 +516,33 @@ export default function LibraryPage() {
                       )}
                     </div>
                   </form>
-                  <ResourceList
-                    items={evidenceCards}
-                    label={(item) => item.projectName}
-                    detail={(item) => item.goalAndMetrics}
-                    onEdit={(item) => {
-                      setEvidenceCard(item);
-                      setEvidenceCardId(item.id);
-                    }}
-                    onDelete={(id) => void remove("/api/v1/evidence-cards", id)}
-                  />
+                  <ul className="resource-list">
+                    {evidenceCards.map((item) => (
+                      <li className="resource-item evidence-card-item" key={item.id}>
+                        <div className="evidence-card-summary">
+                          <h3>项目名称</h3>
+                          <strong>{item.projectName || "待补充"}</strong>
+                          <section>
+                            <h3>描述与职责</h3>
+                            <p>{item.projectDescriptionAndResponsibilities || "待补充"}</p>
+                          </section>
+                          <section>
+                            <h3>项目亮点</h3>
+                            <p>{item.projectHighlights || "待补充"}</p>
+                          </section>
+                          <section>
+                            <h3>技术栈</h3>
+                            <p>{item.technologyStack || "待补充"}</p>
+                          </section>
+                        </div>
+                        <div className="item-actions">
+                          <button className="secondary-button" type="button" onClick={() => { setEvidenceCard(item); setEvidenceCardId(item.id); }}>编辑</button>
+                          <button className="danger-button" type="button" onClick={() => void remove("/api/v1/evidence-cards", item.id)}>删除</button>
+                        </div>
+                      </li>
+                    ))}
+                    {evidenceCards.length === 0 && <li className="muted">暂无资料。</li>}
+                  </ul>
                 </section>
               )}
               {activeTab === "interview-packages" && (

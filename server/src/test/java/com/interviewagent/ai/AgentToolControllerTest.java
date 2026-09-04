@@ -48,4 +48,20 @@ class AgentToolControllerTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("already_exists"));
         org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM training_tasks WHERE user_id='user-a' AND title='练习幂等'").query(Integer.class).single());
     }
+
+    @Test
+    void evidenceCardToolExposesOnlyNewFieldsWithinUserScope() throws Exception {
+        jdbc.sql("INSERT INTO project_evidence_cards (id,user_id,project_name,technology_stack,project_description_and_responsibilities,project_highlights) VALUES ('tool-card','tool-user','订单平台','Spring Boot','负责订单服务','延迟下降 30%')").update();
+        mockMvc.perform(post("/internal/agent/tools").header("X-Agent-Key", "secret").contentType("application/json")
+                .content("{\"userId\":\"tool-user\",\"name\":\"get_resource\",\"arguments\":{\"resource_type\":\"evidence_card\",\"id\":\"tool-card\"}}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.projectName").value("订单平台"))
+            .andExpect(jsonPath("$.technologyStack").value("Spring Boot"))
+            .andExpect(jsonPath("$.projectDescriptionAndResponsibilities").value("负责订单服务"))
+            .andExpect(jsonPath("$.projectHighlights").value("延迟下降 30%"))
+            .andExpect(jsonPath("$.backgroundAndRole").doesNotExist());
+        mockMvc.perform(post("/internal/agent/tools").header("X-Agent-Key", "secret").contentType("application/json")
+                .content("{\"userId\":\"other-user\",\"name\":\"get_resource\",\"arguments\":{\"resource_type\":\"evidence_card\",\"id\":\"tool-card\"}}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.error").value("资源不存在或无权访问。"));
+    }
 }

@@ -419,6 +419,36 @@
   line-height: 1.5;
   white-space: pre-wrap;
 }
+.field-hint {
+  color: var(--muted);
+  font-weight: 400;
+}
+.evidence-card-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+.evidence-card-summary {
+  min-width: 0;
+}
+.evidence-card-summary strong {
+  display: block;
+  margin-bottom: 12px;
+}
+.evidence-card-summary section + section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.evidence-card-summary h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.evidence-card-summary p {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
 .danger-button {
   padding: 8px 10px;
   color: var(--danger);

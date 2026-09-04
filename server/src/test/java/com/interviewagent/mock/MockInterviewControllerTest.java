@@ -20,7 +20,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 @SpringBootTest(properties = {"SUPABASE_URL=https://example.supabase.co", "app.ai-mock-task.poll-ms=600000", "spring.datasource.url=jdbc:h2:mem:mock-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "spring.datasource.username=sa", "spring.datasource.password=", "spring.flyway.default-schema=PUBLIC", "spring.flyway.schemas=PUBLIC", "spring.flyway.create-schemas=false"})
 @AutoConfigureMockMvc
@@ -129,6 +132,28 @@ class MockInterviewControllerTest {
         JsonNode completed = objectMapper.readTree(skipped.getResponse().getContentAsString());
         org.junit.jupiter.api.Assertions.assertEquals(4, completed.get("questions").size());
         org.junit.jupiter.api.Assertions.assertTrue(completed.get("currentQuestion").isNull());
+    }
+
+    @Test
+    void promptUsesFourEvidenceCardFields() throws Exception {
+        String user = "evidence-context-user";
+        String resumeFile = resumeFile(user);
+        String jd = id(createResource("/api/v1/job-descriptions", user, "{\"company\":\"A 公司\",\"role\":\"后端\",\"content\":\"Spring\"}"));
+        String card = id(createResource("/api/v1/evidence-cards", user, "{\"projectName\":\"订单平台\",\"technologyStack\":\"Spring Boot、MySQL\",\"projectDescriptionAndResponsibilities\":\"负责订单服务与发布\",\"projectHighlights\":\"延迟下降 30%\"}"));
+        String packageId = id(createResource("/api/v1/interview-packages", user, "{\"company\":\"A 公司\",\"role\":\"后端\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFile + "\",\"jobDescriptionId\":\"" + jd + "\",\"evidenceCardIds\":[\"" + card + "\"]}"));
+
+        mockMvc.perform(post("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject(user))).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"interviewPackageId\":\"" + packageId + "\"}"))
+            .andExpect(status().isCreated());
+        worker.run();
+
+        ArgumentCaptor<String> prompts = ArgumentCaptor.forClass(String.class);
+        verify(model, atLeastOnce()).reply(prompts.capture());
+        String prompt = prompts.getAllValues().stream().filter(value -> value.contains("项目名称：订单平台")).findFirst().orElse("");
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("项目描述与职责：负责订单服务与发布"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("项目亮点：延迟下降 30%"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("技术栈：Spring Boot、MySQL"));
+        org.junit.jupiter.api.Assertions.assertFalse(prompt.contains("个人贡献"));
     }
 
     private String packageFor(String user) throws Exception {

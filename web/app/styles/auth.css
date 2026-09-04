@@ -131,7 +131,9 @@ select:focus {
   border-color: var(--orange);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 20%, transparent);
 }
-input[aria-invalid="true"] {
+input[aria-invalid="true"],
+textarea[aria-invalid="true"],
+select[aria-invalid="true"] {
   border-color: var(--danger);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent);
 }

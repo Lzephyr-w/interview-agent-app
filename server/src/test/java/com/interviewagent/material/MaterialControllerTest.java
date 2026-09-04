@@ -32,7 +32,7 @@ class MaterialControllerTest {
     @Test void acceptsOnlyOwnedResumeFilesForPackages() throws Exception {
         String resumeFileId = resumeFile("user-a");
         String jdId = id(create("/api/v1/job-descriptions", "user-a", "{\"company\":\"A 公司\",\"role\":\"后端工程师\",\"content\":\"Spring Boot\"}"));
-        String cardId = id(create("/api/v1/evidence-cards", "user-a", "{\"projectName\":\"订单系统\",\"backgroundAndRole\":\"后端开发\",\"goalAndMetrics\":\"降低延迟\",\"constraintsAndTradeoffs\":\"兼顾一致性\",\"personalContribution\":\"实现缓存\",\"resultAndRetrospective\":\"延迟下降\",\"applicableQuestionTypes\":\"项目深挖\"}"));
+        String cardId = id(create("/api/v1/evidence-cards", "user-a", "{\"projectName\":\"订单系统\",\"technologyStack\":\"Spring Boot、MySQL\",\"projectDescriptionAndResponsibilities\":\"负责后端开发\",\"projectHighlights\":\"降低延迟；兼顾一致性\"}"));
 
         mockMvc.perform(post("/api/v1/interview-packages").with(jwt().jwt(token -> token.subject("user-b")))
             .contentType(MediaType.APPLICATION_JSON).content("{\"company\":\"A 公司\",\"role\":\"后端工程师\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFileId + "\",\"jobDescriptionId\":\"" + jdId + "\",\"evidenceCardIds\":[\"" + cardId + "\"]}"))
@@ -41,6 +41,39 @@ class MaterialControllerTest {
         id(create("/api/v1/interview-packages", "user-a", "{\"company\":\"A 公司\",\"role\":\"后端工程师\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFileId + "\",\"jobDescriptionId\":\"" + jdId + "\",\"evidenceCardIds\":[\"" + cardId + "\"]}"));
         mockMvc.perform(get("/api/v1/interview-packages").with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$[0].resumeId").doesNotExist()).andExpect(jsonPath("$[0].resumeFileId").value(resumeFileId)).andExpect(jsonPath("$[0].evidenceCardIds[0]").value(cardId));
+    }
+
+    @Test void evidenceCardCrudUsesFourCoreFieldsAndValidatesThem() throws Exception {
+        String body = "{\"projectName\":\"支付平台\",\"technologyStack\":\"React、TypeScript\",\"projectDescriptionAndResponsibilities\":\"负责支付页面与接口\",\"projectHighlights\":\"首屏提速 30%\\n补齐异常兜底\"}";
+        String id = id(create("/api/v1/evidence-cards", "crud-user", body));
+        mockMvc.perform(get("/api/v1/evidence-cards/{id}", id).with(jwt().jwt(token -> token.subject("crud-user"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.projectName").value("支付平台"))
+            .andExpect(jsonPath("$.technologyStack").value("React、TypeScript"))
+            .andExpect(jsonPath("$.projectDescriptionAndResponsibilities").value("负责支付页面与接口"))
+            .andExpect(jsonPath("$.projectHighlights").value("首屏提速 30%\n补齐异常兜底"))
+            .andExpect(jsonPath("$.backgroundAndRole").doesNotExist())
+            .andExpect(jsonPath("$.applicableQuestionTypes").doesNotExist());
+
+        String updated = "{\"projectName\":\"支付平台 2.0\",\"technologyStack\":\"React、TypeScript、Spring Boot\",\"projectDescriptionAndResponsibilities\":\"负责全栈交付\",\"projectHighlights\":\"完成灰度发布\"}";
+        mockMvc.perform(put("/api/v1/evidence-cards/{id}", id).with(jwt().jwt(token -> token.subject("crud-user")))
+            .contentType(MediaType.APPLICATION_JSON).content(updated))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.projectName").value("支付平台 2.0"));
+        mockMvc.perform(post("/api/v1/evidence-cards").with(jwt().jwt(token -> token.subject("crud-user")))
+            .contentType(MediaType.APPLICATION_JSON).content("{\"projectName\":\"缺字段\",\"technologyStack\":\"Java\",\"projectDescriptionAndResponsibilities\":\"描述\"}"))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test void migratedLegacyColumnsRemainReadableThroughNewFields() throws Exception {
+        String legacyId = java.util.UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO project_evidence_cards (id, user_id, project_name, background_and_role, personal_contribution, goal_and_metrics, constraints_and_tradeoffs, result_and_retrospective, applicable_question_types, technology_stack, project_description_and_responsibilities, project_highlights) VALUES (:id, 'legacy-user', '旧项目', '背景', '贡献', '目标', '取舍', '结果', '项目深挖', '待补充', '背景；贡献', '目标；取舍；结果')")
+            .param("id", legacyId).update();
+        mockMvc.perform(get("/api/v1/evidence-cards/{id}", legacyId).with(jwt().jwt(token -> token.subject("legacy-user"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.projectName").value("旧项目"))
+            .andExpect(jsonPath("$.projectDescriptionAndResponsibilities").value("背景；贡献"))
+            .andExpect(jsonPath("$.projectHighlights").value("目标；取舍；结果"))
+            .andExpect(jsonPath("$.technologyStack").value("待补充"));
     }
 
     @Test void acceptsOnlyOwnedVerifiedResumeFiles() throws Exception {

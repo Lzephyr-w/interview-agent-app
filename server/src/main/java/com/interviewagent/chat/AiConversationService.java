@@ -226,7 +226,7 @@ class AiConversationService {
 
     private void addEvidenceCards(String userId, String packageId, ContextBuilder context) {
         jdbc
-            .sql("SELECT c.project_name, c.background_and_role, c.goal_and_metrics, c.constraints_and_tradeoffs, c.personal_contribution, c.result_and_retrospective FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId ORDER BY c.updated_at DESC")
+            .sql("SELECT c.project_name, c.project_description_and_responsibilities, c.project_highlights, c.technology_stack FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId ORDER BY c.updated_at DESC")
             .param("userId", userId).param("packageId", packageId)
             .query((rs, index) -> evidenceText(rs)).list()
             .forEach(card -> context.add("项目证据卡", card.label(), card.text()));
@@ -293,7 +293,7 @@ class AiConversationService {
 
     private EvidenceText evidenceText(ResultSet rs) throws SQLException {
         String label = rs.getString("project_name");
-        return new EvidenceText(label, "项目证据卡：" + label + "\n背景与角色：" + rs.getString("background_and_role") + "\n目标与指标：" + rs.getString("goal_and_metrics") + "\n约束与取舍：" + rs.getString("constraints_and_tradeoffs") + "\n个人贡献：" + rs.getString("personal_contribution") + "\n结果与复盘：" + rs.getString("result_and_retrospective"));
+        return new EvidenceText(label, "项目证据卡：" + label + "\n项目名称：" + label + "\n项目描述与职责：" + rs.getString("project_description_and_responsibilities") + "\n项目亮点：" + rs.getString("project_highlights") + "\n技术栈：" + rs.getString("technology_stack"));
     }
 
     private List<String> stringList(String value) {

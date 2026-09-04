@@ -199,7 +199,7 @@ public class MockInterviewService {
             .param("id", packageId).param("userId", userId).query(String.class).optional().orElse("待补充");
         String resume = jdbc.sql("SELECT rf.parsed_text FROM interview_packages p LEFT JOIN resume_files rf ON rf.id = p.resume_file_id AND rf.user_id = :userId AND rf.parsed_status = 'READY' WHERE p.id = :id AND p.user_id = :userId")
             .param("id", packageId).param("userId", userId).query(String.class).optional().orElse("待补充");
-        List<String> cards = jdbc.sql("SELECT c.project_name || '：' || c.personal_contribution FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId")
+        List<String> cards = jdbc.sql("SELECT '项目名称：' || c.project_name || '；项目描述与职责：' || c.project_description_and_responsibilities || '；项目亮点：' || c.project_highlights || '；技术栈：' || c.technology_stack FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId")
             .param("userId", userId).param("packageId", packageId).query(String.class).list();
         return "简历：" + clip(resume, 6000) + "\nJD：" + clip(jd, 4000) + "\n证据卡：" + (cards.isEmpty() ? "待补充" : cards);
     }

@@ -96,6 +96,12 @@
   .resource-item {
     display: grid;
   }
+  .evidence-card-item {
+    grid-template-columns: 1fr;
+  }
+  .evidence-card-item .item-actions {
+    width: 100%;
+  }
   .weakness-section .resource-item {
     grid-template-columns: 1fr;
   }
