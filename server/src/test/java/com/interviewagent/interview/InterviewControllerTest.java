@@ -128,7 +128,7 @@ class InterviewControllerTest {
 
     @Test void startsVoiceAnswerTimerOnlyWhenAnswerBegins() throws Exception {
         String packageId = packageFor("user-a");
-        jdbc.sql("INSERT INTO ai_mock_interviews (id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES ('timer-session','user-a',:packageId,'A 公司','后端','技术一面','RUNNING',CURRENT_TIMESTAMP)")
+        jdbc.sql("INSERT INTO ai_mock_interviews (id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES ('timer-session','user-a',:packageId,'A 公司','后端','技术一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
             .param("packageId", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions (id,ai_mock_interview_id,question_text,state,sort_order) VALUES ('timer-question','timer-session','请说明缓存策略。','OPEN',0)").update();
 

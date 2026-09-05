@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { signIn, signUp } from "@/lib/auth";
 import ThemeToggle from "@/components/ThemeToggle";
+import UserGuide from "@/components/UserGuide";
 import Toast from "@/components/Toast";
 
 const emptyFieldErrors = { email: "", password: "", confirmPassword: "" };
@@ -85,7 +86,10 @@ export default function LoginPage() {
               面试助手<small>INTERVIEW ASSISTANT</small>
             </span>
           </div>
-          <ThemeToggle />
+          <div className="auth-top-actions">
+            <UserGuide />
+            <ThemeToggle />
+          </div>
         </div>
         <p className="eyebrow">{registering ? "CREATE ACCOUNT" : "WELCOME BACK"}</p>
         <h1>

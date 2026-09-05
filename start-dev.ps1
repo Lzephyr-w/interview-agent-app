@@ -21,7 +21,7 @@ if (-not $NoCheck -and -not (Test-Path -LiteralPath (Join-Path $agent ".env.loca
 function Start-DevTerminal([string]$directory, [string]$command) {
     Start-Process -FilePath "powershell.exe" -WorkingDirectory $directory -ArgumentList @(
         "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command
-    ) | Out-Null
+    ) -WindowStyle Hidden | Out-Null
 }
 
 function Resolve-CommandPath([string[]]$names) {
@@ -61,12 +61,20 @@ $agentSource = Join-Path $agent "src"
 $env:PYTHONPATH = $agentSource
 
 $agentPython = Join-Path $agent ".venv\Scripts\python.exe"
-if (-not (Test-Path -LiteralPath $agentPython -PathType Leaf)) {
-    $agentPython = Resolve-CommandPath @("python.exe", "python")
+$agentPythonArguments = @()
+if (Test-Path -LiteralPath (Join-Path $agent ".venv") -PathType Container) {
+    if (-not (Test-Path -LiteralPath $agentPython -PathType Leaf)) {
+        throw "agent/.venv is invalid: recreate it with Python 3.10+."
+    }
+} else {
+    $agentPython = Resolve-CommandPath @("py.exe", "py")
+    $agentPythonArguments = @("-3.10")
 }
 if ([string]::IsNullOrWhiteSpace($agentPython)) {
-    throw "Python was not found. Install Python 3.10+ or create agent/.venv."
+    throw "Python launcher was not found. Install Python 3.10 with py -3.10 support, or create agent/.venv."
 }
+& $agentPython @agentPythonArguments -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) { throw "Python 3.10+ is required. Fix agent/.venv or install the py -3.10 runtime before starting." }
 
 $portableRoots = @(
     (Join-Path ([System.IO.Path]::GetTempPath()) "interview-agent-tools"),
@@ -111,7 +119,7 @@ if ([string]::IsNullOrWhiteSpace($javaCommand) -or -not (Test-Path -LiteralPath 
     throw "JDK was not found. Install JDK 17+, add it to PATH, or extract it to $($portableRoots[0]), $($portableRoots[1]), or $($portableRoots[2])."
 }
 
-$agentCommand = "& $(ConvertTo-PowerShellLiteral $agentPython) -m interview_agent.server"
+$agentCommand = "& $(ConvertTo-PowerShellLiteral $agentPython) $($agentPythonArguments -join ' ') -m interview_agent.server"
 $serverCommand = "& $(ConvertTo-PowerShellLiteral $mavenCommand) -B -ntp -s .mvn/settings.xml spring-boot:run"
 if (-not [string]::IsNullOrWhiteSpace($javaHome) -and (Test-Path -LiteralPath (Join-Path $javaHome "bin\java.exe") -PathType Leaf)) {
     $javaHomeLiteral = ConvertTo-PowerShellLiteral $javaHome

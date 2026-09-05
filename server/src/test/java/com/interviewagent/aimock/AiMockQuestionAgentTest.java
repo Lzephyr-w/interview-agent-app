@@ -12,6 +12,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AgentPythonClient;
+import com.interviewagent.ai.SimulationException;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import com.interviewagent.ai.AiMockTaskWorker;
 import com.interviewagent.ai.storage.AiAudioStorage;
 import java.util.List;
@@ -34,14 +38,56 @@ class AiMockQuestionAgentTest {
     @Autowired JdbcClient jdbc;
     @Autowired MockMvc mockMvc;
     @Autowired AiMockTaskWorker worker;
-    @MockBean ReviewModelClient model;
+    @MockBean AgentPythonClient model;
+    @MockBean ReviewModelClient reviewModel;
     @MockBean AiAudioStorage storage;
+
+    @org.junit.jupiter.api.AfterEach
+    void noReviewModelCalls() { org.mockito.Mockito.verifyNoInteractions(reviewModel); }
 
     @Test
     void planContainsRequiredDifferentTypes() throws Exception {
-        List<PlanItem> plan = agent.parsePlan(json.readTree(validPlan()));
+        List<PlanItem> plan = agent.parsePlan(json.readTree(validPlan()),false);
         assertEquals(List.of("FUNDAMENTAL", "FUNDAMENTAL", "FUNDAMENTAL", "FUNDAMENTAL", "FUNDAMENTAL", "PROJECT", "PROJECT", "PROJECT", "PROJECT", "SCENARIO"), plan.stream().map(PlanItem::type).toList());
         assertEquals(3, plan.stream().map(PlanItem::type).distinct().count());
+    }
+
+    @Test
+    void strictPlanRejectsLegacySizeDistributionAndInvalidFields() throws Exception {
+        var valid=json.readTree(validPlan());
+        assertEquals(10,agent.parsePlan(valid,false).size());
+        var three=valid.deepCopy();
+        var array=(com.fasterxml.jackson.databind.node.ArrayNode)three.path("plan");
+        while(array.size()>3) array.remove(array.size()-1);
+        assertEquals(3,agent.parsePlan(three,true).size());
+        assertThrows(RuntimeException.class,()->agent.parsePlan(three,false));
+        for(String field:List.of("type","competency","order","technology","angle")) {
+            var invalid=valid.deepCopy();
+            var first=(com.fasterxml.jackson.databind.node.ObjectNode)invalid.path("plan").get(0);
+            if(field.equals("type")) first.put(field,"PROJECT");
+            else if(field.equals("order")) first.put(field,"1");
+            else first.put(field,"长".repeat(201));
+            assertThrows(RuntimeException.class,()->agent.parsePlan(invalid,false));
+        }
+    }
+
+    @Test
+    void finalValidationRejectsFabricatedProjectDuplicateAndMetadataMismatch() throws Exception {
+        var materials=json.readTree("{\"company\":\"公司\",\"role\":\"开发\",\"round\":\"一面\",\"jd\":\"岗位\",\"resume\":\"待补充\",\"cards\":[]}");
+        var plan=json.readTree(validPlan());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)plan.path("plan").get(5)).put("projectName","虚构项目");
+        when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(plan);
+        assertThrows(RuntimeException.class,()->agent.plan(materials));
+        PlanItem slot=new PlanItem(1,"FUNDAMENTAL","事件循环","","浏览器","调度");
+        var good=json.readTree("{\"questionText\":\"浏览器如何调度微任务？\",\"type\":\"FUNDAMENTAL\",\"competency\":\"事件循环\",\"projectName\":\"\",\"technology\":\"浏览器\"}");
+        for(String field:List.of("type","competency","projectName","technology","questionText")) {
+            var bad=good.deepCopy();
+            ((com.fasterxml.jackson.databind.node.ObjectNode)bad).put(field,field.equals("questionText")?"长".repeat(801):field.equals("projectName")?"!!!":"错误值");
+            when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenReturn(bad);
+            assertThrows(RuntimeException.class,()->agent.generate(materials,slot,List.of()));
+        }
+        when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenReturn(good);
+        assertThrows(RuntimeException.class,()->agent.generate(materials,slot,List.of(new QuestionHistory("浏览器如何调度微任务？","FUNDAMENTAL","旧能力","","旧技术"))));
     }
 
     @Test
@@ -50,8 +96,8 @@ class AiMockQuestionAgentTest {
         ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("order", "1");
         ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("type", "fundamental");
         ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("projectName", "待补充");
-        assertEquals("FUNDAMENTAL", agent.parsePlan(root).getFirst().type());
-        assertEquals("", agent.parsePlan(root).getFirst().projectName());
+        assertEquals("FUNDAMENTAL", agent.parsePlan(root,true).getFirst().type());
+        assertEquals("", agent.parsePlan(root,true).getFirst().projectName());
     }
 
     @Test
@@ -65,13 +111,13 @@ class AiMockQuestionAgentTest {
     @Test
     void invalidPlanCreatesNeitherSessionNorQuestion() throws Exception {
         String packageId = packageFor("user-a");
-        when(model.replyJson(anyString())).thenReturn(json.readTree("{\"plan\":[]}"));
+        when(model.simulate(anyString(),anyMap())).thenReturn(json.readTree("{\"plan\":[]}"));
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
         worker.run();
         String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("计划 JSON 非法")));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-b"))))
             .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/ai-mock-tasks/{id}/retry", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
@@ -85,14 +131,15 @@ class AiMockQuestionAgentTest {
     @Test
     void invalidQuestionJsonCreatesNeitherSessionNorQuestion() throws Exception {
         String packageId = packageFor("invalid-question-user");
-        when(model.replyJson(anyString())).thenReturn(json.readTree(validPlan()), json.readTree("{\"type\":\"FUNDAMENTAL\"}"));
+        when(model.simulate(anyString(),anyMap())).thenReturn(json.readTree(validPlan()), json.readTree("{\"type\":\"FUNDAMENTAL\"}"));
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andReturn();
         worker.run();
         String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("缺少必填字段")));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
+        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user' AND question_plan IS NOT NULL").query(Integer.class).single());
         String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
         assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
@@ -100,7 +147,7 @@ class AiMockQuestionAgentTest {
     @Test
     void legacySessionWithoutPlanOrMetadataStillReads() throws Exception {
         String packageId = packageFor("legacy-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'legacy-user',:package,'旧公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)").param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'legacy-user',:package,'旧公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)").param("id", sessionId).param("package", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order) VALUES(:id,:session,'浏览器事件循环如何工作？','OPEN',0)").param("id", questionId).param("session", sessionId).update();
         mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("legacy-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.totalQuestions").value(3)).andExpect(jsonPath("$.currentQuestion.questionType").value("FUNDAMENTAL")).andExpect(jsonPath("$.currentQuestion.competency").value(org.hamcrest.Matchers.nullValue()));
@@ -109,19 +156,19 @@ class AiMockQuestionAgentTest {
     @Test
     void expiredQuestionGetOnlyReadsAndDoesNotGenerate() throws Exception {
         String packageId = packageFor("expired-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'expired-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'expired-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
             .param("id", sessionId).param("package", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_expires_at) VALUES(:id,:session,'过期题目','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
             .param("id", questionId).param("session", sessionId).update();
         mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("expired-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.id").value(questionId)).andExpect(jsonPath("$.currentQuestion.state").value("OPEN"));
-        verify(model, never()).replyJson(anyString());
+        verify(model, never()).simulate(anyString(),anyMap());
     }
 
     @Test
     void questionCannotExpireBeforeAnswerStarts() throws Exception {
         String packageId = packageFor("not-started-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'not-started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'not-started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
             .param("id", sessionId).param("package", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_expires_at) VALUES(:id,:session,'尚未回答的首题','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
             .param("id", questionId).param("session", sessionId).update();
@@ -134,7 +181,7 @@ class AiMockQuestionAgentTest {
     @Test
     void startedQuestionStillExpires() throws Exception {
         String packageId = packageFor("started-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)")
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'started-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
             .param("id", sessionId).param("package", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_started_at,answer_expires_at) VALUES(:id,:session,'已开始且超时的题目','OPEN',0,CURRENT_TIMESTAMP - INTERVAL '6' MINUTE,CURRENT_TIMESTAMP - INTERVAL '1' MINUTE)")
             .param("id", questionId).param("session", sessionId).update();
@@ -147,7 +194,7 @@ class AiMockQuestionAgentTest {
     @Test
     void audioUploadAndDeleteRequireOwnership() throws Exception {
         String packageId = packageFor("audio-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'audio-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP)").param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'audio-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)").param("id", sessionId).param("package", packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order) VALUES(:id,:session,'请说明事件循环。','OPEN',0)").param("id", questionId).param("session", sessionId).update();
         MockMultipartFile wav = new MockMultipartFile("file", "answer.wav", "audio/wav", "RIFFxxxxWAVEdata".getBytes());
 

@@ -314,6 +314,7 @@ export default function MockInterviewsPage() {
                     <h3>AI 处理失败</h3>
                     <p className="error">{session.task.error || "后台处理失败，请重试。"}</p>
                     <button className="primary-button" type="button" onClick={() => void retryTask()} disabled={saving}>重试</button>
+                    <button className="secondary-button" type="button" onClick={finish} disabled={saving}>结束并保存已答内容</button>
                   </div>
                 ) : session.task ? (
                   <div className="mock-complete" role="status">

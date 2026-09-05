@@ -40,7 +40,7 @@ AI 面试助手是面向求职准备的前后端分离应用，围绕简历、�
 | 前端 | Next.js 15.2.4、React 19.0.0、TypeScript 5.8.2 |
 | 后端 | Java 21、Spring Boot 3.4.3、Spring Security、Spring JDBC |
 | 数据库 | PostgreSQL / Supabase PostgreSQL；未配置数据库连接时默认使用 H2 内存数据库 |
-| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 |
+| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22、V23、V24 |
 | 文件解析 | Apache PDFBox 3.0.8、Apache POI 5.5.1 |
 | 认证与存储 | Supabase Auth、Supabase 私有 Storage |
 | AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；OpenAI 兼容音频转写 API 或火山引擎音频转写 |
@@ -110,7 +110,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
 | `SUPABASE_STORAGE_SERVICE_KEY` | 服务端访问私有 bucket 的 Service Role Key，不能提交到 Git |
 | `SUPABASE_RESUME_FILES_BUCKET` | 简历文件 bucket，默认 `resume-files` |
 | `SUPABASE_AI_MOCK_AUDIO_BUCKET` | AI 模拟和面试录音 bucket，默认 `ai-mock-audio` |
-| `AI_REVIEW_API_URL` | OpenAI 兼容 Chat Completions 地址；AI 复盘和模拟功能需要 |
+| `AI_REVIEW_API_URL` | OpenAI 兼容 Chat Completions 地址；AI 复盘、录音导入和薄弱点分析需要 |
 | `AI_REVIEW_API_KEY` | AI 模型服务端密钥 |
 | `AI_REVIEW_MODEL` | AI 模型名 |
 | `AI_TRANSCRIPTION_API_URL` | OpenAI 兼容音频转写地址，使用该方式时填写 |
@@ -168,7 +168,7 @@ AGENT_MODEL_API_KEY=your-agent-model-key
 AGENT_MODEL=your-model-name
 ```
 
-Agent 的模型配置只在使用 AI 对话等 Agent 功能时需要；`AGENT_INTERNAL_KEY` 必须和 Java 后端配置一致。
+Agent 的模型配置用于 AI 对话及文本/语音模拟的出题、追问和反馈；`AGENT_INTERNAL_KEY` 必须和 Java 后端配置一致。
 
 不要提交 `server/.env.local`、`web/.env.local`、`agent/.env.local`、Service Role Key、数据库密码或模型密钥。
 
@@ -183,12 +183,12 @@ pnpm install
 
 ```powershell
 cd ..\agent
-python -m pip install -e ".[test]"
+py -3.10 -m pip install -e ".[test]"
 ```
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22、V23、V24 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
 
 ### 3.6 启动后端
 
@@ -211,10 +211,10 @@ Agent 是独立进程，不嵌入 Java。先按上面的说明准备 `agent/.env
 
 ```powershell
 cd agent
-python -m interview_agent.server
+py -3.10 -m interview_agent.server
 ```
 
-该安装命令会安装 Python 3.10+ 所需的 LangChain、`langchain-openai` 和测试依赖。Agent 默认监听 `127.0.0.1:8090`；Java 通过 `X-Agent-Key` 调用 Agent，Agent 查询资料和创建训练任务时再通过同一密钥调用 Java 的 `/internal/agent/tools`，浏览器始终只调用 Java。
+该安装命令会安装 Python 3.10+ 所需的 LangChain、`langchain-openai` 和测试依赖。Agent 默认监听 `127.0.0.1:8090`；Java 通过 `X-Agent-Key` 调用 Agent，仅通用对话 Agent 查询资料和创建训练任务时才通过同一密钥调用 Java 的 `/internal/agent/tools`，浏览器始终只调用 Java。
 
 ### 3.8 启动前端
 
@@ -256,4 +256,32 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 .\start-dev.ps1
 ```
 
-脚本会分别打开 Python Agent、Java 后端和 Next.js 前端终端。首次使用前先复制并填写 `agent/.env.local`；脚本不会自动生成或覆盖密钥。
+脚本在启动任何服务前验证 Python：存在 `agent/.venv` 时必须使用其中的 Python 3.10+，虚拟环境损坏或版本过低会直接报错；没有虚拟环境时显式使用 `py -3.10`，不回退到 PATH 中不确定版本的 `python`。验证通过后在后台启动 Python Agent、Java 后端和 Next.js 前端。首次使用前先复制并填写 `agent/.env.local`；脚本不会自动生成或覆盖密钥。
+
+## 4. 模拟 Agent 契约与职责（simulation.v1）
+
+新建文本/语音会话的六种模型操作统一由 Java 调用 Python 内部接口 `POST /v1/agent/simulations`，使用 `X-Agent-Key` 鉴权。请求带 `version: simulation.v1`、Java 生成的 UUID `requestId`、`operation`、`deadlineAtEpochMs` 和 `input`。浏览器继续使用现有 Java API；Python 拒绝带 Origin 的模拟请求，不提供 CORS，不接收自由 Prompt、用户或资料数据库 ID。
+
+| operation | input（均含 materials、history） | result |
+| --- | --- | --- |
+| VOICE_PLAN | 冻结资料 | plan：严格 10 项，每项 order/type/competency/projectName/technology/angle |
+| VOICE_QUESTION | 加 slot | questionText/type/competency/projectName/technology |
+| VOICE_FEEDBACK | 加 questionText、answer | feedback |
+| TEXT_MAIN_QUESTION | 历史题目 | questionText |
+| TEXT_FOLLOW_UP | 加 questionText、answer | questionText |
+| TEXT_FEEDBACK | 加 questionText、answer | feedback |
+
+成功响应为 `{version, requestId, result}`；失败响应为 `{version, requestId, error: {code, message, retryable}}`。错误码仅为 INVALID_REQUEST、MODEL_TIMEOUT、MODEL_UNAVAILABLE、INVALID_MODEL_OUTPUT、UNAUTHORIZED、INTERNAL_ERROR；Java 使用本地稳定中文提示，不透传供应商异常。
+
+- Java 是唯一业务事实来源：JWT 归属校验、资料授权和裁剪、会话/任务/时限、事务、幂等、题数顺序和最终校验。问题最多 800 字符，反馈最多 600 字符，题目元数据最多 120 字符，计划角度最多 200 字符；非法结果不落库。文本保持 4 道主问题、每题最多 1 次追问；语音固定前 5 题基础、随后 4 题项目、最后 1 题场景或行为。
+- V24 在两个会话表增加 `material_snapshot`，创建事务内冻结公司、岗位、轮次、JD（8,000 字符）、已解析简历（12,000 字符）和证据卡四字段。最多 30 张证据卡，按固定预算分摊裁剪描述/亮点/技术栈并保留项目名；超限明确报错。后续修改资料不改变本场出题或反馈的输入。
+- V24 给语音会话增加 `generation_version`：历史默认 LEGACY，新建显式写 SIMULATION_AGENT_V1。只有 LEGACY 能读取旧 3 题/无计划数据；新会话始终返回 10 题并拒绝 3 项计划。无快照的历史会话继续按原授权关联查询，不回填伪快照。
+- Python 的小型无状态 simulation 模块负责固定 Prompt、LangChain 模型调用、JSON 解析和至多一次格式修正。不复用通用聊天 AgentRuntime，不调用 Java 工具、不连接数据库，不存储会话。
+- 每次模拟 HTTP 请求预算 70 秒，Python 按统一 deadline 取消模型等待，并关闭模型 SDK 自动重试；仅格式非法可初次调用加一次修正。MODEL_TIMEOUT/MODEL_UNAVAILABLE 由现有 ai_mock_tasks 进行最多 3 次自动尝试，间隔 5 秒、15 秒；V24 的 available_at 防止忙轮询。手动重试复用同一任务/资源并重置尝试次数。通用聊天的 90 秒策略不变。
+- 短事务在写入前锁定会话并核验任务令牌和两分钟租约；长模型调用不占数据库事务。会话过期统一转换 TIME_EXPIRED 并取消无意义任务，过期或旧 worker 的结果不可写入。处理中禁止结束保存；FAILED 可重试或结束保存已答内容；重复 finish 返回同一记录。
+- V24 另增加语音题目的 ai_feedback，用于确认文本的逐题反馈；录音反馈同时保留在原音频记录中，重试复用已保存转写。无词级时间戳，不推断语速、停顿或情绪。
+- 日志只记录关联 ID、操作、结果码、错误类别和耗时，不记录资料/回答/模型原文。AI 复盘、录音导入和薄弱点分析仍使用 ReviewModelClient；通用对话仍使用 /v1/agent/reply。
+
+未做：不合并“10 题计划 + 首题”；不增加依赖、Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer、第二套会话存储或流式输出。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
+
+创建仍发起两次独立模型请求；计划和首题都通过 Java 校验后才在短事务中一起落库，首题失败不留下计划。该一致性保护不包含合并模型请求的性能优化。

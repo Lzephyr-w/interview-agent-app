@@ -41,5 +41,5 @@ public class AudioTranscriptionService {
             return text(json.readTree(response.body()).path("text").asText(""));
         } catch (IllegalStateException exception) { throw exception; } catch (Exception exception) { throw new IllegalStateException("转写服务超时或失败，请稍后重试。", exception); }
     }
-    private static String text(String value) { String result = value.trim(); if (result.isBlank()) throw new IllegalStateException("转写服务未返回有效文本，请重新上传或手工整理。"); return result; }
+    private static String text(String value) { return value.trim(); }
 }

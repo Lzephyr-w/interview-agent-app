@@ -5,7 +5,12 @@ import static com.interviewagent.interview.InterviewApi.QuestionRequest;
 import static com.interviewagent.mock.MockInterviewApi.*;
 
 import com.interviewagent.interview.InterviewService;
-import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AgentPythonClient;
+import com.interviewagent.ai.SimulationMaterials;
+import com.interviewagent.ai.SimulationContract;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import com.interviewagent.ai.AiMockTaskService;
 import com.interviewagent.ai.AiMockTaskService.ClaimedTask;
 import java.sql.ResultSet;
@@ -24,30 +29,31 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class MockInterviewService {
     private static final int MAIN_QUESTION_LIMIT = 4;
-    private static final int MAX_MODEL_RETRIES = 3;
     private static final int MAX_ANSWER_CHARS = 8_000;
     private static final Set<String> ASSESSMENTS = Set.of("GOOD", "UNCERTAIN", "UNANSWERED");
     private final JdbcClient jdbc;
     private final InterviewService interviews;
-    private final ReviewModelClient model;
+    private final AgentPythonClient model;
+    private final SimulationMaterials materials;
     private final AiMockTaskService tasks;
 
-    MockInterviewService(JdbcClient jdbc, InterviewService interviews, ReviewModelClient model, AiMockTaskService tasks) {
+    MockInterviewService(JdbcClient jdbc, InterviewService interviews, AgentPythonClient model, AiMockTaskService tasks, SimulationMaterials materials) {
         this.jdbc = jdbc;
         this.interviews = interviews;
         this.model = model;
+        this.materials = materials;
         this.tasks = tasks;
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public MockInterview create(String userId, StartRequest request) {
         PackageInfo selected = packageInfo(userId, required(request.interviewPackageId(), "面试包"));
         String id = UUID.randomUUID().toString();
         String company = limited(fallback(request.company(), selected.company()), "公司", 200);
         String role = limited(fallback(request.role(), selected.role()), "岗位", 200);
         String round = limited(fallback(request.interviewRound(), selected.interviewRound()), "面试轮次", 200);
-        jdbc.sql("INSERT INTO mock_interviews (id, user_id, interview_package_id, company, role, interview_round, status, total_questions) VALUES (:id, :userId, :packageId, :company, :role, :round, 'RUNNING', :total)")
-            .param("id", id).param("userId", userId).param("packageId", selected.id()).param("company", company).param("role", role).param("round", round).param("total", MAIN_QUESTION_LIMIT).update();
+        jdbc.sql("INSERT INTO mock_interviews (id, user_id, interview_package_id, company, role, interview_round, status, total_questions, material_snapshot) VALUES (:id, :userId, :packageId, :company, :role, :round, 'RUNNING', :total, :snapshot)")
+            .param("id", id).param("userId", userId).param("packageId", selected.id()).param("company", company).param("role", role).param("round", round).param("total", MAIN_QUESTION_LIMIT).param("snapshot",materials.capture(userId,selected.id()).toString()).update();
         tasks.enqueue(userId, "MOCK_CREATE", id, null);
         return detail(userId, id);
     }
@@ -64,6 +70,7 @@ public class MockInterviewService {
 
     @Transactional
     public MockInterview answer(String userId, String id, AnswerRequest request) {
+        lock(userId,id);
         MockSession session = owned(userId, id);
         if (session.finished()) return detail(userId, id);
         MockQuestion question = question(id, required(request.questionId(), "问题"));
@@ -83,6 +90,7 @@ public class MockInterviewService {
 
     @Transactional
     public MockInterview skip(String userId, String id, String questionId) {
+        lock(userId,id);
         MockSession session = owned(userId, id);
         if (session.finished()) return detail(userId, id);
         MockQuestion current = currentQuestion(id);
@@ -98,9 +106,10 @@ public class MockInterviewService {
 
     @Transactional
     public MockInterview finish(String userId, String id) {
+        lock(userId,id);
         MockSession session = owned(userId, id);
         if (session.finished()) return detail(userId, id);
-        if (tasks.latest(userId, id) != null) throw new IllegalStateException("AI 正在处理中，请等待完成后再保存。");
+        if (tasks.hasActive(userId, id)) throw new IllegalStateException("AI 正在处理中，请等待完成后再保存。");
         jdbc.sql("UPDATE mock_interview_questions SET answer_text = '', self_assessment = 'UNANSWERED', state = 'SKIPPED', updated_at = CURRENT_TIMESTAMP WHERE mock_interview_id = :id AND state = 'OPEN'")
             .param("id", id).update();
         List<QuestionRequest> questions = new ArrayList<>();
@@ -111,10 +120,13 @@ public class MockInterviewService {
         var formal = interviews.createFromMock(userId, new InterviewRequest(session.company(), session.role(), session.interviewRound(), OffsetDateTime.now(), session.packageId(), "PENDING_REVIEW", "UNKNOWN", notes), questions);
         jdbc.sql("UPDATE mock_interviews SET status = 'FINISHED', finished_interview_id = :formalId, current_question_index = :total, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId")
             .param("formalId", formal.interview().id()).param("total", MAIN_QUESTION_LIMIT).param("id", id).param("userId", userId).update();
+        tasks.cancelForResource(userId,id);
         return detail(userId, id);
     }
 
+    @Transactional
     public void delete(String userId, String id) {
+        lock(userId,id);
         tasks.deleteForResource(userId, id);
         if (jdbc.sql("DELETE FROM mock_interviews WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).update() == 0) throw notFound();
     }
@@ -130,6 +142,10 @@ public class MockInterviewService {
     }
 
     public void processTask(ClaimedTask task) {
+        tasks.execute(task, () -> processTaskBody(task));
+    }
+
+    private void processTaskBody(ClaimedTask task) {
         switch (task.taskType()) {
             case "MOCK_CREATE" -> addMainQuestion(task.userId(), task.resourceId());
             case "MOCK_ANSWER" -> processAnswer(task.userId(), task.resourceId(), task.relatedId());
@@ -139,69 +155,68 @@ public class MockInterviewService {
     }
 
     private void processAnswer(String userId, String sessionId, String questionId) {
-        MockQuestion answered = question(sessionId, questionId);
+        MockQuestion answered=question(sessionId,questionId);
         if (answered.state().equals("ANSWERED") && answered.aiFeedback().isBlank()) {
-            jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
-                .param("feedback", feedback(answered.questionText(), answered.answerText())).param("id", questionId).update();
+            Map<String,Object> input=context(userId,owned(userId,sessionId),questions(sessionId));
+            input.put("questionText",answered.questionText()); input.put("answer",answered.answerText());
+            tasks.check();
+            JsonNode result=model.simulate("TEXT_FEEDBACK",input);
+            SimulationContract.result("TEXT_FEEDBACK",result);
+            tasks.write(() -> jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
+                .param("feedback",result.path("feedback").asText()).param("id",questionId).update());
         }
         if (answered.state().equals("ANSWERED")) {
-            if (answered.questionKind().equals("MAIN")) addFollowup(userId, sessionId, answered, answered.answerText());
-            else addMainQuestion(userId, sessionId);
-            moveCursor(sessionId);
+            if (answered.questionKind().equals("MAIN")) addFollowup(userId,sessionId,answered,answered.answerText());
+            else addMainQuestion(userId,sessionId);
+            tasks.write(() -> moveCursor(sessionId));
         }
     }
 
     private void processNext(String userId, String sessionId, String questionId) {
-        if (question(sessionId, questionId).state().equals("SKIPPED")) addMainQuestion(userId, sessionId);
-        moveCursor(sessionId);
+        if (question(sessionId,questionId).state().equals("SKIPPED")) addMainQuestion(userId,sessionId);
+        tasks.write(() -> moveCursor(sessionId));
     }
 
-    private void addMainQuestion(String userId, String sessionId) {
-        MockSession session = owned(userId, sessionId);
-        if (session.finished() || mainCount(sessionId) >= MAIN_QUESTION_LIMIT) return;
-        List<MockQuestion> history = questions(sessionId);
-        insertQuestion(UUID.randomUUID().toString(), sessionId, uniqueQuestion(questionPrompt(userId, session, history), history), "MAIN", null, "OPEN", nextOrder(history));
+    private void addMainQuestion(String userId,String sessionId) {
+        MockSession session=owned(userId,sessionId);
+        if (session.finished() || mainCount(sessionId)>=MAIN_QUESTION_LIMIT || currentQuestion(sessionId)!=null) return;
+        List<MockQuestion> history=questions(sessionId);
+        String text=uniqueQuestion("TEXT_MAIN_QUESTION",context(userId,session,history),history);
+        tasks.write(() -> {
+            if (repeats(text,questions(sessionId))) throw SimulationContract.invalid();
+            if (currentQuestion(sessionId)==null && mainCount(sessionId)<MAIN_QUESTION_LIMIT)
+                insertQuestion(UUID.randomUUID().toString(),sessionId,text,"MAIN",null,"OPEN",nextOrder(history));
+        });
     }
 
-    private void addFollowup(String userId, String sessionId, MockQuestion main, String answer) {
-        if (answer.isBlank()) {
-            addMainQuestion(userId, sessionId);
-            return;
-        }
-        if (questions(sessionId).stream().anyMatch(item -> main.id().equals(item.parentQuestionId()))) return;
-        MockSession session = owned(userId, sessionId);
-        List<MockQuestion> history = questions(sessionId);
-        insertQuestion(UUID.randomUUID().toString(), sessionId, uniqueQuestion(followupPrompt(userId, session, main, answer, history), history), "FOLLOW_UP", main.id(), "OPEN", nextOrder(history));
+    private void addFollowup(String userId,String sessionId,MockQuestion main,String answer) {
+        if (answer.isBlank()) { addMainQuestion(userId,sessionId); return; }
+        List<MockQuestion> history=questions(sessionId);
+        if (history.stream().anyMatch(item -> main.id().equals(item.parentQuestionId()))) return;
+        Map<String,Object> input=context(userId,owned(userId,sessionId),history);
+        input.put("questionText",main.questionText()); input.put("answer",answer);
+        String text=uniqueQuestion("TEXT_FOLLOW_UP",input,history);
+        tasks.write(() -> {
+            if (repeats(text,questions(sessionId))) throw SimulationContract.invalid();
+            if (questions(sessionId).stream().noneMatch(item -> main.id().equals(item.parentQuestionId())))
+                insertQuestion(UUID.randomUUID().toString(),sessionId,text,"FOLLOW_UP",main.id(),"OPEN",nextOrder(history));
+        });
     }
 
-    private String uniqueQuestion(String prompt, List<MockQuestion> history) {
-        for (int attempt = 0; attempt < MAX_MODEL_RETRIES; attempt++) {
-            String candidate = model.reply(prompt).trim();
-            if (!candidate.isBlank() && !repeats(candidate, history)) return clip(candidate, 800);
-        }
-        throw new IllegalStateException("AI 连续生成重复问题，请稍后重试。");
+    private String uniqueQuestion(String operation,Map<String,Object> input,List<MockQuestion> history) {
+        tasks.check();
+        JsonNode result=model.simulate(operation,input);
+        SimulationContract.result(operation,result);
+        String text=result.path("questionText").asText().trim();
+        if (repeats(text,history)) throw SimulationContract.invalid();
+        return text;
     }
 
-    private String feedback(String question, String answer) {
-        return clip(model.reply("你是中文面试教练。只能依据当前用户授权的问题、回答、JD、简历和证据卡给出 2 句以内、可执行的简短反馈；不得编造经历、指标、隐私信息、能力评级、招聘结论或通过概率。资料不足请写待补充。\n问题：" + question + "\n回答：" + answer).trim(), 600);
-    }
-
-    private String questionPrompt(String userId, MockSession session, List<MockQuestion> history) {
-        return "你是中文文本模拟面试官。只能根据以下当前用户授权且所选面试包关联的 JD、简历和证据卡生成 1 道新的主问题。不得编造经历、指标、隐私信息、能力评级、招聘结论或通过概率；缺失资料只能追问待补充的信息。只返回问题，不要解释。不要与已问问题重复或换词复问同一能力点。\n面试包：" + session.company() + " / " + session.role() + " / " + session.interviewRound() + "\n" + packageContext(userId, session.packageId()) + "\n已问问题：" + history.stream().map(MockQuestion::questionText).toList();
-    }
-
-    private String followupPrompt(String userId, MockSession session, MockQuestion main, String answer, List<MockQuestion> history) {
-        return "你是中文文本模拟面试官。只能依据当前用户授权的 JD、简历、证据卡、本轮主问题和回答生成 1 道具体、可回答的追问，补足因果、贡献、证据或取舍中的一个缺口。不得编造经历、指标、隐私信息、能力评级、招聘结论或通过概率；只返回问题，不要解释；不能复述主问题。\n面试包：" + session.company() + " / " + session.role() + " / " + session.interviewRound() + "\n主问题：" + main.questionText() + "\n用户回答：" + answer + "\n" + packageContext(userId, session.packageId()) + "\n已问问题：" + history.stream().map(MockQuestion::questionText).toList();
-    }
-
-    private String packageContext(String userId, String packageId) {
-        String jd = jdbc.sql("SELECT jd.content FROM interview_packages p LEFT JOIN job_descriptions jd ON jd.id = p.job_description_id AND jd.user_id = :userId WHERE p.id = :id AND p.user_id = :userId")
-            .param("id", packageId).param("userId", userId).query(String.class).optional().orElse("待补充");
-        String resume = jdbc.sql("SELECT rf.parsed_text FROM interview_packages p LEFT JOIN resume_files rf ON rf.id = p.resume_file_id AND rf.user_id = :userId AND rf.parsed_status = 'READY' WHERE p.id = :id AND p.user_id = :userId")
-            .param("id", packageId).param("userId", userId).query(String.class).optional().orElse("待补充");
-        List<String> cards = jdbc.sql("SELECT '项目名称：' || c.project_name || '；项目描述与职责：' || c.project_description_and_responsibilities || '；项目亮点：' || c.project_highlights || '；技术栈：' || c.technology_stack FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId")
-            .param("userId", userId).param("packageId", packageId).query(String.class).list();
-        return "简历：" + clip(resume, 6000) + "\nJD：" + clip(jd, 4000) + "\n证据卡：" + (cards.isEmpty() ? "待补充" : cards);
+    private Map<String,Object> context(String user,MockSession session,List<MockQuestion> history) {
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("materials",materials.read(session.snapshot(),user,session.packageId()));
+        result.put("history",history.stream().map(q -> Map.of("questionText",q.questionText(),"type",q.questionKind(),"competency","","projectName","","technology","")).toList());
+        return result;
     }
 
     private void insertQuestion(String id, String sessionId, String text, String kind, String parentId, String state, int order) {
@@ -216,8 +231,12 @@ public class MockInterviewService {
             .param("index", index).param("id", sessionId).update();
     }
 
+    private void lock(String user,String id) {
+        jdbc.sql("SELECT id FROM mock_interviews WHERE id=:id AND user_id=:user FOR UPDATE").param("id",id).param("user",user).query(String.class).optional().orElseThrow(MockInterviewService::notFound);
+    }
+
     private MockSession owned(String userId, String id) {
-        return jdbc.sql("SELECT id, interview_package_id, company, role, interview_round, status, total_questions, finished_interview_id, created_at, updated_at FROM mock_interviews WHERE id = :id AND user_id = :userId")
+        return jdbc.sql("SELECT id, interview_package_id, company, role, interview_round, status, total_questions, finished_interview_id, created_at, updated_at, material_snapshot FROM mock_interviews WHERE id = :id AND user_id = :userId")
             .param("id", id).param("userId", userId).query((rs, row) -> session(rs)).optional().orElseThrow(MockInterviewService::notFound);
     }
 
@@ -242,7 +261,7 @@ public class MockInterviewService {
     }
 
     private static MockSession session(ResultSet rs) throws java.sql.SQLException {
-        return new MockSession(rs.getString("id"), rs.getString("interview_package_id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("status"), rs.getInt("total_questions"), rs.getString("finished_interview_id"), rs.getObject("created_at", OffsetDateTime.class), rs.getObject("updated_at", OffsetDateTime.class));
+        return new MockSession(rs.getString("id"), rs.getString("interview_package_id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("status"), rs.getInt("total_questions"), rs.getString("finished_interview_id"), rs.getObject("created_at", OffsetDateTime.class), rs.getObject("updated_at", OffsetDateTime.class), rs.getString("material_snapshot"));
     }
 
     private static MockQuestion question(ResultSet rs) throws java.sql.SQLException {
@@ -283,5 +302,5 @@ public class MockInterviewService {
     private static NoSuchElementException notFound() { return new NoSuchElementException("资源不存在或无权访问。"); }
 
     private record PackageInfo(String id, String company, String role, String interviewRound) {}
-    private record MockSession(String id, String packageId, String company, String role, String interviewRound, String status, int totalQuestions, String formalInterviewId, OffsetDateTime createdAt, OffsetDateTime updatedAt) { boolean finished() { return "FINISHED".equals(status); } }
+    private record MockSession(String id, String packageId, String company, String role, String interviewRound, String status, int totalQuestions, String formalInterviewId, OffsetDateTime createdAt, OffsetDateTime updatedAt, String snapshot) { boolean finished() { return "FINISHED".equals(status); } }
 }

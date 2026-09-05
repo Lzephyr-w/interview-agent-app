@@ -2,6 +2,8 @@ import json
 import hmac
 import logging
 import os
+import time
+from uuid import UUID
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.request import Request, urlopen
@@ -9,6 +11,7 @@ from urllib.request import Request, urlopen
 from langchain_openai import ChatOpenAI
 
 from .agent import AgentError, AgentRuntime
+from .simulation import SimulationError, generate
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ class JavaToolClient:
 class Handler(BaseHTTPRequestHandler):
     runtime_factory = None
     internal_key = ""
+    simulation_model_factory = None
 
     def do_GET(self):
         if self.path == "/health":
@@ -41,6 +45,9 @@ class Handler(BaseHTTPRequestHandler):
             self._write(404, {"error": "not found"})
 
     def do_POST(self):
+        if self.path == "/v1/agent/simulations":
+            self._simulation()
+            return
         if self.path != "/v1/agent/reply":
             self._write(404, {"error": "not found"})
             return
@@ -64,6 +71,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         return
+
+    def _simulation(self):
+        started, request_id, operation = time.monotonic(), "", ""
+        code = "OK"
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 400000:
+                raise SimulationError("INVALID_REQUEST")
+            self.connection.settimeout(5)
+            payload = json.loads(self.rfile.read(size))
+            if isinstance(payload, dict):
+                try:
+                    request_id = str(UUID(payload.get("requestId", "")))
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                from .simulation import OPERATIONS
+                if payload.get("operation") in OPERATIONS:
+                    operation = payload["operation"]
+            if self.headers.get("Origin") or not self.internal_key or not hmac.compare_digest(self.headers.get("X-Agent-Key", ""), self.internal_key):
+                raise SimulationError("UNAUTHORIZED")
+            self._write(200, generate(payload, self.simulation_model_factory))
+        except (ValueError, TypeError):
+            code = "INVALID_REQUEST"
+            self._write(400, SimulationError(code).envelope(request_id))
+        except SimulationError as error:
+            code = error.code
+            status = 401 if code == "UNAUTHORIZED" else 400 if code == "INVALID_REQUEST" else 504 if code == "MODEL_TIMEOUT" else 502
+            self._write(status, error.envelope(request_id))
+        except Exception:
+            code = "INTERNAL_ERROR"
+            self._write(500, SimulationError(code).envelope(request_id))
+        finally:
+            logger.info("simulation requestId=%s operation=%s code=%s elapsed_ms=%s", request_id, operation, code, round((time.monotonic()-started)*1000))
 
     def _write(self, status: int, payload: Dict[str, Any]):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -91,6 +131,7 @@ def main():
     load_env_file()
     key = os.getenv("AGENT_INTERNAL_KEY", "")
     Handler.internal_key = key
+    Handler.simulation_model_factory = staticmethod(lambda remaining: model_from_env(timeout=remaining, max_retries=0))
     Handler.runtime_factory = staticmethod(lambda user_id: AgentRuntime(
         model_from_env(),
         JavaToolClient(os.getenv("JAVA_AGENT_TOOL_URL", "http://localhost:8080/internal/agent/tools"), key, user_id),
@@ -100,13 +141,13 @@ def main():
     server.serve_forever()
 
 
-def model_from_env():
+def model_from_env(timeout=60, max_retries=1):
     url, key, model = os.getenv("AGENT_MODEL_API_URL", ""), os.getenv("AGENT_MODEL_API_KEY", ""), os.getenv("AGENT_MODEL", "")
     if not all((url, key, model)):
         raise AgentError("AI Agent 服务尚未配置，请联系管理员后重试。")
     return ChatOpenAI(
         model=model, api_key=key, base_url=url.removesuffix("/chat/completions"),
-        temperature=0.2, timeout=60, max_retries=1, max_completion_tokens=2048,
+        temperature=0.2, timeout=timeout, max_retries=max_retries, max_completion_tokens=2048,
         use_responses_api=False,
     )
 

@@ -10,11 +10,16 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.net.http.HttpTimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class AgentPythonClient {
+    private static final Logger log = LoggerFactory.getLogger(AgentPythonClient.class);
     private final ObjectMapper json;
     private final String url;
     private final String key;
@@ -38,5 +43,48 @@ public class AgentPythonClient {
             return answer;
         } catch (ReviewFailedException exception) { throw exception;
         } catch (Exception exception) { throw new ReviewFailedException("Agent 服务暂时不可用，请稍后重试。"); }
+    }
+
+    public JsonNode simulate(String operation, Map<String, Object> input) {
+        return simulate(operation, input, System.currentTimeMillis()+70_000);
+    }
+
+    JsonNode simulate(String operation, Map<String, Object> input, long deadline) {
+        String requestId=UUID.randomUUID().toString(), code="OK";
+        long started=System.currentTimeMillis();
+        try {
+            SimulationContract.input(operation,json.valueToTree(input));
+            long remaining=Math.min(deadline,started+70_000)-System.currentTimeMillis();
+            if (remaining<=0) throw new SimulationException("MODEL_TIMEOUT");
+            if (url.isBlank() || key.isBlank()) throw new SimulationException("MODEL_UNAVAILABLE");
+            String body=json.writeValueAsString(Map.of("version","simulation.v1","requestId",requestId,"operation",operation,"deadlineAtEpochMs",Math.min(deadline,started+70_000),"input",input));
+            var request=HttpRequest.newBuilder(URI.create(url+"/v1/agent/simulations"))
+                .timeout(Duration.ofMillis(remaining)).header("X-Agent-Key",key).header("Content-Type","application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build();
+            var response=http.send(request,HttpResponse.BodyHandlers.ofString());
+            if (response.body().length()>32000) throw SimulationContract.invalid();
+            JsonNode envelope;
+            try { envelope=json.readTree(response.body()); } catch (Exception error) { throw SimulationContract.invalid(); }
+            if (envelope==null || !envelope.path("version").isTextual() || !envelope.path("version").asText().equals("simulation.v1")
+                || !envelope.path("requestId").isTextual() || !envelope.path("requestId").asText().equals(requestId)) throw SimulationContract.invalid();
+            if (envelope.has("error")) {
+                SimulationContract.fields(envelope,"version","requestId","error");
+                JsonNode error=envelope.path("error");
+                SimulationContract.fields(error,"code","message","retryable");
+                String errorCode=SimulationContract.text(error,"code",40,false);
+                SimulationContract.text(error,"message",240,false);
+                if (!SimulationContract.CODES.contains(errorCode) || !error.path("retryable").isBoolean()
+                    || error.path("retryable").asBoolean()!=new SimulationException(errorCode).retryable()) throw SimulationContract.invalid();
+                throw new SimulationException(errorCode);
+            }
+            SimulationContract.fields(envelope,"version","requestId","result");
+            if (response.statusCode()!=200) throw SimulationContract.invalid();
+            SimulationContract.result(operation,envelope.path("result"));
+            return envelope.path("result");
+        } catch (SimulationException error) { code=error.code(); throw error;
+        } catch (HttpTimeoutException error) { code="MODEL_TIMEOUT"; throw new SimulationException(code);
+        } catch (InterruptedException error) { Thread.currentThread().interrupt(); code="MODEL_TIMEOUT"; throw new SimulationException(code);
+        } catch (Exception error) { code="MODEL_UNAVAILABLE"; throw new SimulationException(code);
+        } finally { log.info("simulation requestId={} taskId={} sessionId={} operation={} code={} elapsed_ms={}",requestId,org.slf4j.MDC.get("taskId"),org.slf4j.MDC.get("sessionId"),SimulationContract.OPERATIONS.contains(String.valueOf(operation))?operation:"INVALID",code,System.currentTimeMillis()-started); }
     }
 }

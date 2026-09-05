@@ -9,13 +9,74 @@ import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class AiMockTaskService {
     private static final int MAX_ATTEMPTS = 3;
     private final JdbcClient jdbc;
+    private final TransactionTemplate transaction;
+    private final ThreadLocal<ClaimedTask> current = new ThreadLocal<>();
 
-    public AiMockTaskService(JdbcClient jdbc) { this.jdbc = jdbc; }
+    public AiMockTaskService(JdbcClient jdbc, PlatformTransactionManager manager) { this.jdbc = jdbc; this.transaction=new TransactionTemplate(manager); }
+
+    public void execute(ClaimedTask task,Runnable work) {
+        current.set(task);
+        org.slf4j.MDC.put("taskId",task.id());
+        org.slf4j.MDC.put("sessionId",task.resourceId());
+        try { check(); work.run(); } finally { current.remove(); org.slf4j.MDC.remove("taskId"); org.slf4j.MDC.remove("sessionId"); }
+    }
+
+    public void expireVoice(String user,String id) {
+        jdbc.sql("UPDATE ai_mock_interviews SET status='TIME_EXPIRED',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND status='RUNNING' AND expires_at<=CURRENT_TIMESTAMP")
+            .param("id",id).param("user",user).update();
+        if (jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND user_id=:user AND status<>'RUNNING'").param("id",id).param("user",user).query(Integer.class).single()>0) cancelForResource(user,id);
+    }
+
+    private String table(ClaimedTask task) { return task.taskType().startsWith("AI_")?"ai_mock_interviews":"mock_interviews"; }
+
+    private void running(ClaimedTask task,boolean lock) {
+        String state=jdbc.sql("SELECT status FROM "+table(task)+" WHERE id=:id AND user_id=:user"+(lock?" FOR UPDATE":""))
+            .param("id",task.resourceId()).param("user",task.userId()).query(String.class).optional().orElse("");
+        if (!state.equals("RUNNING")) {
+            if(!lock) cancelForResource(task.userId(),task.resourceId());
+            throw new IllegalStateException("模拟已结束或超时，无法继续处理。");
+        }
+        if (task.taskType().startsWith("AI_") && jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND expires_at>CURRENT_TIMESTAMP").param("id",task.resourceId()).query(Integer.class).single()==0)
+            throw new IllegalStateException("模拟已结束或超时，无法继续处理。");
+    }
+
+    public void check() {
+        ClaimedTask task=current.get();
+        if (task==null) throw new IllegalStateException("后台任务租约已失效。");
+        if (task.taskType().startsWith("AI_")) expireVoice(task.userId(),task.resourceId());
+        running(task,false);
+        if (jdbc.sql("UPDATE ai_mock_tasks SET locked_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND resource_id=:resource AND task_type=:type AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
+            .param("id",task.id()).param("user",task.userId()).param("resource",task.resourceId()).param("type",task.taskType()).param("token",task.workerToken()).update()!=1) throw new IllegalStateException("后台任务租约已失效。");
+    }
+
+    public void write(Runnable write) {
+        check();
+        transaction.executeWithoutResult(status -> {
+            ClaimedTask task=current.get();
+            running(task,true);
+            String token=jdbc.sql("SELECT worker_token FROM ai_mock_tasks WHERE id=:id AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE FOR UPDATE")
+                .param("id",task.id()).query(String.class).optional().orElse("");
+            if (!task.workerToken().equals(token)) throw new IllegalStateException("后台任务租约已失效。");
+            write.run();
+        });
+    }
+
+    public boolean hasActive(String user,String resource) {
+        return jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:id AND status IN ('PENDING','PROCESSING')").param("user",user).param("id",resource).query(Integer.class).single()>0;
+    }
+
+    public void cancelForResource(String user,String resource) {
+        // Completed means no more work; preserve the public four-state task API.
+        jdbc.sql("UPDATE ai_mock_tasks SET status='COMPLETED',worker_token=NULL,locked_at=NULL,error='',updated_at=CURRENT_TIMESTAMP WHERE user_id=:user AND resource_id=:id AND status<>'COMPLETED'")
+            .param("user",user).param("id",resource).update();
+    }
 
     @Transactional
     public void enqueue(String userId, String type, String resourceId, String relatedId) {
@@ -39,11 +100,11 @@ public class AiMockTaskService {
     @Transactional
     public ClaimedTask claim() {
         expireStale();
-        String id = jdbc.sql("SELECT id FROM ai_mock_tasks WHERE (status='PENDING' OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts ORDER BY created_at LIMIT 1")
+        String id = jdbc.sql("SELECT id FROM ai_mock_tasks WHERE ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts ORDER BY available_at,created_at LIMIT 1")
             .query(String.class).list().stream().findFirst().orElse(null);
         if (id == null) return null;
         String token = UUID.randomUUID().toString();
-        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,worker_token=:token,locked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND (status='PENDING' OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts")
+        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,worker_token=:token,locked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts")
             .param("id", id).param("token", token).update();
         if (updated == 0) return null;
         return jdbc.sql("SELECT id,user_id,task_type,resource_id,related_id,worker_token FROM ai_mock_tasks WHERE id=:id AND worker_token=:token")
@@ -52,20 +113,26 @@ public class AiMockTaskService {
 
     @Transactional
     public void complete(ClaimedTask task) {
-        jdbc.sql("UPDATE ai_mock_tasks SET status='COMPLETED',error='',locked_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token")
+        jdbc.sql("UPDATE ai_mock_tasks SET status='COMPLETED',error='',locked_at=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
             .param("id", task.id()).param("token", task.workerToken()).update();
     }
 
     @Transactional
     public void fail(ClaimedTask task, RuntimeException exception) {
         String error = stableError(exception);
-        jdbc.sql("UPDATE ai_mock_tasks SET status='FAILED',error=:error,locked_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token")
-            .param("id", task.id()).param("token", task.workerToken()).param("error", error).update();
+        boolean retryable=exception instanceof SimulationException e && e.retryable();
+        int attempts=jdbc.sql("SELECT attempts FROM ai_mock_tasks WHERE id=:id").param("id",task.id()).query(Integer.class).optional().orElse(0);
+        jdbc.sql("UPDATE ai_mock_tasks SET status=CASE WHEN :retry AND attempts<max_attempts THEN 'PENDING' ELSE 'FAILED' END,error=:error,available_at=:available,locked_at=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
+            .param("id",task.id()).param("token",task.workerToken()).param("error",error).param("retry",retryable).param("available",OffsetDateTime.now().plusSeconds(attempts<=1?5:15)).update();
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = IllegalStateException.class)
     public void retry(String userId, String id) {
-        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PENDING',error='',locked_at=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND status='FAILED' AND attempts < max_attempts")
+        Task existing=get(userId,id);
+        ClaimedTask task=new ClaimedTask(id,userId,existing.taskType(),existing.resourceId(),"","");
+        if(task.taskType().startsWith("AI_")) expireVoice(userId,task.resourceId());
+        running(task,true);
+        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PENDING',attempts=0,error='',locked_at=NULL,worker_token=NULL,available_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND status='FAILED'")
             .param("id", id).param("user", userId).update();
         if (updated == 0) throw notFound();
     }
@@ -84,9 +151,7 @@ public class AiMockTaskService {
     }
 
     public static String stableError(RuntimeException exception) {
-        String message = exception.getMessage();
-        if (message == null || message.isBlank() || message.matches(".*(?i)(sql|jdbc|database|password|secret|apikey|api-key|connection).*")) return "后台处理失败，请稍后重试。";
-        return message.length() > 240 ? message.substring(0, 240) : message;
+        return exception instanceof SimulationException ? exception.getMessage() : "后台处理失败，请稍后重试。";
     }
 
     private static NoSuchElementException notFound() { return new NoSuchElementException("任务不存在或无权访问。"); }

@@ -7,6 +7,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.ai.ReviewModelClient;
+import com.interviewagent.ai.AgentPythonClient;
+import com.interviewagent.ai.SimulationException;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import com.interviewagent.ai.AiMockTaskWorker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,20 +36,25 @@ class MockInterviewControllerTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcClient jdbc;
     @Autowired AiMockTaskWorker worker;
-    @MockBean ReviewModelClient model;
+    @MockBean AgentPythonClient model;
+    @MockBean ReviewModelClient reviewModel;
+
+    @org.junit.jupiter.api.AfterEach
+    void noReviewModelCalls() { org.mockito.Mockito.verifyNoInteractions(reviewModel); }
 
     @BeforeEach
     void mockAi() {
         java.util.concurrent.atomic.AtomicInteger questions = new java.util.concurrent.atomic.AtomicInteger();
-        when(model.reply(anyString())).thenAnswer(call -> {
+        when(model.simulate(anyString(),anyMap())).thenAnswer(call -> {
             String prompt = call.getArgument(0, String.class);
-            if (prompt.contains("中文面试教练")) return "回答说明了你的动作；请补充可验证的结果或取舍。";
-            return switch (questions.getAndIncrement()) {
+            if (prompt.equals("TEXT_FEEDBACK")) return objectMapper.createObjectNode().put("feedback","回答说明了你的动作；请补充可验证的结果或取舍。");
+            String text = switch (questions.getAndIncrement()) {
                 case 0 -> "请介绍一次你主导的高并发系统优化，并说明个人贡献。";
                 case 1 -> "当时的性能瓶颈如何定位，又如何验证优化效果？";
                 case 2 -> "请讲一次你在故障恢复中做出的关键技术取舍。";
                 default -> "请说明你如何用监控指标提前发现容量风险。";
             };
+            return objectMapper.createObjectNode().put("questionText",text);
         });
     }
 
@@ -147,13 +156,13 @@ class MockInterviewControllerTest {
             .andExpect(status().isCreated());
         worker.run();
 
-        ArgumentCaptor<String> prompts = ArgumentCaptor.forClass(String.class);
-        verify(model, atLeastOnce()).reply(prompts.capture());
-        String prompt = prompts.getAllValues().stream().filter(value -> value.contains("项目名称：订单平台")).findFirst().orElse("");
-        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("项目描述与职责：负责订单服务与发布"));
-        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("项目亮点：延迟下降 30%"));
-        org.junit.jupiter.api.Assertions.assertTrue(prompt.contains("技术栈：Spring Boot、MySQL"));
-        org.junit.jupiter.api.Assertions.assertFalse(prompt.contains("个人贡献"));
+        ArgumentCaptor<java.util.Map<String,Object>> inputs = ArgumentCaptor.forClass(java.util.Map.class);
+        verify(model, atLeastOnce()).simulate(eq("TEXT_MAIN_QUESTION"),inputs.capture());
+        String snapshot=inputs.getValue().get("materials").toString();
+        org.junit.jupiter.api.Assertions.assertTrue(snapshot.contains("订单平台"));
+        org.junit.jupiter.api.Assertions.assertTrue(snapshot.contains("负责订单服务与发布"));
+        org.junit.jupiter.api.Assertions.assertTrue(snapshot.contains("延迟下降 30%"));
+        org.junit.jupiter.api.Assertions.assertTrue(snapshot.contains("Spring Boot、MySQL"));
     }
 
     private String packageFor(String user) throws Exception {

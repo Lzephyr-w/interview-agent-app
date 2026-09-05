@@ -13,7 +13,7 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Shared model gateway for review and simulation flows. Chat Agent calls Python instead. */
+/** Model gateway for reviews, recording imports and weakness analysis. Simulations and chat use Python. */
 @Component
 public class ReviewModelClient {
     private final ObjectMapper json;

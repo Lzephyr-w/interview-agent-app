@@ -91,7 +91,7 @@ export default function AiMockInterviewRoomPage() {
   const discardRecording = useRef(false);
   const spokenQuestion = useRef("");
   const expiredQuestion = useRef("");
-  const current = session?.currentQuestion;
+  const current = session?.status === "RUNNING" ? session.currentQuestion : undefined;
 
   useEffect(() => {
     const packageId = new URLSearchParams(window.location.search).get(
@@ -505,11 +505,17 @@ export default function AiMockInterviewRoomPage() {
           <h1>AI 处理失败</h1>
           <p className="ai-room-error">{session.task.error || "后台处理失败，请重试。"}</p>
           <button className="ai-room-primary" onClick={() => void retryTask()} disabled={busy}>重试</button>
+          <button className="ai-room-primary" onClick={() => setFinishDialog(true)} disabled={busy}>结束并保存已答内容</button>
         </section>
       ) : session.task ? (
         <section className="ai-room-brief ai-room-result" role="status">
           <h1>题目加载中…</h1>
           <img className="ai-room-loading" src="/images/loading-spinner.png" alt="" />
+        </section>
+      ) : session.status === "TIME_EXPIRED" ? (
+        <section className="ai-room-brief ai-room-result">
+          <h1>本场模拟已超时</h1>
+          <button className="ai-room-primary" onClick={() => setFinishDialog(true)} disabled={busy}>结束并保存已答内容</button>
         </section>
       ) : current ? (
         <section className="ai-room-stage">

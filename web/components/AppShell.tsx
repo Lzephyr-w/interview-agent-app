@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
+import UserGuide from "@/components/UserGuide";
 import { signOut } from "@/lib/auth";
 
 const links = [
@@ -66,6 +67,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <strong>{current?.label ?? "面试助手"}</strong>
           </div>
           <div className="topbar-actions">
+            <UserGuide />
             <ThemeToggle />
             <button className="theme-toggle" type="button" onClick={logout}>
               退出登录

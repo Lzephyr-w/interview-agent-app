@@ -25,6 +25,11 @@
   justify-content: space-between;
   gap: 20px;
 }
+.auth-top-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
 .brand {
   gap: 10px;
   font-weight: 800;
