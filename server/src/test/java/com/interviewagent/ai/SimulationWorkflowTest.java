@@ -41,7 +41,7 @@ class SimulationWorkflowTest {
             String operation=call.getArgument(0);
             JsonNode input=json.valueToTree(call.getArgument(1));
             requests.add(json.createObjectNode().put("operation",operation).set("input",input));
-            if (operation.equals("VOICE_PLAN")) return plan();
+            if (operation.equals("VOICE_PLAN")) return plan(input.path("materials").path("cards"));
             if (operation.equals("VOICE_QUESTION")) {
                 var result=input.path("slot").deepCopy();
                 var node=(com.fasterxml.jackson.databind.node.ObjectNode)result;
@@ -54,10 +54,10 @@ class SimulationWorkflowTest {
     }
     @AfterEach void noReview() { verifyNoInteractions(review); }
 
-    JsonNode plan() {
+    JsonNode plan(JsonNode projects) {
         var result=json.createObjectNode(); var list=result.putArray("plan");
         for(int i=1;i<=10;i++) list.addObject().put("order",i).put("type",i<=5?"FUNDAMENTAL":i<=9?"PROJECT":"SCENARIO")
-            .put("competency","能力"+i).put("projectName","").put("technology","技术"+i).put("angle","角度"+i);
+            .put("competency","能力"+i).put("projectName",i>=6&&i<=9?projects.get(i-6).path("projectName").asText():"").put("technology","技术"+i).put("angle","角度"+i);
         return result;
     }
     String pack(String user) {
@@ -65,8 +65,11 @@ class SimulationWorkflowTest {
         jdbc.sql("INSERT INTO job_descriptions(id,user_id,company,role,content) VALUES(:id,:user,'公司','开发',:text)").param("id",id).param("user",user).param("text",user+"专属JD").update();
         jdbc.sql("INSERT INTO resume_files(id,user_id,original_filename,content_type,size_bytes,object_path,parsed_status,parsed_text) VALUES(:id,:user,'resume.pdf','application/pdf',1,:id,'READY',:text)").param("id",id).param("user",user).param("text",user+"专属简历").update();
         jdbc.sql("INSERT INTO interview_packages(id,user_id,company,role,interview_round,job_description_id,resume_file_id) VALUES(:id,:user,'公司','开发','一面',:id,:id)").param("id",id).param("user",user).update();
-        jdbc.sql("INSERT INTO project_evidence_cards(id,user_id,project_name,project_description_and_responsibilities,project_highlights,technology_stack) VALUES(:id,:user,:name,'负责开发','压测验证','Java')").param("id",id).param("user",user).param("name",user+"项目").update();
-        jdbc.sql("INSERT INTO interview_package_evidence_cards(interview_package_id,evidence_card_id) VALUES(:id,:id)").param("id",id).update();
+        for(int index=1;index<=4;index++) {
+            String card=UUID.randomUUID().toString();
+            jdbc.sql("INSERT INTO project_evidence_cards(id,user_id,project_name,project_description_and_responsibilities,project_highlights,technology_stack) VALUES(:id,:user,:name,'负责开发','压测验证','Java')").param("id",card).param("user",user).param("name",user+"项目"+index).update();
+            jdbc.sql("INSERT INTO interview_package_evidence_cards(interview_package_id,evidence_card_id) VALUES(:pack,:card)").param("pack",id).param("card",card).update();
+        }
         return id;
     }
     JsonNode create(String user,boolean voice,String pack) throws Exception {
@@ -159,7 +162,7 @@ class SimulationWorkflowTest {
         String user="expired",session=create(user,true,pack(user)).path("id").asText();
         when(agent.simulate(anyString(),anyMap())).thenAnswer(call -> {
             jdbc.sql("UPDATE ai_mock_interviews SET expires_at=CURRENT_TIMESTAMP - INTERVAL '1' MINUTE WHERE id=:id").param("id",session).update();
-            return plan();
+            return plan(json.readTree("[{\"projectName\":\"过期项目1\"},{\"projectName\":\"过期项目2\"},{\"projectName\":\"过期项目3\"},{\"projectName\":\"过期项目4\"}]"));
         });
         worker.run();
         assertEquals("TIME_EXPIRED",getSession(user,session,true).path("status").asText());
@@ -191,7 +194,11 @@ class SimulationWorkflowTest {
         String user="audio-retry",id=create(user,true,pack(user)).path("id").asText();
         worker.run();
         String q=getSession(user,id,true).path("currentQuestion").path("id").asText();
-        byte[] bytes="RIFFxxxxWAVEdata".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] bytes=new byte[46];
+        System.arraycopy("RIFF".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,0,4);
+        System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,8,4);
+        bytes[44]=(byte)0xff;
+        bytes[45]=0x7f;
         when(storage.download(anyString())).thenReturn(bytes);
         when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"))).thenReturn("我先压测再核对监控。");
         doThrow(new SimulationException("MODEL_TIMEOUT")).doReturn(json.createObjectNode().put("feedback","请补充压测证据。"))
@@ -213,17 +220,64 @@ class SimulationWorkflowTest {
         String user="silent-audio",id=create(user,true,pack(user)).path("id").asText();
         worker.run();
         String q=getSession(user,id,true).path("currentQuestion").path("id").asText();
-        byte[] bytes="RIFFxxxxWAVEdata".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        when(storage.download(anyString())).thenReturn(bytes);
-        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"))).thenReturn("");
+        byte[] bytes=new byte[46];
+        System.arraycopy("RIFF".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,0,4);
+        System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,8,4);
         mvc.perform(multipart("/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/audio")
             .file(new org.springframework.mock.web.MockMultipartFile("file","answer.wav","audio/wav",bytes)).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
         worker.run();
-        assertEquals("READY",jdbc.sql("SELECT status FROM ai_mock_audio_assets WHERE question_id=:id").param("id",q).query(String.class).single());
         assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
+        assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE question_id=:id").param("id",q).query(Integer.class).single());
         assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",id).query(Integer.class).single());
         assertNull(tasks.latest(user,id));
+        verifyNoInteractions(transcription);
         verify(agent,never()).simulate(eq("VOICE_FEEDBACK"),anyMap());
+    }
+
+    @Test void skippedVoiceAnswerAdvancesWithoutTranscription() throws Exception {
+        String user="skip-audio",id=create(user,true,pack(user)).path("id").asText();
+        worker.run();
+        String q=getSession(user,id,true).path("currentQuestion").path("id").asText();
+        postJson(user,"/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/skip-answer","",200);
+        worker.run();
+        assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
+        assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE question_id=:id").param("id",q).query(Integer.class).single());
+        assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",id).query(Integer.class).single());
+    }
+
+    @Test void storedSilentWavAdvancesWithoutTranscription() throws Exception {
+        String user="retried-silent-audio",id=create(user,true,pack(user)).path("id").asText();
+        worker.run();
+        String q=getSession(user,id,true).path("currentQuestion").path("id").asText();
+        byte[] uploaded=new byte[46],silent=new byte[46];
+        System.arraycopy("RIFF".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,uploaded,0,4);
+        System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,uploaded,8,4);
+        System.arraycopy("RIFF".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,silent,0,4);
+        System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,silent,8,4);
+        uploaded[44]=(byte)0xff; uploaded[45]=0x7f;
+        when(storage.download(anyString())).thenReturn(silent);
+        mvc.perform(multipart("/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/audio")
+            .file(new org.springframework.mock.web.MockMultipartFile("file","answer.wav","audio/wav",uploaded)).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
+        worker.run();
+        assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
+        verifyNoInteractions(transcription);
+    }
+
+    @Test void unrecognizedVoiceAdvancesAsAnEmptyAnswer() throws Exception {
+        String user="unrecognized-audio",id=create(user,true,pack(user)).path("id").asText();
+        worker.run();
+        String q=getSession(user,id,true).path("currentQuestion").path("id").asText();
+        byte[] bytes=new byte[46];
+        System.arraycopy("RIFF".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,0,4);
+        System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,8,4);
+        bytes[44]=(byte)0xff; bytes[45]=0x7f;
+        when(storage.download(anyString())).thenReturn(bytes);
+        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"))).thenThrow(new IllegalStateException("no speech"));
+        mvc.perform(multipart("/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/audio")
+            .file(new org.springframework.mock.web.MockMultipartFile("file","answer.wav","audio/wav",bytes)).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
+        worker.run();
+        assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
+        assertNull(tasks.latest(user,id));
     }
 
     @Test void concurrentFinishCreatesOnlyOneFormalRecord() throws Exception {
@@ -253,10 +307,11 @@ class SimulationWorkflowTest {
 
     @Test void newVoiceRejectsThreeSlotsWhileLegacyReadsThem() throws Exception {
         String user="three-plan",pack=pack(user),id=create(user,true,pack).path("id").asText();
-        var three=plan(); var list=(com.fasterxml.jackson.databind.node.ArrayNode)three.path("plan");
+        var three=plan(json.readTree("[{\"projectName\":\""+user+"项目1\"},{\"projectName\":\""+user+"项目2\"},{\"projectName\":\""+user+"项目3\"},{\"projectName\":\""+user+"项目4\"}]")); var list=(com.fasterxml.jackson.databind.node.ArrayNode)three.path("plan");
         while(list.size()>3) list.remove(list.size()-1);
         doReturn(three).when(agent).simulate(eq("VOICE_PLAN"),anyMap());
         worker.run();
+        for(int attempt=0;attempt<2;attempt++) { jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE resource_id=:id AND status='PENDING'").param("id",id).update(); worker.run(); }
         assertEquals("FAILED",tasks.latest(user,id).status());
         assertEquals(10,getSession(user,id,true).path("totalQuestions").asInt());
         assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND question_plan IS NOT NULL").param("id",id).query(Integer.class).single());

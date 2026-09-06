@@ -22,6 +22,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,6 +33,7 @@ public class AiMockInterviewService {
     private static final long MAX_AUDIO_BYTES = 10 * 1024 * 1024;
     private static final int MAX_TRANSCRIPT_CHARS = 40_000;
     private static final int LEGACY_QUESTION_LIMIT = 3;
+    private static final Logger log = LoggerFactory.getLogger(AiMockInterviewService.class);
     private final JdbcClient jdbc; private final InterviewService interviews; private final AiMockQuestionAgent questionAgent; private final AiAudioStorage storage;
     private final String transcriptionUrl, transcriptionKey, transcriptionModel, volcengineSpeechKey;
     private final AudioTranscriptionService transcription;
@@ -44,7 +47,7 @@ public class AiMockInterviewService {
         PackageInfo p = jdbc.sql("SELECT id, company, role, interview_round FROM interview_packages WHERE id=:id AND user_id=:user").param("id", packageId).param("user", userId).query((rs, row) -> new PackageInfo(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4))).optional().orElseThrow(AiMockInterviewService::notFound);
         String id = UUID.randomUUID().toString(); OffsetDateTime expires = OffsetDateTime.now().plusMinutes(50);
         jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,material_snapshot,generation_version) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:snapshot,'SIMULATION_AGENT_V1')").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("snapshot",materials.capture(userId,packageId).toString()).update();
-        tasks.enqueue(userId, "AI_CREATE", id, null); return detail(userId,id);
+        tasks.enqueue(userId, "AI_PLAN", id, null); return detail(userId,id);
     }
     Session active(String userId) { return jdbc.sql("SELECT id FROM ai_mock_interviews WHERE user_id=:user AND status IN ('RUNNING','TIME_EXPIRED') ORDER BY updated_at DESC LIMIT 1").param("user",userId).query(String.class).optional().map(id -> detail(userId,id)).orElseThrow(AiMockInterviewService::notFound); }
     Session get(String userId, String id) { return detail(userId,id); }
@@ -55,6 +58,8 @@ public class AiMockInterviewService {
 
     private void processTaskBody(ClaimedTask task) {
         switch (task.taskType()) {
+            case "AI_PLAN" -> processPlan(task.userId(), task.resourceId());
+            case "AI_FIRST" -> processFirst(task.userId(), task.resourceId());
             case "AI_CREATE" -> processCreate(task.userId(), task.resourceId());
             case "AI_NEXT" -> processNext(task.userId(), task.resourceId(), task.relatedId());
             case "AI_AUDIO" -> processAudio(task.userId(), task.resourceId(), task.relatedId());
@@ -66,20 +71,28 @@ public class AiMockInterviewService {
     void processCreate(String userId,String id) {
         SessionRow s=session(userId,id);
         if (s.plan==null) {
-            tasks.check();
-            JsonNode frozen=snapshot(userId,s);
-            List<PlanItem> plan=questionAgent.plan(frozen);
-            tasks.check();
-            // Two independent model requests; commit only after both results pass final validation.
-            QuestionDraft first=questionAgent.generate(frozen,plan.getFirst(),history(userId,id));
-            tasks.write(() -> {
-                if (qualityError(first,plan.getFirst(),history(userId,id))!=null) throw SimulationContract.invalid();
-                int updated=jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND question_plan IS NULL")
-                    .param("plan",questionAgent.serialize(plan)).param("id",id).param("user",userId).update();
-                if(updated==1 && !hasQuestion(id,0)) insertQuestion(id,0,first);
-            });
+            processPlan(userId,id);
             return;
         }
+        addQuestion(userId,id,0);
+    }
+
+    private void processPlan(String userId, String id) {
+        SessionRow s=session(userId,id);
+        if (s.plan != null) {
+            tasks.write(() -> { if (!hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null); });
+            return;
+        }
+        tasks.check();
+        List<PlanItem> plan=questionAgent.plan(snapshot(userId,s));
+        tasks.write(() -> {
+            int updated=jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND question_plan IS NULL")
+                .param("plan",questionAgent.serialize(plan)).param("id",id).param("user",userId).update();
+            if (updated==1 || !hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null);
+        });
+    }
+
+    private void processFirst(String userId, String id) {
         addQuestion(userId,id,0);
     }
 
@@ -108,7 +121,8 @@ public class AiMockInterviewService {
             tasks.write(() -> jdbc.sql("UPDATE ai_mock_audio_assets SET status='TRANSCRIBING',transcript_error='' WHERE id=:id AND status<>'READY'").param("id",assetId).update());
             tasks.check();
             String saved=jdbc.sql("SELECT transcript FROM ai_mock_audio_assets WHERE id=:id").param("id",assetId).query(String.class).single();
-            String detected=saved.isBlank()?transcribe(userId,loadAudio(asset.path),asset.type):saved;
+            byte[] bytes=saved.isBlank()?loadAudio(asset.path):null;
+            String detected=saved.isBlank()?(silentWav(bytes,asset.type)?"":transcribeOrEmpty(userId,bytes,asset.type)):saved;
             final String transcript=detected.isBlank()?"":limited(detected,"转写文本",MAX_TRANSCRIPT_CHARS);
             tasks.write(() -> jdbc.sql("UPDATE ai_mock_audio_assets SET transcript=:text WHERE id=:id AND status='TRANSCRIBING'").param("id",assetId).param("text",transcript).update());
             String feedback=transcript.isBlank()?"":feedback(userId,session(userId,id),q,transcript);
@@ -129,7 +143,7 @@ public class AiMockInterviewService {
     private String feedback(String user,SessionRow s,QuestionRow q,String answer) {
         tasks.check();
         JsonNode result=agent.simulate("VOICE_FEEDBACK",Map.of("materials",snapshot(user,s),"history",history(user,s.id),"questionText",q.text,"answer",answer));
-        SimulationContract.result("VOICE_FEEDBACK",result);
+        SimulationContract.modelResult("VOICE_FEEDBACK",result);
         return result.path("feedback").asText();
     }
 
@@ -151,6 +165,14 @@ public class AiMockInterviewService {
         jdbc.sql("UPDATE ai_mock_interview_questions SET answer_started_at=COALESCE(answer_started_at,CURRENT_TIMESTAMP),answer_expires_at=COALESCE(answer_expires_at,CURRENT_TIMESTAMP + INTERVAL '5' MINUTE),updated_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",questionId).update();
         return detail(userId,id);
     }
+    @Transactional Session skipAnswer(String userId, String id, String questionId) {
+        if (!"RUNNING".equals(session(userId,id).status)) return detail(userId,id);
+        lockRunning(userId,id); QuestionRow q=question(userId,id,questionId);
+        if ("ANSWERED".equals(q.state)) return detail(userId,id);
+        if (!"OPEN".equals(q.state)) throw new IllegalArgumentException("当前题目不能跳过。 ");
+        answer(userId,id,q,"",false);
+        return detail(userId,id);
+    }
     @Transactional Session audio(String userId, String id, String questionId, MultipartFile file) {
         if (!"RUNNING".equals(session(userId,id).status)) return detail(userId,id);
         lockRunning(userId,id); QuestionRow q = question(userId,id,questionId);
@@ -159,6 +181,10 @@ public class AiMockInterviewService {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("录音为空，请重新录音。");
         byte[] bytes; try { bytes=file.getBytes(); } catch(Exception e) { throw new IllegalArgumentException("读取录音失败，请重试。"); }
         String type = validateAudio(bytes);
+        if (silentWav(bytes,type)) {
+            answer(userId,id,q,"",false);
+            return detail(userId,id);
+        }
         int claimed=jdbc.sql("UPDATE ai_mock_interview_questions SET state='TRANSCRIBING',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='OPEN'").param("id",questionId).update();
         if (claimed == 0) return detail(userId,id);
         String asset = UUID.randomUUID().toString(), path="ai-mock/"+userId+"/"+asset+extension(type);
@@ -184,7 +210,7 @@ public class AiMockInterviewService {
         SessionRow s=session(userId,id); if (s.status.equals("FINISHED")) return detail(userId,id);
         if(tasks.hasActive(userId,id)) throw new IllegalStateException("AI 正在处理中，请等待完成后再保存。");
         List<QuestionRow> rows=questions(userId,id).stream().filter(q -> "ANSWERED".equals(q.state)).toList();
-        var formal=interviews.createFromMock(userId,new InterviewRequest(s.company,s.role,s.round,OffsetDateTime.now(),s.packageId,"PENDING_REVIEW","UNKNOWN","AI 模拟面试记录，仅含用户确认的转写文本。"),rows.stream().map(q->new QuestionRequest(q.text,q.answer,"UNCERTAIN")).toList());
+        var formal=interviews.createFromMock(userId,new InterviewRequest(s.company,s.role,s.round,OffsetDateTime.now(),s.packageId,"PENDING_REVIEW","UNKNOWN","AI 模拟面试记录，仅含用户确认的转写文本。"),rows.stream().map(q->new QuestionRequest(q.text,q.answer,q.answer.isBlank()?"UNANSWERED":"UNCERTAIN")).toList());
         jdbc.sql("UPDATE ai_mock_interviews SET status='FINISHED',final_interview_id=:final,finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user").param("final",formal.interview().id()).param("id",id).param("user",userId).update(); tasks.cancelForResource(userId,id); return detail(userId,id);
     }
     @Transactional void delete(String userId,String id) { lock(userId,id); SessionRow s=session(userId,id); tasks.deleteForResource(userId,id); for (AudioRow a:audioRows(id)) try { storage.delete(a.path); } catch(RuntimeException ignored) {} if(jdbc.sql("DELETE FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",userId).update()==0) throw notFound(); }
@@ -216,10 +242,12 @@ public class AiMockInterviewService {
         if(!"RUNNING".equals(s.status)||order>=questionLimit(s)||s.plan==null) return;
         if(hasQuestion(id,order)) return;
         tasks.check();
-        QuestionDraft draft=questionAgent.generate(snapshot(userId,s),questionAgent.deserialize(s.plan,legacy(s)).get(order),history(userId,id));
+        boolean strictProject=!legacy(s);
+        QuestionDraft draft=questionAgent.generate(snapshot(userId,s),questionAgent.deserialize(s.plan,legacy(s)).get(order),history(userId,id),strictProject);
         tasks.write(() -> {
             if(hasQuestion(id,order)) return;
-            if (qualityError(draft,questionAgent.deserialize(s.plan,legacy(s)).get(order),history(userId,id))!=null) throw SimulationContract.invalid();
+            String error=qualityError(draft,questionAgent.deserialize(s.plan,legacy(s)).get(order),history(userId,id));
+            if (error!=null) { log.warn("AI VOICE_QUESTION rejected during commit reason={}", error); throw SimulationContract.retryableInvalid(); }
             insertQuestion(id,order,draft);
         });
     }
@@ -245,6 +273,10 @@ public class AiMockInterviewService {
         if (!"RUNNING".equals(s.status)) throw new IllegalStateException("模拟已结束或超时，无法继续处理。");
     }
     private String transcribe(String userId,byte[] bytes,String type) { return transcription.transcribe(userId, bytes, type); }
+    private String transcribeOrEmpty(String userId,byte[] bytes,String type) {
+        try { return transcribe(userId,bytes,type); }
+        catch (IllegalStateException exception) { log.info("Voice answer has no usable transcript; saving it as empty: {}", exception.getMessage()); return ""; }
+    }
     private String transcribeVolcengine(String userId,byte[] bytes,String type) { if (!type.equals("audio/ogg") && !type.equals("audio/wav")) throw new IllegalStateException("豆包转写仅支持 OGG、WAV 或 MP3 音频；请使用支持 OGG 录音的浏览器，或手动填写文本。"); try { String body=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(Map.of("user",Map.of("uid",userId),"audio",Map.of("data",Base64.getEncoder().encodeToString(bytes)),"request",Map.of("model_name","bigmodel","enable_itn",true,"enable_punc",true))); HttpResponse<String> r=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create("https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash")).timeout(Duration.ofSeconds(60)).header("Content-Type","application/json").header("X-Api-Key",volcengineSpeechKey).header("X-Api-Resource-Id","volc.bigasr.auc_turbo").header("X-Api-Request-Id",UUID.randomUUID().toString()).header("X-Api-Sequence","-1").POST(HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString()); if(!"20000000".equals(r.headers().firstValue("X-Api-Status-Code").orElse(""))) throw new IllegalStateException("豆包转写请求失败；请检查服务已开通并手动填写文本。"); String text=new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.body()).path("result").path("text").asText("").trim(); if(text.isBlank()) throw new IllegalStateException("豆包转写返回格式无效；请手动填写并确认回答文本。"); return text; } catch(IllegalStateException e){throw e;} catch(Exception e){throw new IllegalStateException("豆包转写超时或失败；请手动填写并确认回答文本。");} }
     private String transcribeOpenAi(byte[] bytes,String type) { if(transcriptionUrl.isBlank()||transcriptionKey.isBlank()||transcriptionModel.isBlank()) throw new IllegalStateException("转写服务尚未配置；请手动填写并确认回答文本。"); try { String boundary="----ai"+UUID.randomUUID(); byte[] body=("--"+boundary+"\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n"+transcriptionModel+"\r\n--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"answer\"\r\nContent-Type: "+type+"\r\n\r\n").getBytes(StandardCharsets.UTF_8); byte[] tail=("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8); byte[] all=new byte[body.length+bytes.length+tail.length]; System.arraycopy(body,0,all,0,body.length);System.arraycopy(bytes,0,all,body.length,bytes.length);System.arraycopy(tail,0,all,body.length+bytes.length,tail.length); HttpResponse<String> r=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create(transcriptionUrl)).timeout(Duration.ofSeconds(60)).header("Authorization","Bearer "+transcriptionKey).header("Content-Type","multipart/form-data; boundary="+boundary).POST(HttpRequest.BodyPublishers.ofByteArray(all)).build(),HttpResponse.BodyHandlers.ofString()); if(r.statusCode()/100!=2) throw new IllegalStateException("转写服务请求失败；请手动填写并确认回答文本。"); String text=new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.body()).path("text").asText("").trim(); if(text.isBlank()) throw new IllegalStateException("转写返回格式无效；请手动填写并确认回答文本。"); return text; } catch(IllegalStateException e){throw e;} catch(Exception e){throw new IllegalStateException("转写超时或失败；请手动填写并确认回答文本。");} }
     private Session detail(String user,String id) { SessionRow s=session(user,id); List<QuestionRow> q=questions(user,id); return new Session(s.id,s.company,s.role,s.round,s.status,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),tasks.latest(user,id)); }
@@ -259,6 +291,19 @@ public class AiMockInterviewService {
     private static String legacyType(QuestionRow q) { return q.type!=null?q.type:q.sortOrder==0?"FUNDAMENTAL":q.sortOrder==1?"PROJECT":"SCENARIO"; }
     private static String audioType(byte[] b) { if(b.length>12&&b[0]=='R'&&b[1]=='I'&&b[2]=='F'&&b[3]=='F'&&b[8]=='W'&&b[9]=='A'&&b[10]=='V'&&b[11]=='E')return "audio/wav"; if(b.length>4&&b[0]=='O'&&b[1]=='g'&&b[2]=='g'&&b[3]=='S')return "audio/ogg"; if(b.length>4&&b[0]==0x1a&&b[1]==0x45&&b[2]==(byte)0xdf&&b[3]==(byte)0xa3)return "audio/webm"; if(b.length>12&&b[4]=='f'&&b[5]=='t'&&b[6]=='y'&&b[7]=='p')return "audio/mp4"; return null; }
     static String validateAudio(byte[] bytes) { if(bytes.length==0)throw new IllegalArgumentException("录音为空，请重新录音。"); if(bytes.length>MAX_AUDIO_BYTES)throw new IllegalArgumentException("录音超过 10 MiB，请缩短回答后重新录音。"); String type=audioType(bytes); if(type==null)throw new IllegalArgumentException("仅支持 WebM、Ogg、MP4 或 WAV 音频。"); return type; }
+    static boolean silentWav(byte[] bytes,String type) {
+        if (!"audio/wav".equals(type)) return false;
+        // ponytail: room recorder emits a 44-byte PCM WAV; parse chunks if arbitrary WAV uploads need silence detection.
+        if (bytes.length<44) return false;
+        int samples=(bytes.length-44)/2;
+        if (samples<=0) return true;
+        double energy=0;
+        for(int index=44;index+1<bytes.length;index+=2) {
+            short sample=(short)((bytes[index]&0xff)|((bytes[index+1]&0xff)<<8));
+            energy+=(double)sample*sample;
+        }
+        return Math.sqrt(energy/samples)/Short.MAX_VALUE<0.01;
+    }
     private static String extension(String t){return t.endsWith("wav")?".wav":t.endsWith("ogg")?".ogg":t.endsWith("mp4")?".mp4":".webm";} private static String feedback(String text,Long duration){return "已确认文本 "+text.length()+" 字；当前转写结果不含词级时间戳，无法可靠计算语速、停顿或重复词。";} private static String safeName(String n){return n==null||n.isBlank()?"answer":n.replaceAll("[^\\p{L}\\p{N}._-]","_");} private static String required(String v,String l){if(v==null||v.trim().isBlank())throw new IllegalArgumentException(l+"不能为空。");return v.trim();} private static String limited(String value,String label,int maximum){if(value.length()>maximum)throw new IllegalArgumentException(label+"过长，请控制在 "+maximum+" 个字符以内。");return value;} private static NoSuchElementException notFound(){return new NoSuchElementException("资源不存在或无权访问。");}
     private record PackageInfo(String id,String company,String role,String round){} private record SessionRow(String id,String packageId,String company,String role,String round,String status,OffsetDateTime startedAt,OffsetDateTime expiresAt,String finalId,String plan,String snapshot,String generationVersion){} private record QuestionRow(String id,String text,String answer,String state,int sortOrder,OffsetDateTime answerStartedAt,OffsetDateTime answerExpiresAt,String type,String competency,String projectName,String technology,String feedback){} private record AudioRow(String id,String questionId,String path,String type,String status){}
 }

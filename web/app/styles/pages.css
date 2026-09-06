@@ -1407,6 +1407,9 @@
 .ai-room-result .ai-room-primary {
   background: #fff;
 }
+.ai-room-result .ai-room-primary + .ai-room-primary {
+  margin-left: 12px;
+}
 @media (max-width: 700px) {
   .ai-room {
     background-position: 54% center;

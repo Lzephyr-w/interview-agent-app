@@ -2,6 +2,7 @@ import json
 import hmac
 import logging
 import os
+import sys
 import time
 from uuid import UUID
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -128,10 +129,11 @@ def load_env_file(path: str = ".env.local"):
 
 
 def main():
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     load_env_file()
     key = os.getenv("AGENT_INTERNAL_KEY", "")
     Handler.internal_key = key
-    Handler.simulation_model_factory = staticmethod(lambda remaining: model_from_env(timeout=remaining, max_retries=0))
+    Handler.simulation_model_factory = staticmethod(lambda remaining: model_from_env(timeout=remaining, max_retries=0).bind(response_format={"type": "json_object"}))
     Handler.runtime_factory = staticmethod(lambda user_id: AgentRuntime(
         model_from_env(),
         JavaToolClient(os.getenv("JAVA_AGENT_TOOL_URL", "http://localhost:8080/internal/agent/tools"), key, user_id),

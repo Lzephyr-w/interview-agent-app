@@ -5,6 +5,11 @@ import { useEffect, useState } from "react";
 type Theme = "light" | "dark";
 const storageKey = "interview-agent.theme";
 
+function setFavicon(theme: Theme) {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (link) link.href = theme === "dark" ? "/icon-light.png" : "/icon.png";
+}
+
 export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>();
 
@@ -17,6 +22,7 @@ export default function ThemeToggle() {
           ? "dark"
           : "light";
     document.documentElement.dataset.theme = next;
+    setFavicon(next);
     setTheme(next);
   }, []);
 
@@ -24,6 +30,7 @@ export default function ThemeToggle() {
     const next: Theme = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     localStorage.setItem(storageKey, next);
+    setFavicon(next);
     setTheme(next);
   }
 

@@ -36,6 +36,8 @@ type Session = {
 const QUESTION_LIMIT = 10;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const TRANSCRIPTION_SAMPLE_RATE = 16_000;
+// ponytail: mirrors the server's fixed five-minute answer window; make it API-configured if that limit changes.
+const ANSWER_DURATION_MS = 5 * 60 * 1000;
 const questionTypeLabel = {
   FUNDAMENTAL: "技术基础",
   PROJECT: "项目实践",
@@ -80,6 +82,8 @@ export default function AiMockInterviewRoomPage() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recording, setRecording] = useState(false);
+  const [preparingRecording, setPreparingRecording] = useState(false);
+  const [countdownDeadline, setCountdownDeadline] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -87,19 +91,42 @@ export default function AiMockInterviewRoomPage() {
   const [exitDialog, setExitDialog] = useState(false);
   const [welcomeExitDialog, setWelcomeExitDialog] = useState(false);
   const recorder = useRef<MediaRecorder | null>(null);
+  const microphone = useRef<MediaStream | null>(null);
   const chunks = useRef<Blob[]>([]);
   const discardRecording = useRef(false);
   const spokenQuestion = useRef("");
   const expiredQuestion = useRef("");
   const current = session?.status === "RUNNING" ? session.currentQuestion : undefined;
 
+  function stopMicrophone() {
+    microphone.current?.getTracks().forEach((track) => track.stop());
+    microphone.current = null;
+  }
+
+  useEffect(
+    () => () => {
+      discardRecording.current = true;
+      recorder.current?.stop();
+      stopMicrophone();
+    },
+    [],
+  );
+
   useEffect(() => {
     const packageId = new URLSearchParams(window.location.search).get(
       "packageId",
     );
     if (!packageId) return;
+    const key = `ai-mock-session:${packageId}`;
     void api<Package[]>("/api/v1/interview-packages")
-      .then((items) => setSelected(items.find((item) => item.id === packageId)))
+      .then(async (items) => {
+        setSelected(items.find((item) => item.id === packageId));
+        const id = window.sessionStorage.getItem(key);
+        if (id) {
+          try { setSession(await api<Session>(`/api/v1/ai-mock-interviews/${id}`)); }
+          catch { window.sessionStorage.removeItem(key); }
+        }
+      })
       .catch((caught: unknown) =>
         setError(errorText(caught, "加载面试信息失败。")),
       );
@@ -120,30 +147,42 @@ export default function AiMockInterviewRoomPage() {
     }
   }, [current?.id]);
   useEffect(() => {
-    if (!current?.answerExpiresAt) {
+    setCountdownDeadline(null);
+    setRemaining(null);
+  }, [current?.id]);
+  useEffect(() => {
+    if (!current) {
       setRemaining(null);
       return;
     }
-    if (busy) return;
+    const deadline = countdownDeadline ?? (current?.answerExpiresAt
+      ? new Date(current.answerExpiresAt).getTime()
+      : null);
+    if (!deadline || Number.isNaN(deadline)) {
+      setRemaining(null);
+      return;
+    }
+    if (busy || preparingRecording) return;
     const update = () =>
       setRemaining(
         Math.max(
           0,
           Math.ceil(
-            (new Date(current.answerExpiresAt!).getTime() - Date.now()) / 1000,
+            (deadline - Date.now()) / 1000,
           ),
         ),
       );
     update();
     const timer = window.setInterval(update, 1000);
     return () => clearInterval(timer);
-  }, [busy, current?.id, current?.answerExpiresAt]);
+  }, [busy, countdownDeadline, preparingRecording, current?.id, current?.answerExpiresAt]);
   useEffect(() => {
     if (
       !current ||
       !session ||
       remaining !== 0 ||
       busy ||
+      preparingRecording ||
       session.task ||
       expiredQuestion.current === current.id
     )
@@ -159,7 +198,7 @@ export default function AiMockInterviewRoomPage() {
       .catch((caught: unknown) =>
         setError(errorText(caught, "题目已超时，请刷新后继续。")),
       );
-  }, [busy, current?.id, recording, remaining, session?.id]);
+  }, [busy, current?.id, preparingRecording, recording, remaining, session?.id]);
   useEffect(() => {
     if (!recording) return;
     setRecordingSeconds(0);
@@ -188,15 +227,26 @@ export default function AiMockInterviewRoomPage() {
 
   async function start() {
     if (!selected) return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setError("当前浏览器不支持录音，请更换支持录音的浏览器。");
+      return;
+    }
     setBusy(true);
     try {
+      microphone.current = await navigator.mediaDevices.getUserMedia({ audio: true });
       const created = await api<Session>("/api/v1/ai-mock-interviews", {
         method: "POST",
         body: JSON.stringify({ interviewPackageId: selected.id }),
       });
       setSession(created);
+      window.sessionStorage.setItem(`ai-mock-session:${selected.id}`, created.id);
     } catch (caught) {
-      setError(errorText(caught, "AI 模拟无法开始。"));
+      stopMicrophone();
+      setError(
+        caught instanceof DOMException
+          ? "麦克风权限被拒绝或不可用。"
+          : errorText(caught, "AI 模拟无法开始。"),
+      );
     } finally {
       setBusy(false);
     }
@@ -223,19 +273,25 @@ export default function AiMockInterviewRoomPage() {
       return;
     }
     window.speechSynthesis?.pause();
-    let stream: MediaStream | undefined;
+    if (preparingRecording || recording || busy) return;
+    setCountdownDeadline(null);
+    setRemaining(null);
+    setPreparingRecording(true);
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const activeStream = stream;
+      let activeStream = microphone.current;
+      if (!activeStream || activeStream.getTracks().every((track) => track.readyState === "ended")) {
+        activeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        microphone.current = activeStream;
+      }
       const started = await api<Session>(
         `/api/v1/ai-mock-interviews/${session?.id}/questions/${current.id}/start-answer`,
         { method: "POST" },
       );
       if (started.currentQuestion?.id !== current.id) {
-        stream.getTracks().forEach((track) => track.stop());
         setSession(started);
         return;
       }
+      setCountdownDeadline(Date.now() + ANSWER_DURATION_MS);
       const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
         ? "audio/ogg;codecs=opus"
         : "";
@@ -247,17 +303,15 @@ export default function AiMockInterviewRoomPage() {
       recorder.current = value;
       value.ondataavailable = (event) => chunks.current.push(event.data);
       value.onstop = () => {
-        activeStream.getTracks().forEach((track) => track.stop());
         if (!discardRecording.current) {
           const recorded = new Blob(chunks.current, {
             type: value.mimeType || "audio/webm",
           });
           void (async () => {
             try {
-              const audio = recorded.type.includes("webm")
-                ? await toWav(recorded)
-                : recorded;
-              await upload(audio);
+              const { audio, silent } = await toWav(recorded);
+              if (silent) await skipAnswer();
+              else await upload(audio);
             } catch (caught) {
               setError(errorText(caught, "录音处理失败，请重新录音。"));
               setBusy(false);
@@ -269,12 +323,13 @@ export default function AiMockInterviewRoomPage() {
       setSession(started);
       setRecording(true);
     } catch (caught) {
-      stream?.getTracks().forEach((track) => track.stop());
       setError(
         caught instanceof DOMException
           ? "麦克风权限被拒绝或不可用。 "
           : errorText(caught, "无法开始回答，请重试。"),
       );
+    } finally {
+      setPreparingRecording(false);
     }
   }
   function stopRecording() {
@@ -310,7 +365,7 @@ export default function AiMockInterviewRoomPage() {
           view.setUint8(offset + index, item.charCodeAt(0)),
         );
       text(0, "RIFF");
-      view.setUint32(4, 36 + source.length * 2, true);
+      view.setUint32(4, 36 + samples.length * 2, true);
       text(8, "WAVEfmt ");
       view.setUint32(16, 16, true);
       view.setUint16(20, 1, true);
@@ -321,14 +376,19 @@ export default function AiMockInterviewRoomPage() {
       view.setUint16(34, 16, true);
       text(36, "data");
       view.setUint32(40, samples.length * 2, true);
+      let energy = 0;
       for (let index = 0; index < samples.length; index += 1) {
+        energy += samples[index] * samples[index];
         view.setInt16(
           44 + index * 2,
           Math.max(-1, Math.min(1, samples[index])) * 0x7fff,
           true,
         );
       }
-      return new Blob([bytes], { type: "audio/wav" });
+      return {
+        audio: new Blob([bytes], { type: "audio/wav" }),
+        silent: Math.sqrt(energy / samples.length) < 0.01,
+      };
     } finally {
       await context.close();
     }
@@ -374,6 +434,23 @@ export default function AiMockInterviewRoomPage() {
       setBusy(false);
     }
   }
+  async function skipAnswer() {
+    if (!session || !current) return;
+    setBusy(true);
+    try {
+      setSession(
+        await api<Session>(
+          `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/skip-answer`,
+          { method: "POST" },
+        ),
+      );
+      setNotice("未检测到有效语音，本题已按空回答处理。 ");
+    } catch (caught) {
+      setError(errorText(caught, "提交空回答失败，请重试。"));
+    } finally {
+      setBusy(false);
+    }
+  }
   async function finish() {
     if (!session) return;
     setBusy(true);
@@ -385,7 +462,9 @@ export default function AiMockInterviewRoomPage() {
       setSession(updated);
       setFinishDialog(false);
       setExitDialog(false);
+      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${selected.id}`);
       window.speechSynthesis?.cancel();
+      stopMicrophone();
     } catch (caught) {
       setError(errorText(caught, "结束失败，请重试。"));
     } finally {
@@ -400,6 +479,8 @@ export default function AiMockInterviewRoomPage() {
         method: "DELETE",
       });
       window.speechSynthesis?.cancel();
+      stopMicrophone();
+      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${selected.id}`);
       window.location.assign("/ai-mock-interviews");
     } catch (caught) {
       setError(errorText(caught, "取消失败，请重试。"));
@@ -408,6 +489,7 @@ export default function AiMockInterviewRoomPage() {
     }
   }
   function leaveWelcome() {
+    stopMicrophone();
     window.location.assign("/ai-mock-interviews");
   }
 
@@ -541,8 +623,10 @@ export default function AiMockInterviewRoomPage() {
               </button>
             )}
             <h1>{current.questionText}</h1>
-            {busy || session.task ? (
-              <p className="ai-room-processing">正在提交回答并准备下一题…</p>
+            {preparingRecording || busy || session.task ? (
+              <p className="ai-room-processing">
+                {preparingRecording ? "正在准备回答…" : "正在提交回答并准备下一题…"}
+              </p>
             ) : recording ? (
               <>
                 <div className="ai-room-wave" aria-hidden="true">
@@ -586,6 +670,7 @@ export default function AiMockInterviewRoomPage() {
                   <button
                     type="button"
                     className="ai-room-icon ai-room-mic"
+                    disabled={preparingRecording}
                     aria-label={
                       current.audio?.status === "FAILED"
                         ? "重新回答"

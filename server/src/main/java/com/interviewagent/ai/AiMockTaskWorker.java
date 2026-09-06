@@ -23,7 +23,7 @@ public class AiMockTaskWorker {
             try {
                 switch (task.taskType()) {
                     case "MOCK_CREATE", "MOCK_ANSWER", "MOCK_NEXT" -> text.processTask(task);
-                    case "AI_CREATE", "AI_NEXT", "AI_AUDIO", "AI_FEEDBACK" -> voice.processTask(task);
+                    case "AI_PLAN", "AI_FIRST", "AI_CREATE", "AI_NEXT", "AI_AUDIO", "AI_FEEDBACK" -> voice.processTask(task);
                     default -> throw new IllegalStateException("后台任务类型无效，请稍后重试。");
                 }
                 tasks.complete(task);

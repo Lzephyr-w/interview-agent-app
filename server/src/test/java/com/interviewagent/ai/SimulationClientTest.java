@@ -36,7 +36,7 @@ class SimulationClientTest {
                 if (mode.equals("ok")) assertEquals("如何验证？",client.simulate("TEXT_MAIN_QUESTION",input).path("questionText").asText());
                 else {
                     var error = assertThrows(SimulationException.class, () -> client.simulate("TEXT_MAIN_QUESTION",input));
-                    assertEquals(mode.equals("error"),error.retryable());
+                    assertEquals(mode.equals("error") || mode.equals("shape"),error.retryable());
                     assertFalse(error.getMessage().contains("秘密"));
                 }
             } finally { server.stop(0); }
@@ -61,5 +61,12 @@ class SimulationClientTest {
             var client=new AgentPythonClient(json,"http://127.0.0.1:"+server.getAddress().getPort(),"test-key");
             assertEquals("MODEL_TIMEOUT",assertThrows(SimulationException.class,()->client.simulate("TEXT_MAIN_QUESTION",input,System.currentTimeMillis()+80)).code());
         } finally { server.stop(0); }
+    }
+
+    @Test void rejectsCompoundQuestionsAndVerboseFeedbackBeforePersistence() throws Exception {
+        assertThrows(SimulationException.class, () -> SimulationContract.result("TEXT_MAIN_QUESTION",
+            json.readTree("{\"questionText\":\"你如何定位问题？又如何验证结果？\"}")));
+        assertThrows(SimulationException.class, () -> SimulationContract.result("TEXT_FEEDBACK",
+            json.readTree("{\"feedback\":\"先说明结论。再补充证据。最后交代取舍。\"}")));
     }
 }

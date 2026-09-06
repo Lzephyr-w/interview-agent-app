@@ -81,7 +81,9 @@ export default function LoginPage() {
       <section className="auth-card">
         <div className="topline">
           <div className="brand">
-            <span className="brand-mark">面</span>
+            <span className="brand-mark">
+              <img src="/images/ai-assistant.png" alt="" />
+            </span>
             <span>
               面试助手<small>INTERVIEW ASSISTANT</small>
             </span>

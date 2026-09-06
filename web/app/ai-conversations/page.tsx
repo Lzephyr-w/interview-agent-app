@@ -879,7 +879,7 @@ export default function AiConversationsPage() {
                             </article>
                             <div className="chat-message-person">
                               <span className="chat-avatar" aria-hidden="true">
-                                {message.role === "USER" ? "我" : "AI"}
+                                {message.role === "USER" ? <img src="/images/user-avatar.png" alt="我" /> : <img src="/images/ai-avatar.png" alt="" />}
                               </span>
                             </div>
                           </div>

@@ -161,7 +161,7 @@ public class MockInterviewService {
             input.put("questionText",answered.questionText()); input.put("answer",answered.answerText());
             tasks.check();
             JsonNode result=model.simulate("TEXT_FEEDBACK",input);
-            SimulationContract.result("TEXT_FEEDBACK",result);
+            SimulationContract.modelResult("TEXT_FEEDBACK",result);
             tasks.write(() -> jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
                 .param("feedback",result.path("feedback").asText()).param("id",questionId).update());
         }
@@ -183,7 +183,7 @@ public class MockInterviewService {
         List<MockQuestion> history=questions(sessionId);
         String text=uniqueQuestion("TEXT_MAIN_QUESTION",context(userId,session,history),history);
         tasks.write(() -> {
-            if (repeats(text,questions(sessionId))) throw SimulationContract.invalid();
+            if (repeats(text,questions(sessionId))) throw SimulationContract.retryableInvalid();
             if (currentQuestion(sessionId)==null && mainCount(sessionId)<MAIN_QUESTION_LIMIT)
                 insertQuestion(UUID.randomUUID().toString(),sessionId,text,"MAIN",null,"OPEN",nextOrder(history));
         });
@@ -197,7 +197,7 @@ public class MockInterviewService {
         input.put("questionText",main.questionText()); input.put("answer",answer);
         String text=uniqueQuestion("TEXT_FOLLOW_UP",input,history);
         tasks.write(() -> {
-            if (repeats(text,questions(sessionId))) throw SimulationContract.invalid();
+            if (repeats(text,questions(sessionId))) throw SimulationContract.retryableInvalid();
             if (questions(sessionId).stream().noneMatch(item -> main.id().equals(item.parentQuestionId())))
                 insertQuestion(UUID.randomUUID().toString(),sessionId,text,"FOLLOW_UP",main.id(),"OPEN",nextOrder(history));
         });
@@ -206,9 +206,9 @@ public class MockInterviewService {
     private String uniqueQuestion(String operation,Map<String,Object> input,List<MockQuestion> history) {
         tasks.check();
         JsonNode result=model.simulate(operation,input);
-        SimulationContract.result(operation,result);
+        SimulationContract.modelResult(operation,result);
         String text=result.path("questionText").asText().trim();
-        if (repeats(text,history)) throw SimulationContract.invalid();
+        if (repeats(text,history)) throw SimulationContract.retryableInvalid();
         return text;
     }
 

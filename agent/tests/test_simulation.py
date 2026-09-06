@@ -10,7 +10,7 @@ from interview_agent.simulation import SimulationError, generate, validate_reque
 
 def request(operation="TEXT_MAIN_QUESTION", marker="甲"):
     data = {"materials": {"company": marker, "role": "开发", "round": "一面", "jd": marker,
-                          "resume": marker, "cards": []}, "history": []}
+                          "resume": marker + "项目", "cards": []}, "history": []}
     if operation in {"VOICE_FEEDBACK", "TEXT_FEEDBACK", "TEXT_FOLLOW_UP"}:
         data.update(questionText="如何验证？", answer="测试")
     if operation == "VOICE_QUESTION":
@@ -40,7 +40,7 @@ def test_operations(operation):
     value = {"feedback": "请补充证据。"} if "FEEDBACK" in operation else {"questionText": "如何验证？"}
     if operation == "VOICE_PLAN":
         value = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
-                               competency=f"能力{i}", projectName="", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+                               competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
     if operation == "VOICE_QUESTION":
         value.update(type="FUNDAMENTAL", competency="原理", projectName="", technology="")
     model = Model(json.dumps(value))
@@ -49,16 +49,65 @@ def test_operations(operation):
     assert len(model.prompts) == 1
 
 
-def test_format_retry_only_once_and_isolation():
-    model = Model("not json", '{"questionText":"如何验证？"}', '{"questionText":"如何排查？"}')
-    generate(request(marker="用户甲独有"), lambda remaining: model)
-    generate(request(marker="用户乙独有"), lambda remaining: model)
-    assert len(model.prompts) == 3
-    assert "用户乙独有" not in model.prompts[0]
-    assert "用户甲独有" not in model.prompts[2]
+def test_invalid_structure_returns_retryable_error_after_one_call():
+    model = Model("not json", '{"questionText":"如何验证？"}')
     with pytest.raises(SimulationError) as failure:
-        generate(request(), lambda remaining: Model("{}", "{}"))
+        generate(request(marker="用户甲独有"), lambda remaining: model)
     assert failure.value.code == "INVALID_MODEL_OUTPUT"
+    assert failure.value.retryable is True
+    assert len(model.prompts) == 1
+
+
+def test_ungrounded_plan_project_name_is_rejected_without_second_call():
+    payload = request("VOICE_PLAN", marker="真实项目")
+    invalid = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
+                             competency=f"能力{i}", projectName="虚构项目" if i == 6 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+    model = Model(json.dumps(invalid))
+    with pytest.raises(SimulationError) as failure:
+        generate(payload, lambda remaining: model)
+    assert failure.value.code == "INVALID_MODEL_OUTPUT"
+    assert len(model.prompts) == 1
+
+
+def test_resume_experience_anchor_is_allowed_without_evidence_card():
+    payload = request("VOICE_PLAN", marker="汇量科技")
+    payload["input"]["materials"]["experienceAnchors"] = ["汇量科技", "中康科技"]
+    plan = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
+                           competency=f"能力{i}", projectName="汇量科技" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+    result = generate(payload, lambda remaining: Model(json.dumps(plan)))
+    assert result["result"] == plan
+
+
+def test_model_markdown_json_is_safely_parsed():
+    response = "说明：\n```json\n{\"questionText\":\"如何验证缓存策略？\"}\n```\n"
+    assert generate(request(), lambda remaining: Model(response))["result"]["questionText"] == "如何验证缓存策略？"
+
+
+def test_operation_prompts_restore_quality_rules():
+    prompts = []
+    for operation in ("VOICE_PLAN", "VOICE_QUESTION", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP", "TEXT_FEEDBACK", "VOICE_FEEDBACK"):
+        value = {"feedback": "请补充证据。"} if "FEEDBACK" in operation else {"questionText": "如何验证？"}
+        if operation == "VOICE_PLAN":
+            value = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO", competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+        if operation == "VOICE_QUESTION":
+            value.update(type="FUNDAMENTAL", competency="原理", projectName="", technology="")
+        model = Model(json.dumps(value))
+        generate(request(operation), lambda remaining: model)
+        prompts.append(model.prompts[0])
+    assert "只规划，不直接出题" in prompts[0] and "资料优先级" in prompts[0]
+    assert "只出一道中文问题" in prompts[1] and "可独立回答" in prompts[1]
+    assert "同一能力点" in prompts[2]
+    assert "具体、可回答" in prompts[3]
+    assert "简短、具体、可执行" in prompts[4]
+    assert "不得推断语速、停顿、重复词或情绪" in prompts[5]
+
+
+def test_ungrounded_voice_question_project_is_not_normalized():
+    model = Model(json.dumps({"questionText": "请说明虚构项目。", "type": "FUNDAMENTAL", "competency": "原理", "projectName": "虚构项目", "technology": ""}))
+    with pytest.raises(SimulationError) as failure:
+        generate(request("VOICE_QUESTION"), lambda remaining: model)
+    assert failure.value.code == "INVALID_MODEL_OUTPUT"
+    assert len(model.prompts) == 1
 
 
 @pytest.mark.parametrize("field,value", [("version", "v2"), ("requestId", "bad"), ("operation", "PROMPT"), ("deadlineAtEpochMs", True)])
@@ -94,6 +143,12 @@ def test_deadline_and_provider_failures_do_not_retry():
         assert failure.value.code == code
         assert len(model.prompts) == 1
         assert "secret" not in str(failure.value)
+
+
+def test_timeout_log_identifies_the_model_attempt(caplog):
+    with pytest.raises(SimulationError):
+        generate(request("VOICE_PLAN"), lambda remaining: Model(TimeoutError()))
+    assert "operation=VOICE_PLAN attempt=1" in caplog.text
 
 
 def test_http_contract_auth_browser_denial_and_no_chat_tools(monkeypatch):
@@ -155,11 +210,11 @@ def test_async_model_is_cancelled_at_request_deadline():
 
 @pytest.mark.parametrize("operation", ["VOICE_PLAN", "VOICE_QUESTION", "VOICE_FEEDBACK", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP", "TEXT_FEEDBACK"])
 def test_each_operation_rejects_wrong_result_schema(operation):
-    model = Model('{"wrong":123}', '{"wrong":123}')
+    model = Model('{"wrong":123}')
     with pytest.raises(SimulationError) as failure:
         generate(request(operation), lambda remaining: model)
     assert failure.value.code == "INVALID_MODEL_OUTPUT"
-    assert len(model.prompts) == 2
+    assert len(model.prompts) == 1
 
 
 def test_lengths_and_missing_fields_are_rejected():
@@ -171,7 +226,8 @@ def test_lengths_and_missing_fields_are_rejected():
     del payload["input"]["answer"]
     with pytest.raises(SimulationError):
         validate_request(payload)
-    model = Model(json.dumps({"questionText": "长"*801}), json.dumps({"questionText": "长"*801}))
+    model = Model(json.dumps({"questionText": "长"*801}))
     with pytest.raises(SimulationError) as failure:
         generate(request(), lambda remaining: model)
     assert failure.value.code == "INVALID_MODEL_OUTPUT"
+    assert len(model.prompts) == 1

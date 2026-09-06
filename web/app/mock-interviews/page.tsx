@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -63,6 +63,7 @@ export default function MockInterviewsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [dialog, setDialog] = useState<"finish" | "abandon" | "resume" | null>(null);
+  const firstQuestionAnnounced = useRef(false);
 
   useEffect(() => {
     async function bootstrap() {
@@ -102,6 +103,13 @@ export default function MockInterviewsPage() {
     setAssessment(session?.currentQuestion?.selfAssessment ?? "UNCERTAIN");
   }, [session?.currentQuestion?.id]);
 
+  useEffect(() => {
+    if (session?.currentQuestionIndex === 1 && session.currentQuestion && !firstQuestionAnnounced.current) {
+      firstQuestionAnnounced.current = true;
+      setNotice("AI 已生成第一题。");
+    }
+  }, [session?.currentQuestion, session?.currentQuestionIndex]);
+
   function selectPackage(packageId: string) {
     const selected = packages.find((item) => item.id === packageId);
     setForm({
@@ -116,6 +124,7 @@ export default function MockInterviewsPage() {
     event.preventDefault();
     setSaving(true);
     setError("");
+    firstQuestionAnnounced.current = false;
     try {
       const created = await api<MockInterview>("/api/v1/mock-interviews", {
         method: "POST",
@@ -127,7 +136,6 @@ export default function MockInterviewsPage() {
         }),
       });
       setSession(created);
-      setNotice("AI 已生成第一题。");
     } catch (cause) {
       setError(message(cause, "模拟创建失败，请稍后重试。"));
     } finally {

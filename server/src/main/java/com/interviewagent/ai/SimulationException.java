@@ -4,9 +4,15 @@ import com.interviewagent.interview.ReviewFailedException;
 
 public class SimulationException extends ReviewFailedException {
     private final String code;
-    public SimulationException(String code) { super(message(code)); this.code = code; }
+    private final boolean retryable;
+    public SimulationException(String code) { this(code, code.equals("MODEL_TIMEOUT") || code.equals("MODEL_UNAVAILABLE")); }
+    public SimulationException(String code, boolean retryable) { super(message(code)); this.code = code; this.retryable = retryable; }
     public String code() { return code; }
-    public boolean retryable() { return code.equals("MODEL_TIMEOUT") || code.equals("MODEL_UNAVAILABLE"); }
+    public boolean retryable() { return retryable; }
+    public static boolean validRetryable(String code, boolean retryable) {
+        if (code.equals("MODEL_TIMEOUT") || code.equals("MODEL_UNAVAILABLE")) return retryable;
+        return code.equals("INVALID_MODEL_OUTPUT") || !retryable;
+    }
     public static String message(String code) {
         return switch (code) {
             case "INVALID_REQUEST" -> "模拟请求格式无效，请重新开始。";

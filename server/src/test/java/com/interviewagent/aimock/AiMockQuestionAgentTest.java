@@ -61,6 +61,12 @@ class AiMockQuestionAgentTest {
         while(array.size()>3) array.remove(array.size()-1);
         assertEquals(3,agent.parsePlan(three,true).size());
         assertThrows(RuntimeException.class,()->agent.parsePlan(three,false));
+        var missingProject=valid.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode)missingProject.path("plan").get(5)).put("projectName","");
+        assertThrows(RuntimeException.class,()->agent.parsePlan(missingProject,false));
+        var questionLikeAngle=valid.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode)questionLikeAngle.path("plan").get(0)).put("angle","如何处理？");
+        assertThrows(RuntimeException.class,()->agent.parsePlan(questionLikeAngle,false));
         for(String field:List.of("type","competency","order","technology","angle")) {
             var invalid=valid.deepCopy();
             var first=(com.fasterxml.jackson.databind.node.ObjectNode)invalid.path("plan").get(0);
@@ -91,6 +97,29 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
+    void projectMayUseResumeExperienceAnchorWithoutEvidenceCard() throws Exception {
+        var materials=json.readTree("{\"company\":\"汇量科技有限公司\",\"role\":\"视频剪辑岗位\",\"round\":\"一面\",\"jd\":\"岗位\",\"resume\":\"汇量科技 中康科技 个人自媒体运营\",\"cards\":[],\"experienceAnchors\":[\"汇量科技\",\"中康科技\",\"个人自媒体运营\",\"Loopit\"]}");
+        var plan=json.readTree(validPlan());
+        String[] anchors={"汇量科技","中康科技","个人自媒体运营","Loopit"};
+        for(int i=0;i<anchors.length;i++) ((com.fasterxml.jackson.databind.node.ObjectNode)plan.path("plan").get(5+i)).put("projectName",anchors[i]);
+        when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(plan);
+        assertEquals(10,agent.plan(materials).size());
+    }
+
+    @Test
+    void finalValidationRejectsLongOrCompoundQuestion() throws Exception {
+        var materials=json.readTree("{\"company\":\"公司\",\"role\":\"开发\",\"round\":\"一面\",\"jd\":\"岗位\",\"resume\":\"待补充\",\"cards\":[]}");
+        PlanItem slot=new PlanItem(1,"FUNDAMENTAL","事件循环","","浏览器","调度");
+        for(String text:List.of("长".repeat(201),"请说明事件循环如何工作？再说明微任务如何执行？")) {
+            when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenReturn(json.readTree("{\"questionText\":\""+text+"\",\"type\":\"FUNDAMENTAL\",\"competency\":\"事件循环\",\"projectName\":\"\",\"technology\":\"浏览器\"}"));
+            assertThrows(RuntimeException.class,()->agent.generate(materials,slot,List.of()));
+        }
+        PlanItem projectSlot=new PlanItem(6,"PROJECT","性能优化","","React","瓶颈定位");
+        when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenReturn(json.readTree("{\"questionText\":\"你如何定位订单平台的性能瓶颈？\",\"type\":\"PROJECT\",\"competency\":\"性能优化\",\"projectName\":\"\",\"technology\":\"React\"}"));
+        assertThrows(RuntimeException.class,()->agent.generate(materials,projectSlot,List.of(),true));
+    }
+
+    @Test
     void planAcceptsEquivalentModelJson() throws Exception {
         var root = json.readTree(validPlan()).get("plan").deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("order", "1");
@@ -116,6 +145,7 @@ class AiMockQuestionAgentTest {
             .andExpect(status().isCreated()).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
         worker.run();
         String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
+        retryNow(taskId); retryNow(taskId);
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-b"))))
@@ -135,12 +165,14 @@ class AiMockQuestionAgentTest {
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andReturn();
         worker.run();
-        String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
+        String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        String taskId = json.readTree(mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
+            .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).path("task").path("id").asText();
+        retryNow(taskId); retryNow(taskId);
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user' AND question_plan IS NOT NULL").query(Integer.class).single());
-        String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user' AND question_plan IS NOT NULL").query(Integer.class).single());
         assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
 
@@ -192,6 +224,20 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
+    void finishMarksEmptyAnswerAsUnanswered() throws Exception {
+        String packageId = packageFor("finish-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'finish-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
+            .param("id", sessionId).param("package", packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,confirmed_answer_text,state,sort_order) VALUES(:id,:session,'请介绍事件循环。','','ANSWERED',0)")
+            .param("id", questionId).param("session", sessionId).update();
+
+        mockMvc.perform(post("/api/v1/ai-mock-interviews/{id}/finish", sessionId).with(jwt().jwt(token -> token.subject("finish-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FINISHED"));
+        String finalId = jdbc.sql("SELECT final_interview_id FROM ai_mock_interviews WHERE id=:id").param("id", sessionId).query(String.class).single();
+        assertEquals("UNANSWERED", jdbc.sql("SELECT self_assessment FROM interview_questions WHERE interview_id=:id").param("id", finalId).query(String.class).single());
+    }
+
+    @Test
     void audioUploadAndDeleteRequireOwnership() throws Exception {
         String packageId = packageFor("audio-user"), sessionId = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,'audio-user',:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)").param("id", sessionId).param("package", packageId).update();
@@ -222,7 +268,17 @@ class AiMockQuestionAgentTest {
     private String packageFor(String user) {
         String id = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO interview_packages(id,user_id,company,role,interview_round) VALUES(:id,:user,'测试公司','前端开发','技术一面')").param("id", id).param("user", user).update();
+        for(String project:List.of("订单平台","支付平台","库存平台","发布平台")) {
+            String card=UUID.randomUUID().toString();
+            jdbc.sql("INSERT INTO project_evidence_cards(id,user_id,project_name,project_description_and_responsibilities,project_highlights,technology_stack) VALUES(:id,:user,:name,'负责开发','压测验证','Java')").param("id",card).param("user",user).param("name",project).update();
+            jdbc.sql("INSERT INTO interview_package_evidence_cards(interview_package_id,evidence_card_id) VALUES(:pack,:card)").param("pack",id).param("card",card).update();
+        }
         return id;
+    }
+
+    private void retryNow(String taskId) {
+        jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE id=:id AND status='PENDING'").param("id",taskId).update();
+        worker.run();
     }
 
     private static String validPlan() {
@@ -233,10 +289,10 @@ class AiMockQuestionAgentTest {
               {"order":3,"type":"FUNDAMENTAL","competency":"类型系统","projectName":"","technology":"TypeScript","angle":"类型收窄"},
               {"order":4,"type":"FUNDAMENTAL","competency":"组件更新","projectName":"","technology":"React","angle":"更新机制"},
               {"order":5,"type":"FUNDAMENTAL","competency":"工程构建","projectName":"","technology":"Vite","angle":"构建原理"},
-              {"order":6,"type":"PROJECT","competency":"性能定位","projectName":"","technology":"Performance API","angle":"定位方法"},
-              {"order":7,"type":"PROJECT","competency":"状态设计","projectName":"","technology":"Redux","angle":"状态边界"},
-              {"order":8,"type":"PROJECT","competency":"质量保障","projectName":"","technology":"Vitest","angle":"测试策略"},
-              {"order":9,"type":"PROJECT","competency":"发布流程","projectName":"","technology":"CI","angle":"发布控制"},
+              {"order":6,"type":"PROJECT","competency":"性能定位","projectName":"订单平台","technology":"Performance API","angle":"定位方法"},
+              {"order":7,"type":"PROJECT","competency":"状态设计","projectName":"支付平台","technology":"Redux","angle":"状态边界"},
+              {"order":8,"type":"PROJECT","competency":"质量保障","projectName":"库存平台","technology":"Vitest","angle":"测试策略"},
+              {"order":9,"type":"PROJECT","competency":"发布流程","projectName":"发布平台","technology":"CI","angle":"发布控制"},
               {"order":10,"type":"SCENARIO","competency":"线上故障处理","projectName":"","technology":"日志","angle":"故障排查"}
             ]}
             """;

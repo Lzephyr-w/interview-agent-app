@@ -3,10 +3,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+chcp 65001 > $null
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $agent = Join-Path $root "agent"
 $server = Join-Path $root "server"
 $web = Join-Path $root "web"
+$runtimeLogs = Join-Path $root "runtime-logs"
+New-Item -ItemType Directory -Path $runtimeLogs -Force | Out-Null
 
 foreach ($path in @($agent, $server, $web)) {
     if (-not (Test-Path -LiteralPath $path -PathType Container)) {
@@ -18,10 +23,13 @@ if (-not $NoCheck -and -not (Test-Path -LiteralPath (Join-Path $agent ".env.loca
     Write-Warning "Missing agent/.env.local. Configure the Agent key and model variables first."
 }
 
-function Start-DevTerminal([string]$directory, [string]$command) {
+function Start-DevTerminal([string]$directory, [string]$command, [string]$logFile) {
+    $logFileLiteral = ConvertTo-PowerShellLiteral $logFile
+    $utf8 = '$OutputEncoding=[System.Text.UTF8Encoding]::new();[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();chcp 65001 > $null;'
+    $command = "$utf8 $command 2>&1 | Tee-Object -FilePath $logFileLiteral -Append"
     Start-Process -FilePath "powershell.exe" -WorkingDirectory $directory -ArgumentList @(
         "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command
-    ) -WindowStyle Hidden | Out-Null
+    ) -WindowStyle Normal | Out-Null
 }
 
 function Resolve-CommandPath([string[]]$names) {
@@ -126,9 +134,9 @@ if (-not [string]::IsNullOrWhiteSpace($javaHome) -and (Test-Path -LiteralPath (J
     $serverCommand = "`$env:JAVA_HOME=$javaHomeLiteral; `$env:Path=($(ConvertTo-PowerShellLiteral (Join-Path $javaHome 'bin')) + ';' + `$env:Path); $serverCommand"
 }
 
-Start-DevTerminal $agent $agentCommand
-Start-DevTerminal $server $serverCommand
-Start-DevTerminal $web "pnpm dev"
+Start-DevTerminal $agent $agentCommand (Join-Path $runtimeLogs "agent.log")
+Start-DevTerminal $server $serverCommand (Join-Path $runtimeLogs "server.log")
+Start-DevTerminal $web "pnpm dev" (Join-Path $runtimeLogs "web.log")
 
 Write-Host "Python: $agentPython"
 Write-Host "Maven: $mavenCommand"

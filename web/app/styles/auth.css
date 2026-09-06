@@ -46,6 +46,23 @@
   font-family: Georgia, "Songti SC", serif;
   font-size: 20px;
 }
+.brand .brand-mark {
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  color: inherit;
+  background: transparent;
+  border-radius: 0;
+}
+.brand .brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+:root[data-theme="dark"] .brand .brand-mark img {
+  content: url("/images/ai-assistant-light.png");
+}
 .brand small {
   display: block;
   color: var(--muted);

@@ -20,6 +20,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class AgentPythonClient {
     private static final Logger log = LoggerFactory.getLogger(AgentPythonClient.class);
+    static final long SIMULATION_HTTP_TIMEOUT_MS = 70_000;
+    static final long SIMULATION_RESPONSE_RESERVE_MS = 4_000;
     private final ObjectMapper json;
     private final String url;
     private final String key;
@@ -46,7 +48,7 @@ public class AgentPythonClient {
     }
 
     public JsonNode simulate(String operation, Map<String, Object> input) {
-        return simulate(operation, input, System.currentTimeMillis()+70_000);
+        return simulate(operation, input, System.currentTimeMillis()+SIMULATION_HTTP_TIMEOUT_MS);
     }
 
     JsonNode simulate(String operation, Map<String, Object> input, long deadline) {
@@ -54,10 +56,13 @@ public class AgentPythonClient {
         long started=System.currentTimeMillis();
         try {
             SimulationContract.input(operation,json.valueToTree(input));
-            long remaining=Math.min(deadline,started+70_000)-System.currentTimeMillis();
+            long httpDeadline=Math.min(deadline,started+SIMULATION_HTTP_TIMEOUT_MS);
+            long remaining=httpDeadline-System.currentTimeMillis();
             if (remaining<=0) throw new SimulationException("MODEL_TIMEOUT");
+            long modelDeadline=httpDeadline-SIMULATION_RESPONSE_RESERVE_MS;
+            if (modelDeadline<=System.currentTimeMillis()) throw new SimulationException("MODEL_TIMEOUT");
             if (url.isBlank() || key.isBlank()) throw new SimulationException("MODEL_UNAVAILABLE");
-            String body=json.writeValueAsString(Map.of("version","simulation.v1","requestId",requestId,"operation",operation,"deadlineAtEpochMs",Math.min(deadline,started+70_000),"input",input));
+            String body=json.writeValueAsString(Map.of("version","simulation.v1","requestId",requestId,"operation",operation,"deadlineAtEpochMs",modelDeadline,"input",input));
             var request=HttpRequest.newBuilder(URI.create(url+"/v1/agent/simulations"))
                 .timeout(Duration.ofMillis(remaining)).header("X-Agent-Key",key).header("Content-Type","application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build();
@@ -73,13 +78,14 @@ public class AgentPythonClient {
                 SimulationContract.fields(error,"code","message","retryable");
                 String errorCode=SimulationContract.text(error,"code",40,false);
                 SimulationContract.text(error,"message",240,false);
+                boolean retryable=error.path("retryable").asBoolean();
                 if (!SimulationContract.CODES.contains(errorCode) || !error.path("retryable").isBoolean()
-                    || error.path("retryable").asBoolean()!=new SimulationException(errorCode).retryable()) throw SimulationContract.invalid();
-                throw new SimulationException(errorCode);
+                    || !SimulationException.validRetryable(errorCode,retryable)) throw SimulationContract.invalid();
+                throw new SimulationException(errorCode,retryable);
             }
             SimulationContract.fields(envelope,"version","requestId","result");
             if (response.statusCode()!=200) throw SimulationContract.invalid();
-            SimulationContract.result(operation,envelope.path("result"));
+            SimulationContract.modelResult(operation,envelope.path("result"));
             return envelope.path("result");
         } catch (SimulationException error) { code=error.code(); throw error;
         } catch (HttpTimeoutException error) { code="MODEL_TIMEOUT"; throw new SimulationException(code);

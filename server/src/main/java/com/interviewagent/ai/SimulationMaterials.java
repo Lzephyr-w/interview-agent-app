@@ -3,6 +3,9 @@ package com.interviewagent.ai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.NoSuchElementException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
@@ -28,6 +31,7 @@ public class SimulationMaterials {
             cards.add(card);
         }
         if(cards.toString().length()>16000) throw new IllegalArgumentException("证据卡内容过长，请精简后开始。");
+        addExperienceAnchors(result, selected);
         return result;
     }
     public JsonNode read(String snapshot,String user,String packageId) {
@@ -35,4 +39,22 @@ public class SimulationMaterials {
         try { return json.readTree(snapshot); } catch (Exception error) { throw new SimulationException("INVALID_REQUEST"); }
     }
     private static String clip(String text,int limit) { return text==null||text.isBlank()?"待补充":text.substring(0,Math.min(text.length(),limit)); }
+
+    private static void addExperienceAnchors(ObjectNode materials, java.util.List<ObjectNode> cards) {
+        ArrayNode anchors=materials.putArray("experienceAnchors");
+        Set<String> values=new LinkedHashSet<>();
+        addAnchor(values,materials.path("company").asText());
+        addAnchor(values,materials.path("role").asText());
+        for(ObjectNode card:cards) addAnchor(values,card.path("projectName").asText());
+        // Resume parsers preserve line breaks; short header-like segments are stable, selectable facts.
+        for(String line:materials.path("resume").asText().split("[\\r\\n|｜·•]+")) {
+            String value=line.replaceAll("^[\\s：:、，,；;]+|[\\s：:、，,；;]+$", "").trim();
+            if(value.length()>=2 && value.length()<=40 && !value.matches("[\\d年月日.\\-_/ ]+")) addAnchor(values,value);
+        }
+        values.stream().limit(40).forEach(anchors::add);
+    }
+
+    private static void addAnchor(Set<String> values,String value) {
+        if(value!=null && !value.isBlank() && !Set.of("待补充","暂无","无","未提供","N/A","NA").contains(value.trim().toUpperCase())) values.add(value.trim());
+    }
 }

@@ -273,15 +273,15 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 
 成功响应为 `{version, requestId, result}`；失败响应为 `{version, requestId, error: {code, message, retryable}}`。错误码仅为 INVALID_REQUEST、MODEL_TIMEOUT、MODEL_UNAVAILABLE、INVALID_MODEL_OUTPUT、UNAUTHORIZED、INTERNAL_ERROR；Java 使用本地稳定中文提示，不透传供应商异常。
 
-- Java 是唯一业务事实来源：JWT 归属校验、资料授权和裁剪、会话/任务/时限、事务、幂等、题数顺序和最终校验。问题最多 800 字符，反馈最多 600 字符，题目元数据最多 120 字符，计划角度最多 200 字符；非法结果不落库。文本保持 4 道主问题、每题最多 1 次追问；语音固定前 5 题基础、随后 4 题项目、最后 1 题场景或行为。
+- Java 是唯一业务事实来源：JWT 归属校验、资料授权和裁剪、会话/任务/时限、事务、幂等、题数顺序和最终校验。wire 上问题最多 800 字符，业务质量上问题正文最多 200 字符且最多一个问号；反馈最多两句，题目元数据最多 120 字符，计划字段不得承载问题；非法结果不落库。新会话的 PROJECT 槽位和题目必须引用冻结快照中的真实项目。文本保持 4 道主问题、每题最多 1 次追问；语音固定前 5 题基础、随后 4 题项目、最后 1 题场景或行为。
 - V24 在两个会话表增加 `material_snapshot`，创建事务内冻结公司、岗位、轮次、JD（8,000 字符）、已解析简历（12,000 字符）和证据卡四字段。最多 30 张证据卡，按固定预算分摊裁剪描述/亮点/技术栈并保留项目名；超限明确报错。后续修改资料不改变本场出题或反馈的输入。
 - V24 给语音会话增加 `generation_version`：历史默认 LEGACY，新建显式写 SIMULATION_AGENT_V1。只有 LEGACY 能读取旧 3 题/无计划数据；新会话始终返回 10 题并拒绝 3 项计划。无快照的历史会话继续按原授权关联查询，不回填伪快照。
-- Python 的小型无状态 simulation 模块负责固定 Prompt、LangChain 模型调用、JSON 解析和至多一次格式修正。不复用通用聊天 AgentRuntime，不调用 Java 工具、不连接数据库，不存储会话。
-- 每次模拟 HTTP 请求预算 70 秒，Python 按统一 deadline 取消模型等待，并关闭模型 SDK 自动重试；仅格式非法可初次调用加一次修正。MODEL_TIMEOUT/MODEL_UNAVAILABLE 由现有 ai_mock_tasks 进行最多 3 次自动尝试，间隔 5 秒、15 秒；V24 的 available_at 防止忙轮询。手动重试复用同一任务/资源并重置尝试次数。通用聊天的 90 秒策略不变。
+- Python 的小型无状态 simulation 模块负责固定 Prompt、simulation 专用 JSON mode 和 Markdown 围栏/说明容错解析；每个请求只调用模型一次。不复用通用聊天 AgentRuntime，不调用 Java 工具、不连接数据库，不存储会话。
+- 每次模拟 HTTP 请求预算 70 秒，Python 按统一 deadline 取消模型等待，并关闭模型 SDK 自动重试；JSON 或结构非法返回可重试错误，由现有 ai_mock_tasks 完成新的完整尝试。MODEL_TIMEOUT、MODEL_UNAVAILABLE 和 Java 业务质量拒绝均最多自动尝试 3 次，间隔 5 秒、15 秒；V24 的 available_at 防止忙轮询。手动重试复用同一任务/资源并重置尝试次数。通用聊天的 90 秒策略不变。
 - 短事务在写入前锁定会话并核验任务令牌和两分钟租约；长模型调用不占数据库事务。会话过期统一转换 TIME_EXPIRED 并取消无意义任务，过期或旧 worker 的结果不可写入。处理中禁止结束保存；FAILED 可重试或结束保存已答内容；重复 finish 返回同一记录。
 - V24 另增加语音题目的 ai_feedback，用于确认文本的逐题反馈；录音反馈同时保留在原音频记录中，重试复用已保存转写。无词级时间戳，不推断语速、停顿或情绪。
 - 日志只记录关联 ID、操作、结果码、错误类别和耗时，不记录资料/回答/模型原文。AI 复盘、录音导入和薄弱点分析仍使用 ReviewModelClient；通用对话仍使用 /v1/agent/reply。
 
 未做：不合并“10 题计划 + 首题”；不增加依赖、Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer、第二套会话存储或流式输出。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
 
-创建仍发起两次独立模型请求；计划和首题都通过 Java 校验后才在短事务中一起落库，首题失败不留下计划。该一致性保护不包含合并模型请求的性能优化。
+创建仍发起两次独立模型请求：AI_PLAN 先通过 Java 校验并落库，再由独立的 AI_FIRST 任务生成首题。首题失败保留已校验计划并按同一任务有限重试；该流程不等同于合并模型请求的性能优化。

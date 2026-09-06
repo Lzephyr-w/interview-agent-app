@@ -34,7 +34,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="app-shell">
       <aside className="app-sidebar">
         <Link className="sidebar-brand" href="/">
-          <span className="brand-mark">面</span>
+          <span className="brand-mark">
+            <img src="/images/ai-assistant.png" alt="" />
+          </span>
           <span>
             面试助手<small>INTERVIEW ASSISTANT</small>
           </span>

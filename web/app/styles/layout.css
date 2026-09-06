@@ -24,11 +24,12 @@
 .sidebar-brand {
   display: flex;
   margin: -28px -18px 0;
-  padding: 28px 18px;
+  padding: 20px 18px;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
   font-weight: 800;
-  letter-spacing: -0.02em;
+  font-size: 20px;
+  letter-spacing: 0.02em;
   border-bottom: 1px solid var(--line);
 }
 .sidebar-brand small {
@@ -37,6 +38,23 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.08em;
+}
+.sidebar-brand .brand-mark {
+  width: 55px;
+  height: 55px;
+  overflow: hidden;
+  color: inherit;
+  background: transparent;
+  border-radius: 0;
+}
+.sidebar-brand .brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+:root[data-theme="dark"] .sidebar-brand .brand-mark img {
+  content: url("/images/ai-assistant-light.png");
 }
 .sidebar-nav {
   display: grid;
