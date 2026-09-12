@@ -58,6 +58,7 @@ class SimulationWorkflowTest {
         var result=json.createObjectNode(); var list=result.putArray("plan");
         for(int i=1;i<=10;i++) list.addObject().put("order",i).put("type",i<=5?"FUNDAMENTAL":i<=9?"PROJECT":"SCENARIO")
             .put("competency","能力"+i).put("projectName",i>=6&&i<=9?projects.get(i-6).path("projectName").asText():"").put("technology","技术"+i).put("angle","角度"+i);
+        result.putObject("firstQuestion").put("questionText","浏览器如何调度微任务？").put("type","FUNDAMENTAL").put("competency","能力1").put("projectName","").put("technology","技术1");
         return result;
     }
     String pack(String user) {
@@ -80,6 +81,109 @@ class SimulationWorkflowTest {
     }
     JsonNode getSession(String user,String id,boolean voice) throws Exception {
         return json.readTree(mvc.perform(get("/api/v1/"+(voice?"ai-mock-interviews/":"mock-interviews/")+id).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+    }
+
+    @Test void newVoicePlanWritesFirstQuestionWithOneModelCall() throws Exception {
+        String user="one-call",id=create(user,true,pack(user)).path("id").asText();
+        worker.run();
+        verify(agent,times(1)).simulate(eq("VOICE_PLAN"),anyMap());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='AI_FIRST'").param("id",id).query(Integer.class).single());
+    }
+
+    @Test void textAnswerAdvancesBeforeFeedbackAndKeepsFollowupAnswerable() throws Exception {
+        String user="text-p0",id=create(user,false,pack(user)).path("id").asText();
+        worker.run();
+        String first=getSession(user,id,false).path("currentQuestion").path("id").asText();
+        clearInvocations(agent);
+        doThrow(new SimulationException("MODEL_TIMEOUT")).when(agent).simulate(eq("TEXT_FEEDBACK"),anyMap());
+        postJson(user,"/api/v1/mock-interviews/"+id+"/answer","{\"questionId\":\""+first+"\",\"answerText\":\"我负责缓存方案和上线验证。\",\"selfAssessment\":\"GOOD\"}",200);
+        JsonNode submitted=getSession(user,id,false);
+        assertEquals("MOCK_NEXT",submitted.path("task").path("taskType").asText());
+        assertTrue(submitted.path("currentQuestion").isNull());
+        assertEquals("我负责缓存方案和上线验证。",jdbc.sql("SELECT answer_text FROM mock_interview_questions WHERE id=:id").param("id",first).query(String.class).single());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='MOCK_NEXT'").param("id",id).query(Integer.class).single());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='MOCK_FEEDBACK'").param("id",id).query(Integer.class).single());
+
+        worker.run();
+        JsonNode advanced=getSession(user,id,false);
+        assertEquals("FOLLOW_UP",advanced.path("currentQuestion").path("questionKind").asText());
+        assertEquals("MOCK_FEEDBACK",advanced.path("task").path("taskType").asText());
+        assertEquals("PENDING",advanced.path("task").path("status").asText());
+        assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertEquals("",jdbc.sql("SELECT ai_feedback FROM mock_interview_questions WHERE id=:id").param("id",first).query(String.class).single());
+        var order=inOrder(agent);
+        order.verify(agent).simulate(eq("TEXT_FOLLOW_UP"),anyMap());
+        order.verify(agent).simulate(eq("TEXT_FEEDBACK"),anyMap());
+
+        String followup=advanced.path("currentQuestion").path("id").asText();
+        JsonNode second=postJson(user,"/api/v1/mock-interviews/"+id+"/answer","{\"questionId\":\""+followup+"\",\"answerText\":\"我补充了线上效果验证。\",\"selfAssessment\":\"GOOD\"}",200);
+        assertEquals("MOCK_NEXT",second.path("task").path("taskType").asText());
+        assertTrue(second.path("currentQuestion").isNull());
+        assertEquals("我补充了线上效果验证。",jdbc.sql("SELECT answer_text FROM mock_interview_questions WHERE id=:id").param("id",followup).query(String.class).single());
+    }
+
+    @Test void textNextFailureKeepsAnswerAndDoesNotInsertDuplicateQuestion() throws Exception {
+        String user="text-next-failure",id=create(user,false,pack(user)).path("id").asText();
+        worker.run();
+        String first=getSession(user,id,false).path("currentQuestion").path("id").asText();
+        doThrow(new SimulationException("MODEL_TIMEOUT")).when(agent).simulate(eq("TEXT_FOLLOW_UP"),anyMap());
+        postJson(user,"/api/v1/mock-interviews/"+id+"/answer","{\"questionId\":\""+first+"\",\"answerText\":\"已保存的回答。\",\"selfAssessment\":\"GOOD\"}",200);
+        worker.run();
+        var task=tasks.latest(user,id);
+        assertEquals("MOCK_NEXT",task.taskType());
+        assertEquals("PENDING",task.status());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertEquals("已保存的回答。",jdbc.sql("SELECT answer_text FROM mock_interview_questions WHERE id=:id").param("id",first).query(String.class).single());
+        for(int attempt=2;attempt<=3;attempt++) {
+            jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",task.id()).update();
+            worker.run();
+            task=tasks.latest(user,id);
+            assertEquals(attempt<3?"PENDING":"FAILED",task.status());
+            assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        }
+        JsonNode finished=postJson(user,"/api/v1/mock-interviews/"+id+"/finish","",200);
+        String formal=finished.path("formalInterviewId").asText();
+        assertEquals("已保存的回答。",jdbc.sql("SELECT answer_text FROM interview_questions WHERE interview_id=:id").param("id",formal).query(String.class).single());
+    }
+
+    @Test void legacyMockAnswerRetryBackfillsSplitTasksIdempotently() throws Exception {
+        String user="legacy-text-answer",id=create(user,false,pack(user)).path("id").asText();
+        worker.run();
+        String first=getSession(user,id,false).path("currentQuestion").path("id").asText();
+        postJson(user,"/api/v1/mock-interviews/"+id+"/answer","{\"questionId\":\""+first+"\",\"answerText\":\"旧任务回答。\",\"selfAssessment\":\"GOOD\"}",200);
+        jdbc.sql("DELETE FROM ai_mock_tasks WHERE resource_id=:id").param("id",id).update();
+        String old=UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_tasks(id,user_id,task_type,resource_id,related_id,status,max_attempts) VALUES(:id,:user,'MOCK_ANSWER',:resource,:related,'PENDING',3)")
+            .param("id",old).param("user",user).param("resource",id).param("related",first).update();
+        clearInvocations(agent);
+        var claimed=tasks.claim();
+        text.processTask(claimed);
+        tasks.fail(claimed,new SimulationException("INVALID_MODEL_OUTPUT",false));
+        tasks.retry(user,old);
+        worker.run();
+        assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='MOCK_NEXT'").param("id",id).query(Integer.class).single());
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='MOCK_FEEDBACK'").param("id",id).query(Integer.class).single());
+        assertEquals("旧任务回答。",jdbc.sql("SELECT answer_text FROM mock_interview_questions WHERE id=:id").param("id",first).query(String.class).single());
+        assertEquals("请补充可验证的测试证据。",jdbc.sql("SELECT ai_feedback FROM mock_interview_questions WHERE id=:id").param("id",first).query(String.class).single());
+        verify(agent,times(1)).simulate(eq("TEXT_FOLLOW_UP"),anyMap());
+        verify(agent,times(1)).simulate(eq("TEXT_FEEDBACK"),anyMap());
+    }
+
+    @Test void historicalFirstAndCreateTasksStillAdvance() throws Exception {
+        String firstUser="legacy-first",firstId=create(firstUser,true,pack(firstUser)).path("id").asText();
+        String firstTask=jdbc.sql("SELECT id FROM ai_mock_tasks WHERE resource_id=:id").param("id",firstId).query(String.class).single();
+        String projectJson="[{\"projectName\":\""+firstUser+"项目1\"},{\"projectName\":\""+firstUser+"项目2\"},{\"projectName\":\""+firstUser+"项目3\"},{\"projectName\":\""+firstUser+"项目4\"}]";
+        jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan WHERE id=:id").param("id",firstId).param("plan",plan(json.readTree(projectJson)).toString()).update();
+        jdbc.sql("UPDATE ai_mock_tasks SET task_type='AI_FIRST' WHERE id=:id").param("id",firstTask).update();
+        worker.run();
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",firstId).query(Integer.class).single());
+
+        String createUser="legacy-create",createId=create(createUser,true,pack(createUser)).path("id").asText();
+        jdbc.sql("UPDATE ai_mock_tasks SET task_type='AI_CREATE' WHERE resource_id=:id").param("id",createId).update();
+        worker.run();
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",createId).query(Integer.class).single());
     }
 
     @Test void allOperationsUseFrozenIsolatedSnapshots() throws Exception {
@@ -124,6 +228,18 @@ class SimulationWorkflowTest {
         assertEquals(0,tasks.get(user,failed.id()).attempts());
         assertEquals("PENDING",tasks.get(user,failed.id()).status());
         assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id").param("id",session).query(Integer.class).single());
+    }
+
+    @Test void reclaimingTaskClearsPreviousError() throws Exception {
+        String user="reclaim",session=create(user,false,pack(user)).path("id").asText();
+        when(agent.simulate(anyString(),anyMap())).thenThrow(new SimulationException("MODEL_UNAVAILABLE"));
+        worker.run();
+        var pending=tasks.latest(user,session);
+        jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",pending.id()).update();
+        var claimed=tasks.claim();
+        assertEquals("PROCESSING",tasks.get(user,claimed.id()).status());
+        assertEquals("",tasks.get(user,claimed.id()).error());
+        tasks.fail(claimed,new SimulationException("MODEL_UNAVAILABLE"));
     }
 
     @Test void bothFlowsBlockBusyFinishAllowFailedAndFinishIdempotently() throws Exception {
@@ -184,9 +300,10 @@ class SimulationWorkflowTest {
             doThrow(new SimulationException("INVALID_MODEL_OUTPUT")).when(agent).simulate(eq(voice?"VOICE_FEEDBACK":"TEXT_FEEDBACK"),anyMap());
             worker.run();
             assertEquals("FAILED",tasks.latest(user,id).status());
+            if (voice) assertNotNull(getSession(user,id,true).path("currentQuestion").path("id").asText(null));
             var done=postJson(user,"/api/v1/"+(voice?"ai-mock-interviews/":"mock-interviews/")+id+"/finish","",200);
             String formal=done.path(voice?"finalInterviewId":"formalInterviewId").asText();
-            assertEquals("已确认的真实回答",jdbc.sql("SELECT answer_text FROM interview_questions WHERE interview_id=:id").param("id",formal).query(String.class).single());
+            assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM interview_questions WHERE interview_id=:id AND answer_text='已确认的真实回答'").param("id",formal).query(Integer.class).single());
         }
     }
 
@@ -207,12 +324,15 @@ class SimulationWorkflowTest {
             .file(new org.springframework.mock.web.MockMultipartFile("file","answer.wav","audio/wav",bytes)).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
         worker.run();
         assertEquals("PENDING",tasks.latest(user,id).status());
+        assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertNotNull(getSession(user,id,true).path("currentQuestion").path("id").asText(null));
         jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE resource_id=:id").param("id",id).update();
         worker.run();
         verify(transcription,times(1)).transcribe(eq(user),any(byte[].class),eq("audio/wav"));
         verify(storage,times(1)).upload(anyString(),eq("audio/wav"),any(byte[].class));
         assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE ai_mock_interview_id=:id AND status='READY'").param("id",id).query(Integer.class).single());
         assertEquals("我先压测再核对监控。",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
+        assertEquals("请补充压测证据。",jdbc.sql("SELECT feedback FROM ai_mock_audio_assets WHERE question_id=:id").param("id",q).query(String.class).single());
         assertNull(tasks.latest(user,id));
     }
 
@@ -329,9 +449,11 @@ class SimulationWorkflowTest {
             jdbc.sql("UPDATE ai_mock_tasks SET worker_token='replacement' WHERE resource_id=:id AND status='PROCESSING'").param("id",id).update();
             return json.createObjectNode().put("feedback","旧worker的反馈");
         }).when(agent).simulate(eq("TEXT_FEEDBACK"),anyMap());
+        var next=tasks.claim();
+        text.processTask(next); tasks.complete(next);
         var task=tasks.claim();
         assertThrows(IllegalStateException.class,()->text.processTask(task));
         assertEquals("",jdbc.sql("SELECT ai_feedback FROM mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
-        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
+        assertEquals(2,jdbc.sql("SELECT COUNT(*) FROM mock_interview_questions WHERE mock_interview_id=:id").param("id",id).query(Integer.class).single());
     }
 }

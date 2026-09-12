@@ -20,11 +20,22 @@ class AiMockQuestionAgent {
     AiMockQuestionAgent(AgentPythonClient model, ObjectMapper json) { this.model = model; this.json = json; }
 
     List<PlanItem> plan(JsonNode materials) {
+        return planAndFirst(materials).plan();
+    }
+
+    PlanAndFirst planAndFirst(JsonNode materials) {
         JsonNode result=model.simulate("VOICE_PLAN",Map.of("materials",materials,"history",List.of()));
         try {
+            SimulationContract.modelResult("VOICE_PLAN",result);
             List<PlanItem> plan=parsePlan(result,false);
             if (plan.stream().anyMatch(item -> !item.projectName.isBlank() && !grounded(item.projectName,materials))) throw invalidPlan("project_name_not_grounded");
-            return plan;
+            QuestionDraft first=parseQuestion(result.path("firstQuestion"));
+            String error=qualityError(first,plan.getFirst(),List.of());
+            if (error != null) throw invalidQuestion(error);
+            return new PlanAndFirst(List.copyOf(plan),first);
+        } catch (com.interviewagent.ai.SimulationException error) {
+            if ("INVALID_MODEL_OUTPUT".equals(error.code())) throw SimulationContract.retryableInvalid();
+            throw error;
         } catch (RuntimeException error) { throw SimulationContract.retryableInvalid(); }
     }
 
@@ -46,7 +57,6 @@ class AiMockQuestionAgent {
     }
 
     List<PlanItem> parsePlan(JsonNode root, boolean legacy) {
-        if (!legacy) try { SimulationContract.result("VOICE_PLAN",root); } catch (com.interviewagent.ai.SimulationException error) { throw invalidPlan("wire_schema"); }
         JsonNode items = legacy && root.isArray() ? root : root.path("plan");
         if (legacy && items.isTextual()) {
             try { items=json.readTree(items.asText()); } catch(Exception ignored) { throw invalidPlan("legacy_json"); }
@@ -56,9 +66,11 @@ class AiMockQuestionAgent {
         Set<String> competencies=new HashSet<>();
         for(int i=0;i<items.size();i++) {
             JsonNode node=items.get(i);
+            if (!legacy && !node.path("order").isIntegralNumber()) throw invalidPlan("order");
             PlanItem item=new PlanItem(requiredInt(node,"order"),required(node,"type").toUpperCase(Locale.ROOT),required(node,"competency"),projectName(node),text(node,"technology"),required(node,"angle"));
             if(item.order!=i+1) throw invalidPlan("order");
             if(!TYPES.contains(item.type)) throw invalidPlan("type");
+            if(item.competency.length()>80 || item.technology.length()>80 || item.angle.length()>80 || hasQuestionMark(item.competency) || hasQuestionMark(item.technology) || hasQuestionMark(item.angle)) throw invalidPlan("plan_text");
             if(!competencies.add(normalize(item.competency))) throw invalidPlan("duplicate_competency");
             if (!legacy) {
                 if (!(i<5 ? item.type.equals("FUNDAMENTAL") : i<9 ? item.type.equals("PROJECT") : Set.of("SCENARIO","BEHAVIORAL").contains(item.type))) throw invalidPlan("type_distribution");
@@ -119,6 +131,7 @@ class AiMockQuestionAgent {
     private static RuntimeException invalidQuestion(String reason) { log.warn("AI VOICE_QUESTION rejected reason={}", reason); return SimulationContract.invalid(); }
     private static boolean same(String left, String right) { return !normalize(left).isBlank() && normalize(left).equals(normalize(right)); }
     private static String normalize(String text) { return text == null ? "" : text.replaceAll("[^\\p{L}\\p{N}]", "").toLowerCase(Locale.ROOT); }
+    private static boolean hasQuestionMark(String text) { return text.indexOf('?')>=0 || text.indexOf('？')>=0; }
     private static String sentencePattern(String text) { String value = normalize(text); return value.substring(0, Math.min(6, value.length())); }
     private static double similarity(String left, String right) { if (left.length() < 2 || right.length() < 2) return 0; Set<String> a = grams(left), b = grams(right), both = new HashSet<>(a); both.retainAll(b); Set<String> all = new HashSet<>(a); all.addAll(b); return all.isEmpty() ? 0 : (double) both.size() / all.size(); }
     private static Set<String> grams(String text) { Set<String> result = new HashSet<>(); for (int i = 1; i < text.length(); i++) result.add(text.substring(i - 1, i + 1)); return result; }
@@ -130,6 +143,7 @@ class AiMockQuestionAgent {
     }
 
     record PlanItem(int order, String type, String competency, String projectName, String technology, String angle) {}
+    record PlanAndFirst(List<PlanItem> plan, QuestionDraft firstQuestion) {}
     record QuestionDraft(String questionText, String type, String competency, String projectName, String technology) {}
     record QuestionHistory(String questionText, String type, String competency, String projectName, String technology) {}
 }

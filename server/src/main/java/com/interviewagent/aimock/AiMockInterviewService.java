@@ -84,16 +84,18 @@ public class AiMockInterviewService {
             return;
         }
         tasks.check();
-        List<PlanItem> plan=questionAgent.plan(snapshot(userId,s));
+        PlanAndFirst planned=questionAgent.planAndFirst(snapshot(userId,s));
         tasks.write(() -> {
+            if (hasQuestion(id,0)) return;
             int updated=jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND question_plan IS NULL")
-                .param("plan",questionAgent.serialize(plan)).param("id",id).param("user",userId).update();
-            if (updated==1 || !hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null);
+                .param("plan",questionAgent.serialize(planned.plan())).param("id",id).param("user",userId).update();
+            if (updated==1) insertQuestion(id,0,planned.firstQuestion());
         });
     }
 
     private void processFirst(String userId, String id) {
-        addQuestion(userId,id,0);
+        SessionRow s=session(userId,id);
+        if (s.plan==null) processPlan(userId,id); else addQuestion(userId,id,0);
     }
 
     void processNext(String userId,String id,String questionId) {
@@ -104,12 +106,18 @@ public class AiMockInterviewService {
     void processFeedback(String userId,String id,String questionId) {
         QuestionRow q=question(userId,id,questionId);
         if (!q.state.equals("ANSWERED")) return;
+        // Compatibility for an answer created before NEXT was split from FEEDBACK.
+        if (q.sortOrder+1<questionLimit(session(userId,id)) && !hasQuestion(id,q.sortOrder+1))
+            tasks.write(() -> { if (!hasQuestion(id,q.sortOrder+1)) tasks.enqueue(userId,"AI_NEXT",id,q.id); });
         if (q.feedback.isBlank()) {
             String feedback=feedback(userId,session(userId,id),q,q.answer);
-            tasks.write(() -> jdbc.sql("UPDATE ai_mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
-                .param("id",q.id).param("feedback",feedback).update());
+            tasks.write(() -> {
+                int updated=jdbc.sql("UPDATE ai_mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
+                    .param("id",q.id).param("feedback",feedback).update();
+                if (updated>0) jdbc.sql("UPDATE ai_mock_audio_assets SET feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE user_id=:user AND question_id=:question AND status='READY'")
+                    .param("user",userId).param("question",q.id).param("feedback",feedback).update();
+            });
         }
-        addQuestion(userId,id,q.sortOrder+1);
     }
 
     void processAudio(String userId,String id,String assetId) {
@@ -124,14 +132,18 @@ public class AiMockInterviewService {
             byte[] bytes=saved.isBlank()?loadAudio(asset.path):null;
             String detected=saved.isBlank()?(silentWav(bytes,asset.type)?"":transcribeOrEmpty(userId,bytes,asset.type)):saved;
             final String transcript=detected.isBlank()?"":limited(detected,"转写文本",MAX_TRANSCRIPT_CHARS);
-            tasks.write(() -> jdbc.sql("UPDATE ai_mock_audio_assets SET transcript=:text WHERE id=:id AND status='TRANSCRIBING'").param("id",assetId).param("text",transcript).update());
-            String feedback=transcript.isBlank()?"":feedback(userId,session(userId,id),q,transcript);
             tasks.write(() -> {
                 if (!Set.of("OPEN","TRANSCRIBING").contains(question(userId,id,q.id).state)) return;
-                jdbc.sql("UPDATE ai_mock_audio_assets SET status='READY',feedback=:feedback,transcript_error='',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND status='TRANSCRIBING'")
-                    .param("id",assetId).param("feedback",feedback).update();
-                jdbc.sql("UPDATE ai_mock_interview_questions SET ai_feedback=:feedback WHERE id=:id").param("id",q.id).param("feedback",feedback).update();
-                answer(userId,id,q,transcript,false);
+                int assetUpdated=jdbc.sql("UPDATE ai_mock_audio_assets SET status='READY',transcript=:text,transcript_error='',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND status='TRANSCRIBING'")
+                    .param("id",assetId).param("text",transcript).update();
+                if (assetUpdated==0) return;
+                int answerUpdated=jdbc.sql("UPDATE ai_mock_interview_questions SET confirmed_answer_text=:answer,state='ANSWERED',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state IN ('OPEN','TRANSCRIBING','READY_TO_CONFIRM')")
+                    .param("answer",transcript).param("id",q.id).update();
+                if (answerUpdated>0) {
+                    SessionRow current=session(userId,id);
+                    if (q.sortOrder+1<questionLimit(current)) tasks.enqueue(userId,"AI_NEXT",id,q.id);
+                    if (!transcript.isBlank()) tasks.enqueue(userId,"AI_FEEDBACK",id,q.id);
+                }
             });
         } catch (RuntimeException exception) {
             tasks.write(() -> jdbc.sql("UPDATE ai_mock_audio_assets SET status='FAILED',transcript_error=:error,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND status='TRANSCRIBING'")
@@ -232,8 +244,8 @@ public class AiMockInterviewService {
             .param("answer",text).param("id",q.id).update();
         if(updated>0) {
             SessionRow s=session(userId,id);
+            if(q.sortOrder+1<questionLimit(s)) tasks.enqueue(userId,"AI_NEXT",id,q.id);
             if(needsFeedback) tasks.enqueue(userId,"AI_FEEDBACK",id,q.id);
-            else if(q.sortOrder+1<questionLimit(s)) tasks.enqueue(userId,"AI_NEXT",id,q.id);
         }
     }
 
@@ -253,7 +265,7 @@ public class AiMockInterviewService {
     }
 
     private void insertQuestion(String id,int order,QuestionDraft draft) {
-        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,question_type,competency,project_name,technology,state,sort_order) VALUES(:id,:session,:text,:type,:competency,:project,:technology,'OPEN',:order)")
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,question_type,competency,project_name,technology,state,sort_order) SELECT :id,:session,:text,:type,:competency,:project,:technology,'OPEN',:order WHERE NOT EXISTS (SELECT 1 FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:session AND sort_order=:order)")
             .param("id",UUID.randomUUID().toString()).param("session",id).param("text",draft.questionText()).param("type",draft.type()).param("competency",draft.competency()).param("project",draft.projectName()).param("technology",draft.technology()).param("order",order).update();
     }
 
@@ -279,7 +291,7 @@ public class AiMockInterviewService {
     }
     private String transcribeVolcengine(String userId,byte[] bytes,String type) { if (!type.equals("audio/ogg") && !type.equals("audio/wav")) throw new IllegalStateException("豆包转写仅支持 OGG、WAV 或 MP3 音频；请使用支持 OGG 录音的浏览器，或手动填写文本。"); try { String body=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(Map.of("user",Map.of("uid",userId),"audio",Map.of("data",Base64.getEncoder().encodeToString(bytes)),"request",Map.of("model_name","bigmodel","enable_itn",true,"enable_punc",true))); HttpResponse<String> r=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create("https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash")).timeout(Duration.ofSeconds(60)).header("Content-Type","application/json").header("X-Api-Key",volcengineSpeechKey).header("X-Api-Resource-Id","volc.bigasr.auc_turbo").header("X-Api-Request-Id",UUID.randomUUID().toString()).header("X-Api-Sequence","-1").POST(HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString()); if(!"20000000".equals(r.headers().firstValue("X-Api-Status-Code").orElse(""))) throw new IllegalStateException("豆包转写请求失败；请检查服务已开通并手动填写文本。"); String text=new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.body()).path("result").path("text").asText("").trim(); if(text.isBlank()) throw new IllegalStateException("豆包转写返回格式无效；请手动填写并确认回答文本。"); return text; } catch(IllegalStateException e){throw e;} catch(Exception e){throw new IllegalStateException("豆包转写超时或失败；请手动填写并确认回答文本。");} }
     private String transcribeOpenAi(byte[] bytes,String type) { if(transcriptionUrl.isBlank()||transcriptionKey.isBlank()||transcriptionModel.isBlank()) throw new IllegalStateException("转写服务尚未配置；请手动填写并确认回答文本。"); try { String boundary="----ai"+UUID.randomUUID(); byte[] body=("--"+boundary+"\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n"+transcriptionModel+"\r\n--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"answer\"\r\nContent-Type: "+type+"\r\n\r\n").getBytes(StandardCharsets.UTF_8); byte[] tail=("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8); byte[] all=new byte[body.length+bytes.length+tail.length]; System.arraycopy(body,0,all,0,body.length);System.arraycopy(bytes,0,all,body.length,bytes.length);System.arraycopy(tail,0,all,body.length+bytes.length,tail.length); HttpResponse<String> r=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(HttpRequest.newBuilder(URI.create(transcriptionUrl)).timeout(Duration.ofSeconds(60)).header("Authorization","Bearer "+transcriptionKey).header("Content-Type","multipart/form-data; boundary="+boundary).POST(HttpRequest.BodyPublishers.ofByteArray(all)).build(),HttpResponse.BodyHandlers.ofString()); if(r.statusCode()/100!=2) throw new IllegalStateException("转写服务请求失败；请手动填写并确认回答文本。"); String text=new com.fasterxml.jackson.databind.ObjectMapper().readTree(r.body()).path("text").asText("").trim(); if(text.isBlank()) throw new IllegalStateException("转写返回格式无效；请手动填写并确认回答文本。"); return text; } catch(IllegalStateException e){throw e;} catch(Exception e){throw new IllegalStateException("转写超时或失败；请手动填写并确认回答文本。");} }
-    private Session detail(String user,String id) { SessionRow s=session(user,id); List<QuestionRow> q=questions(user,id); return new Session(s.id,s.company,s.role,s.round,s.status,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),tasks.latest(user,id)); }
+    private Session detail(String user,String id) { SessionRow s=session(user,id); List<QuestionRow> q=questions(user,id); return new Session(s.id,s.company,s.role,s.round,s.status,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),tasks.latestVoice(user,id)); }
     private Question apiQuestion(QuestionRow q,String user) { return new Question(q.id,q.text,legacyType(q),q.competency,q.answer,q.state,q.sortOrder,q.answerExpiresAt,latestAudio(user,q.id)); }
     private Audio latestAudio(String user,String question) { return jdbc.sql("SELECT id,status,transcript,transcript_error,feedback,duration_ms FROM ai_mock_audio_assets WHERE user_id=:user AND question_id=:q ORDER BY created_at DESC LIMIT 1").param("user",user).param("q",question).query((rs,row)->new Audio(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),(Long)rs.getObject(6))).optional().orElse(null); }
     private SessionRow session(String user,String id) { tasks.expireVoice(user,id); return jdbc.sql("SELECT id,interview_package_id,company,role,interview_round,status,started_at,expires_at,final_interview_id,question_plan,material_snapshot,generation_version FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",user).query((rs,row)->new SessionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getObject(8,OffsetDateTime.class),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12))).optional().orElseThrow(AiMockInterviewService::notFound); }

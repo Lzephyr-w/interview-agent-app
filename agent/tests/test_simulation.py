@@ -40,7 +40,8 @@ def test_operations(operation):
     value = {"feedback": "请补充证据。"} if "FEEDBACK" in operation else {"questionText": "如何验证？"}
     if operation == "VOICE_PLAN":
         value = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
-                               competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+                               competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)],
+                 "firstQuestion": {"questionText": "如何验证？", "type": "FUNDAMENTAL", "competency": "能力1", "projectName": "", "technology": ""}}
     if operation == "VOICE_QUESTION":
         value.update(type="FUNDAMENTAL", competency="原理", projectName="", technology="")
     model = Model(json.dumps(value))
@@ -61,7 +62,8 @@ def test_invalid_structure_returns_retryable_error_after_one_call():
 def test_ungrounded_plan_project_name_is_rejected_without_second_call():
     payload = request("VOICE_PLAN", marker="真实项目")
     invalid = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
-                             competency=f"能力{i}", projectName="虚构项目" if i == 6 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+                             competency=f"能力{i}", projectName="虚构项目" if i == 6 else "", technology="", angle=f"角度{i}") for i in range(1, 11)],
+               "firstQuestion": {"questionText": "如何验证？", "type": "FUNDAMENTAL", "competency": "能力1", "projectName": "", "technology": ""}}
     model = Model(json.dumps(invalid))
     with pytest.raises(SimulationError) as failure:
         generate(payload, lambda remaining: model)
@@ -73,7 +75,8 @@ def test_resume_experience_anchor_is_allowed_without_evidence_card():
     payload = request("VOICE_PLAN", marker="汇量科技")
     payload["input"]["materials"]["experienceAnchors"] = ["汇量科技", "中康科技"]
     plan = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO",
-                           competency=f"能力{i}", projectName="汇量科技" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+                           competency=f"能力{i}", projectName="汇量科技" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)],
+            "firstQuestion": {"questionText": "如何验证？", "type": "FUNDAMENTAL", "competency": "能力1", "projectName": "", "technology": ""}}
     result = generate(payload, lambda remaining: Model(json.dumps(plan)))
     assert result["result"] == plan
 
@@ -88,13 +91,14 @@ def test_operation_prompts_restore_quality_rules():
     for operation in ("VOICE_PLAN", "VOICE_QUESTION", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP", "TEXT_FEEDBACK", "VOICE_FEEDBACK"):
         value = {"feedback": "请补充证据。"} if "FEEDBACK" in operation else {"questionText": "如何验证？"}
         if operation == "VOICE_PLAN":
-            value = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO", competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)]}
+            value = {"plan": [dict(order=i, type="FUNDAMENTAL" if i <= 5 else "PROJECT" if i <= 9 else "SCENARIO", competency=f"能力{i}", projectName="甲项目" if 6 <= i <= 9 else "", technology="", angle=f"角度{i}") for i in range(1, 11)],
+                     "firstQuestion": {"questionText": "如何验证？", "type": "FUNDAMENTAL", "competency": "能力1", "projectName": "", "technology": ""}}
         if operation == "VOICE_QUESTION":
             value.update(type="FUNDAMENTAL", competency="原理", projectName="", technology="")
         model = Model(json.dumps(value))
         generate(request(operation), lambda remaining: model)
         prompts.append(model.prompts[0])
-    assert "只规划，不直接出题" in prompts[0] and "资料优先级" in prompts[0]
+    assert "一次返回计划和第一题" in prompts[0] and "资料优先级" in prompts[0]
     assert "只出一道中文问题" in prompts[1] and "可独立回答" in prompts[1]
     assert "同一能力点" in prompts[2]
     assert "具体、可回答" in prompts[3]
@@ -231,3 +235,25 @@ def test_lengths_and_missing_fields_are_rejected():
         generate(request(), lambda remaining: model)
     assert failure.value.code == "INVALID_MODEL_OUTPUT"
     assert len(model.prompts) == 1
+
+
+@pytest.mark.parametrize("operation", ["VOICE_QUESTION", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP"])
+def test_question_quality_matches_java_contract(operation):
+    value = {"questionText": "长" * 201}
+    if operation == "VOICE_QUESTION":
+        value.update(type="FUNDAMENTAL", competency="原理", projectName="", technology="")
+    with pytest.raises(SimulationError) as failure:
+        generate(request(operation), lambda remaining: Model(json.dumps(value)))
+    assert failure.value.code == "INVALID_MODEL_OUTPUT"
+
+    value["questionText"] = "如何验证？再说明？"
+    with pytest.raises(SimulationError) as failure:
+        generate(request(operation), lambda remaining: Model(json.dumps(value)))
+    assert failure.value.code == "INVALID_MODEL_OUTPUT"
+
+
+@pytest.mark.parametrize("operation", ["VOICE_FEEDBACK", "TEXT_FEEDBACK"])
+def test_feedback_sentence_limit_matches_java_contract(operation):
+    with pytest.raises(SimulationError) as failure:
+        generate(request(operation), lambda remaining: Model(json.dumps({"feedback": "第一句。第二句。第三句。"})))
+    assert failure.value.code == "INVALID_MODEL_OUTPUT"

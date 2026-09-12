@@ -95,7 +95,7 @@ class MockInterviewControllerTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1));
         MvcResult skippedFollowup = mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", sessionId).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"questionId\":\"" + followupId + "\"}"))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(2)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
+            .andExpect(status().isOk()).andExpect(jsonPath("$.completedQuestions").value(1)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
         worker.run();
         mockMvc.perform(get("/api/v1/mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.questions[1].answerText").value("")).andExpect(jsonPath("$.questions[1].state").value("SKIPPED"));
 

@@ -85,6 +85,18 @@ class InterviewControllerTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.reviews[0].questionReviews[0].missingEvidence").value("指标待补充。"));
     }
 
+    @Test void retriesOnceWhenModelOutputFailsSchemaValidation() throws Exception {
+        String interview = createInterview("retry-user", packageFor("retry-user"));
+        String question = id(mockMvc.perform(post("/api/v1/interviews/{id}/questions", interview).with(jwt().jwt(token -> token.subject("retry-user"))).contentType(MediaType.APPLICATION_JSON)
+            .content("{\"questionText\":\"项目难点是什么？\",\"answerText\":\"缓存一致性。\",\"selfAssessment\":\"UNCERTAIN\"}"))
+            .andExpect(status().isCreated()).andReturn());
+        JsonNode valid = objectMapper.readTree("{\"readiness\":\"基本准备\",\"summary\":\"待补充。\",\"weaknessTags\":[],\"questionReviews\":[{\"questionId\":\"" + question + "\",\"evaluation\":\"待补充\",\"answerEvidence\":\"待补充\",\"missingEvidence\":\"待补充\",\"improvementAction\":\"补充指标\",\"recommendedAnswerStructure\":\"背景-方案-结果\",\"possibleFollowups\":[]}]}");
+        when(model.review(anyString())).thenReturn(objectMapper.createObjectNode(), valid);
+        mockMvc.perform(post("/api/v1/interviews/{id}/review", interview).with(jwt().jwt(token -> token.subject("retry-user"))))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.readiness").value("基本准备"));
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).review(anyString());
+    }
+
     @Test void distinguishesTextAndVoiceSimulationSources() throws Exception {
         String packageId = packageFor("user-a");
         String textInterview = createInterview("user-a", packageId);

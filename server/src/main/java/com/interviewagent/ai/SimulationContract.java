@@ -64,9 +64,12 @@ public final class SimulationContract {
     }
     public static void result(String operation, JsonNode result) {
         if (operation.equals("VOICE_PLAN")) {
-            fields(result,"plan");
+            fields(result,"plan","firstQuestion");
             if (!result.path("plan").isArray() || result.path("plan").size()!=10) throw invalid();
             result.path("plan").forEach(SimulationContract::slot);
+            fields(result.path("firstQuestion"),"questionText","type","competency","projectName","technology");
+            question(text(result.path("firstQuestion"),"questionText",800,false));
+            metadata(result.path("firstQuestion"));
         } else if (operation.equals("VOICE_QUESTION")) {
             fields(result,"questionText","type","competency","projectName","technology");
             question(text(result,"questionText",800,false)); metadata(result);

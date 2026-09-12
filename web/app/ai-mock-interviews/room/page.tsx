@@ -31,7 +31,7 @@ type Session = {
   finalInterviewId: string | null;
   totalQuestions: number;
   currentQuestion: Question | null;
-  task: { id: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
+  task: { id: string; taskType: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
 const QUESTION_LIMIT = 10;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
@@ -97,6 +97,10 @@ export default function AiMockInterviewRoomPage() {
   const spokenQuestion = useRef("");
   const expiredQuestion = useRef("");
   const current = session?.status === "RUNNING" ? session.currentQuestion : undefined;
+  const blocksQuestion = Boolean(
+    session?.task &&
+      (session.task.taskType !== "AI_FEEDBACK" || !session.currentQuestion),
+  );
 
   function stopMicrophone() {
     microphone.current?.getTracks().forEach((track) => track.stop());
@@ -183,7 +187,7 @@ export default function AiMockInterviewRoomPage() {
       remaining !== 0 ||
       busy ||
       preparingRecording ||
-      session.task ||
+      blocksQuestion ||
       expiredQuestion.current === current.id
     )
       return;
@@ -198,7 +202,7 @@ export default function AiMockInterviewRoomPage() {
       .catch((caught: unknown) =>
         setError(errorText(caught, "题目已超时，请刷新后继续。")),
       );
-  }, [busy, current?.id, preparingRecording, recording, remaining, session?.id]);
+  }, [blocksQuestion, busy, current?.id, preparingRecording, recording, remaining, session?.id]);
   useEffect(() => {
     if (!recording) return;
     setRecordingSeconds(0);
@@ -582,14 +586,14 @@ export default function AiMockInterviewRoomPage() {
             </Link>
           )}
         </section>
-      ) : session.task?.status === "FAILED" ? (
+      ) : blocksQuestion && session.task?.status === "FAILED" ? (
         <section className="ai-room-brief ai-room-result">
           <h1>AI 处理失败</h1>
           <p className="ai-room-error">{session.task.error || "后台处理失败，请重试。"}</p>
           <button className="ai-room-primary" onClick={() => void retryTask()} disabled={busy}>重试</button>
           <button className="ai-room-primary" onClick={() => setFinishDialog(true)} disabled={busy}>结束并保存已答内容</button>
         </section>
-      ) : session.task ? (
+      ) : blocksQuestion && session.task ? (
         <section className="ai-room-brief ai-room-result" role="status">
           <h1>题目加载中…</h1>
           <img className="ai-room-loading" src="/images/loading-spinner.png" alt="" />
@@ -623,7 +627,7 @@ export default function AiMockInterviewRoomPage() {
               </button>
             )}
             <h1>{current.questionText}</h1>
-            {preparingRecording || busy || session.task ? (
+            {preparingRecording || busy || blocksQuestion ? (
               <p className="ai-room-processing">
                 {preparingRecording ? "正在准备回答…" : "正在提交回答并准备下一题…"}
               </p>

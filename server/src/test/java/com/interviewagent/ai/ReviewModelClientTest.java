@@ -25,4 +25,23 @@ class ReviewModelClientTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void sendsAnOutputBudgetForJsonRequests() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            org.junit.jupiter.api.Assertions.assertTrue(body.contains("\"max_tokens\":8192"));
+            byte[] response = "{\"choices\":[{\"message\":{\"content\":\"{\\\"ok\\\":true}\"}}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            assertTrue(new ReviewModelClient(new ObjectMapper(), "http://127.0.0.1:" + server.getAddress().getPort(), "key", "model").review("test").path("ok").asBoolean());
+        } finally {
+            server.stop(0);
+        }
+    }
 }

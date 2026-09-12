@@ -149,8 +149,8 @@ public class InterviewService {
         InterviewSummary interview = ownedInterview(userId, interviewId);
         List<InterviewQuestion> questions = questions(interviewId);
         if (questions.isEmpty()) throw new IllegalArgumentException("请至少添加一道问题和回答后再发起复盘。");
-        JsonNode output = model.review(prompt(userId, interview, questions));
-        ParsedReview parsed = parse(output, questions);
+        String reviewPrompt = prompt(userId, interview, questions);
+        ParsedReview parsed = parseWithRetry(reviewPrompt, questions);
         String reportId = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO review_reports (id, interview_id, readiness, summary, weakness_tags) VALUES (:id, :interviewId, :readiness, :summary, :tags)")
             .param("id", reportId).param("interviewId", interviewId).param("readiness", parsed.readiness).param("summary", parsed.summary).param("tags", jsonValue(parsed.tags)).update();
@@ -245,6 +245,18 @@ public class InterviewService {
         }
         if (!ids.isEmpty()) throw invalidFormat();
         return new ParsedReview(readiness, text(root, "summary", 4_000), tags, parsed);
+    }
+
+    private ParsedReview parseWithRetry(String reviewPrompt, List<InterviewQuestion> questions) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                String prompt = attempt == 0 ? reviewPrompt : reviewPrompt + "\n上一次输出未通过格式校验。请不要解释或使用 Markdown，只返回完整 JSON；questionReviews 必须逐个复制输入中的 questionId，所有文本保持简短。";
+                return parse(model.review(prompt), questions);
+            } catch (ReviewFailedException exception) {
+                if (attempt == 1 || !exception.getMessage().contains("格式无效")) throw exception;
+            }
+        }
+        throw invalidFormat();
     }
 
     private String jsonValue(Object value) { try { return json.writeValueAsString(value); } catch (Exception exception) { throw new IllegalStateException("无法准备复盘资料。"); } }

@@ -83,7 +83,8 @@ public class MockInterviewService {
         int updated = jdbc.sql("UPDATE mock_interview_questions SET answer_text = :answer, self_assessment = :assessment, state = 'ANSWERED', updated_at = CURRENT_TIMESTAMP WHERE id = :id AND mock_interview_id = :sessionId AND state = 'OPEN'")
             .param("answer", answer).param("assessment", assessment).param("id", question.id()).param("sessionId", id).update();
         if (updated == 0) return detail(userId, id);
-        tasks.enqueue(userId, "MOCK_ANSWER", id, question.id());
+        if (needsNext(question, id, answer)) tasks.enqueue(userId, "MOCK_NEXT", id, question.id());
+        if (!answer.isBlank()) tasks.enqueue(userId, "MOCK_FEEDBACK", id, question.id());
         moveCursor(id);
         return detail(userId, id);
     }
@@ -135,7 +136,7 @@ public class MockInterviewService {
         MockSession session = owned(userId, id);
         List<MockQuestion> all = questions(id);
         MockQuestion current = all.stream().filter(item -> item.state().equals("OPEN")).findFirst().orElse(null);
-        int completed = (int) all.stream().filter(item -> item.state().equals("ANSWERED") || item.state().equals("SKIPPED")).count();
+        int completed = (int) all.stream().filter(item -> item.questionKind().equals("MAIN") && (item.state().equals("ANSWERED") || item.state().equals("SKIPPED"))).count();
         var task = tasks.latest(userId, id);
         int currentIndex = current == null ? (task == null ? MAIN_QUESTION_LIMIT : Math.min(MAIN_QUESTION_LIMIT, completed + 1)) : mainIndex(all, current);
         return new MockInterview(session.id(), session.company(), session.role(), session.interviewRound(), session.status(), "AI", true, "AI 将基于当前面试包的已解析简历、JD 和证据卡出题。", MAIN_QUESTION_LIMIT, completed, currentIndex, session.formalInterviewId(), session.createdAt(), session.updatedAt(), current, all, task);
@@ -150,31 +151,45 @@ public class MockInterviewService {
             case "MOCK_CREATE" -> addMainQuestion(task.userId(), task.resourceId());
             case "MOCK_ANSWER" -> processAnswer(task.userId(), task.resourceId(), task.relatedId());
             case "MOCK_NEXT" -> processNext(task.userId(), task.resourceId(), task.relatedId());
+            case "MOCK_FEEDBACK" -> processFeedback(task.userId(), task.resourceId(), task.relatedId());
             default -> throw new IllegalStateException("后台任务类型无效，请稍后重试。");
         }
     }
 
     private void processAnswer(String userId, String sessionId, String questionId) {
         MockQuestion answered=question(sessionId,questionId);
-        if (answered.state().equals("ANSWERED") && answered.aiFeedback().isBlank()) {
-            Map<String,Object> input=context(userId,owned(userId,sessionId),questions(sessionId));
-            input.put("questionText",answered.questionText()); input.put("answer",answered.answerText());
-            tasks.check();
-            JsonNode result=model.simulate("TEXT_FEEDBACK",input);
-            SimulationContract.modelResult("TEXT_FEEDBACK",result);
-            tasks.write(() -> jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
-                .param("feedback",result.path("feedback").asText()).param("id",questionId).update());
-        }
-        if (answered.state().equals("ANSWERED")) {
-            if (answered.questionKind().equals("MAIN")) addFollowup(userId,sessionId,answered,answered.answerText());
-            else addMainQuestion(userId,sessionId);
-            tasks.write(() -> moveCursor(sessionId));
-        }
+        if (answered.state().equals("ANSWERED")) tasks.write(() -> scheduleAnswerTasks(userId,sessionId,answered));
     }
 
     private void processNext(String userId, String sessionId, String questionId) {
-        if (question(sessionId,questionId).state().equals("SKIPPED")) addMainQuestion(userId,sessionId);
+        MockQuestion answered = question(sessionId,questionId);
+        if (answered.state().equals("SKIPPED")) addMainQuestion(userId,sessionId);
+        else if (answered.state().equals("ANSWERED")) {
+            if (answered.questionKind().equals("MAIN")) addFollowup(userId,sessionId,answered,answered.answerText());
+            else addMainQuestion(userId,sessionId);
+        }
         tasks.write(() -> moveCursor(sessionId));
+    }
+
+    private void processFeedback(String userId, String sessionId, String questionId) {
+        MockQuestion answered=question(sessionId,questionId);
+        if (!answered.state().equals("ANSWERED") || !answered.aiFeedback().isBlank() || answered.answerText().isBlank()) return;
+        Map<String,Object> input=context(userId,owned(userId,sessionId),questions(sessionId));
+        input.put("questionText",answered.questionText()); input.put("answer",answered.answerText());
+        tasks.check();
+        JsonNode result=model.simulate("TEXT_FEEDBACK",input);
+        SimulationContract.modelResult("TEXT_FEEDBACK",result);
+        tasks.write(() -> jdbc.sql("UPDATE mock_interview_questions SET ai_feedback=:feedback,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='ANSWERED' AND ai_feedback=''")
+            .param("feedback",result.path("feedback").asText()).param("id",questionId).update());
+    }
+
+    private void scheduleAnswerTasks(String userId,String sessionId,MockQuestion answered) {
+        if (needsNext(answered,sessionId,answered.answerText())) tasks.enqueue(userId,"MOCK_NEXT",sessionId,answered.id());
+        if (!answered.answerText().isBlank() && answered.aiFeedback().isBlank()) tasks.enqueue(userId,"MOCK_FEEDBACK",sessionId,answered.id());
+    }
+
+    private boolean needsNext(MockQuestion question,String sessionId,String answer) {
+        return question.questionKind().equals("MAIN") ? !answer.isBlank() || mainCount(sessionId)<MAIN_QUESTION_LIMIT : mainCount(sessionId)<MAIN_QUESTION_LIMIT;
     }
 
     private void addMainQuestion(String userId,String sessionId) {

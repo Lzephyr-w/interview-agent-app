@@ -42,7 +42,7 @@ public class ReviewModelClient {
     }
 
     private JsonNode jsonReply(String prompt, String label) {
-        JsonNode response = request(Map.of("model", model, "temperature", 0.2, "response_format", Map.of("type", "json_object"), "messages", List.of(Map.of("role", "user", "content", prompt))));
+        JsonNode response = request(Map.of("model", model, "temperature", 0.2, "max_tokens", 8192, "response_format", Map.of("type", "json_object"), "messages", List.of(Map.of("role", "user", "content", prompt))));
         String content = content(response);
         if (content.isBlank()) throw new ReviewFailedException(label + "返回格式无效，请重试。");
         try { return json.readTree(jsonText(content)); }

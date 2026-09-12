@@ -161,19 +161,22 @@ class AiMockQuestionAgentTest {
     @Test
     void invalidQuestionJsonCreatesNeitherSessionNorQuestion() throws Exception {
         String packageId = packageFor("invalid-question-user");
-        when(model.simulate(anyString(),anyMap())).thenReturn(json.readTree(validPlan()), json.readTree("{\"type\":\"FUNDAMENTAL\"}"));
+        var invalid=json.readTree(validPlan());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)invalid.path("firstQuestion")).put("competency","错误能力");
+        when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(invalid, json.readTree(validPlan()));
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andReturn();
         worker.run();
         String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
         String taskId = json.readTree(mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).path("task").path("id").asText();
-        retryNow(taskId); retryNow(taskId);
+        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND question_plan IS NOT NULL").param("id", sessionId).query(Integer.class).single());
+        retryNow(taskId);
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("COMPLETED"));
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user' AND question_plan IS NOT NULL").query(Integer.class).single());
-        assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
+        assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
 
     @Test
@@ -294,7 +297,7 @@ class AiMockQuestionAgentTest {
               {"order":8,"type":"PROJECT","competency":"质量保障","projectName":"库存平台","technology":"Vitest","angle":"测试策略"},
               {"order":9,"type":"PROJECT","competency":"发布流程","projectName":"发布平台","technology":"CI","angle":"发布控制"},
               {"order":10,"type":"SCENARIO","competency":"线上故障处理","projectName":"","technology":"日志","angle":"故障排查"}
-            ]}
+            ],"firstQuestion":{"questionText":"浏览器如何调度微任务？","type":"FUNDAMENTAL","competency":"浏览器事件循环","projectName":"","technology":"浏览器"}}
             """;
     }
 }

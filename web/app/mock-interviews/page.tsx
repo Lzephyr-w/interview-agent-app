@@ -41,13 +41,19 @@ type MockInterview = {
   formalInterviewId: string | null;
   currentQuestion: Question | null;
   questions: Question[];
-  task: { id: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
+  task: { id: string; taskType: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
 
 const emptyForm = { packageId: "", company: "", role: "", round: "" };
 
 function message(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback;
+}
+
+function mainQuestionNumber(question: Question, questions: Question[]) {
+  const mainId = question.questionKind === "FOLLOW_UP" ? question.parentQuestionId : question.id;
+  const index = questions.filter((item) => item.questionKind === "MAIN").findIndex((item) => item.id === mainId);
+  return index >= 0 ? index + 1 : 1;
 }
 
 export default function MockInterviewsPage() {
@@ -256,6 +262,24 @@ export default function MockInterviewsPage() {
   const history = session?.questions.filter((item) =>
     ["ANSWERED", "SKIPPED"].includes(item.state),
   );
+  const lastSubmitted = history?.[history.length - 1];
+  const pendingFollowUp = Boolean(
+    session?.task &&
+      !session.currentQuestion &&
+      lastSubmitted?.questionKind === "MAIN" &&
+      lastSubmitted.answerText.trim(),
+  );
+  const currentQuestionIsFollowUp = Boolean(
+    pendingFollowUp || session?.currentQuestion?.questionKind === "FOLLOW_UP",
+  );
+  const displayQuestionIndex = pendingFollowUp
+    ? session?.completedQuestions
+    : session?.currentQuestionIndex;
+  const blocksQuestion = Boolean(
+    session?.task &&
+      (session.task.taskType !== "MOCK_FEEDBACK" || !session.currentQuestion),
+  );
+  const feedbackTask = session?.task?.taskType === "MOCK_FEEDBACK" ? session.task : null;
 
   return (
     <AppShell>
@@ -307,30 +331,44 @@ export default function MockInterviewsPage() {
                 </div>
                 <div
                   className="mock-progress"
-                  aria-label={`当前第 ${session.currentQuestionIndex} / ${session.totalQuestions} 题`}
+                  aria-label={`当前第 ${displayQuestionIndex} / ${session.totalQuestions} 题${currentQuestionIsFollowUp ? "，追问" : ""}`}
                 >
                   <strong>
-                    第 {session.currentQuestionIndex} / {session.totalQuestions}{" "}
-                    题
+                    第 {displayQuestionIndex} / {session.totalQuestions} 题
+                    {currentQuestionIsFollowUp && <small className="mock-progress-followup">追问</small>}
                   </strong>
                   <span>
-                    已完成 {session.completedQuestions} 题（含追问）· 每道主问题最多追问 1 次
+                    已完成 {session.completedQuestions} 道主问题；追问不计入 4 道主问题上限
                   </span>
                 </div>
-                {session.task?.status === "FAILED" ? (
+                {blocksQuestion && session.task?.status === "FAILED" ? (
                   <div className="mock-complete">
-                    <h3>AI 处理失败</h3>
+                    <h3>{session.task.taskType === "MOCK_FEEDBACK" ? "反馈生成失败" : "AI 处理失败"}</h3>
                     <p className="error">{session.task.error || "后台处理失败，请重试。"}</p>
                     <button className="primary-button" type="button" onClick={() => void retryTask()} disabled={saving}>重试</button>
                     <button className="secondary-button" type="button" onClick={finish} disabled={saving}>结束并保存已答内容</button>
                   </div>
-                ) : session.task ? (
+                ) : blocksQuestion && session.task ? (
                   <div className="mock-complete" role="status">
-                    <h3>正在准备下一步…</h3>
-                    <p className="muted">AI 正在生成题目或反馈...</p>
+                    <h3>{session.task.taskType === "MOCK_FEEDBACK" ? "正在生成反馈…" : "正在准备下一题…"}</h3>
+                    <p className="muted">AI 正在处理，已保存回答不会丢失。</p>
                   </div>
                 ) : session.currentQuestion ? (
-                  <form className="mock-question" onSubmit={submitAnswer}>
+                  <>
+                    {feedbackTask && (
+                      <div className="mock-status" role="status">
+                        {feedbackTask.status === "FAILED" ? (
+                          <>
+                            <strong>上一题反馈生成失败</strong>
+                            <span className="error">{feedbackTask.error || "后台处理失败，请重试。"}</span>
+                            <button className="secondary-button" type="button" onClick={() => void retryTask()} disabled={saving}>重试反馈</button>
+                          </>
+                        ) : (
+                          <span>上一题反馈生成中，不影响继续答题。</span>
+                        )}
+                      </div>
+                    )}
+                    <form className="mock-question" onSubmit={submitAnswer}>
                     <p className="profile-label">
                       {session.currentQuestion.questionKind === "FOLLOW_UP"
                         ? "有限追问"
@@ -399,7 +437,8 @@ export default function MockInterviewsPage() {
                         结束并保存
                       </button>
                     </div>
-                  </form>
+                    </form>
+                  </>
                 ) : (
                   <div className="mock-complete">
                     <h3>题目已完成</h3>
@@ -423,10 +462,11 @@ export default function MockInterviewsPage() {
                           <details>
                             <summary>
                               <span className="mock-history-index">
-                                {item.sortOrder + 1}
+                                {mainQuestionNumber(item, session.questions)}
                               </span>
                               <strong>{item.questionText}</strong>
                               <small>
+                                {item.questionKind === "FOLLOW_UP" ? "追问 · " : ""}
                                 {item.state === "SKIPPED" ? "已跳过" : "已回答"}
                               </small>
                             </summary>
@@ -451,10 +491,35 @@ export default function MockInterviewsPage() {
               </>
             ) : (
               <div className="mock-complete">
-                <h3>AI 文本模拟已保存</h3>
-                <p className="muted">
-                  以下是本场全部题目、回答与逐题 AI 反馈；正式记录结果仍默认为未知。
-                </p>
+                <div className="section-heading">
+                  <div>
+                    <h3>AI 文本模拟已保存</h3>
+                    <p className="muted">
+                      以下是本场全部题目、回答与逐题 AI 反馈；正式记录结果仍默认为未知。
+                    </p>
+                  </div>
+                  <div className="form-actions">
+                    {session.formalInterviewId && (
+                      <>
+                        <Link
+                          className="primary-button"
+                          href={`/interviews/${session.formalInterviewId}`}
+                        >
+                          查看面试记录
+                        </Link>
+                        <Link
+                          className="secondary-button"
+                          href={`/interviews/${session.formalInterviewId}/review`}
+                        >
+                          进入复盘
+                        </Link>
+                      </>
+                    )}
+                    <Link className="secondary-button" href="/mock-interviews">
+                      再来一轮
+                    </Link>
+                  </div>
+                </div>
                 <div className="mock-history">
                   <h3>本场复盘</h3>
                   <ol>
@@ -466,27 +531,6 @@ export default function MockInterviewsPage() {
                       </li>
                     ))}
                   </ol>
-                </div>
-                <div className="form-actions">
-                  {session.formalInterviewId && (
-                    <>
-                      <Link
-                        className="primary-button"
-                        href={`/interviews/${session.formalInterviewId}`}
-                      >
-                        查看面试记录
-                      </Link>
-                      <Link
-                        className="secondary-button"
-                        href={`/interviews/${session.formalInterviewId}/review`}
-                      >
-                        进入复盘
-                      </Link>
-                    </>
-                  )}
-                  <Link className="secondary-button" href="/mock-interviews">
-                    再来一轮
-                  </Link>
                 </div>
               </div>
             )}

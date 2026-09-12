@@ -619,6 +619,11 @@
   font-family: Georgia, "Songti SC", serif;
   font-size: 20px;
 }
+.mock-progress-followup {
+  margin-left: 8px;
+  color: var(--orange);
+  font: 600 13px Arial, sans-serif;
+}
 .mock-question {
   display: grid;
   gap: 14px;

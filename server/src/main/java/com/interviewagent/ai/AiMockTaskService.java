@@ -93,18 +93,23 @@ public class AiMockTaskService {
     }
 
     public Task latest(String userId, String resourceId) {
-        return jdbc.sql("SELECT id,task_type,resource_id,status,attempts,max_attempts,error,created_at,updated_at FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:resource AND status <> 'COMPLETED' ORDER BY created_at DESC LIMIT 1")
+        return jdbc.sql("SELECT id,task_type,resource_id,status,attempts,max_attempts,error,created_at,updated_at FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:resource AND status <> 'COMPLETED' ORDER BY CASE WHEN task_type='MOCK_FEEDBACK' THEN 1 ELSE 0 END,created_at DESC LIMIT 1")
+            .param("user", userId).param("resource", resourceId).query((rs, row) -> api(rs)).optional().orElse(null);
+    }
+
+    public Task latestVoice(String userId, String resourceId) {
+        return jdbc.sql("SELECT id,task_type,resource_id,status,attempts,max_attempts,error,created_at,updated_at FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:resource AND status <> 'COMPLETED' ORDER BY CASE WHEN task_type='AI_FEEDBACK' THEN 1 ELSE 0 END, created_at DESC LIMIT 1")
             .param("user", userId).param("resource", resourceId).query((rs, row) -> api(rs)).optional().orElse(null);
     }
 
     @Transactional
     public ClaimedTask claim() {
         expireStale();
-        String id = jdbc.sql("SELECT id FROM ai_mock_tasks WHERE ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts ORDER BY available_at,created_at LIMIT 1")
+        String id = jdbc.sql("SELECT id FROM ai_mock_tasks WHERE ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts ORDER BY CASE WHEN task_type IN ('AI_NEXT','MOCK_NEXT') THEN 0 ELSE 1 END,available_at,created_at LIMIT 1")
             .query(String.class).list().stream().findFirst().orElse(null);
         if (id == null) return null;
         String token = UUID.randomUUID().toString();
-        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,worker_token=:token,locked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts")
+        int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,error='',worker_token=:token,locked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts")
             .param("id", id).param("token", token).update();
         if (updated == 0) return null;
         return jdbc.sql("SELECT id,user_id,task_type,resource_id,related_id,worker_token FROM ai_mock_tasks WHERE id=:id AND worker_token=:token")

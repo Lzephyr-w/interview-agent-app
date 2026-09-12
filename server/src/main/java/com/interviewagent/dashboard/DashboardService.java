@@ -25,7 +25,8 @@ class DashboardService {
     DashboardService(JdbcClient jdbc, WeaknessService weaknessService) { this.jdbc = jdbc; this.weaknessService = weaknessService; }
 
     Dashboard dashboard(String userId) {
-        return new Dashboard(overview(userId), activities(userId), weaknesses(userId), sprintItems(userId));
+        List<WeaknessFocus> weaknessFocuses = weaknesses(userId);
+        return new Dashboard(overview(userId), activities(userId), weaknessFocuses, sprintItems(userId, weaknessFocuses));
     }
 
     SprintItem create(String userId, SprintItemRequest request) {
@@ -62,7 +63,7 @@ class DashboardService {
             .map(item -> new WeaknessFocus(item.tag(), item.title(), "/weaknesses#" + java.net.URLEncoder.encode(item.tag(), java.nio.charset.StandardCharsets.UTF_8))).toList();
     }
 
-    private List<SprintItem> sprintItems(String userId) {
+    private List<SprintItem> sprintItems(String userId, List<WeaknessFocus> weaknessFocuses) {
         List<SprintItem> items = new ArrayList<>();
         jdbc.sql("SELECT id, title, description, target_path, priority, status, updated_at FROM sprint_checklist_items WHERE user_id = :userId ORDER BY status, priority DESC, updated_at DESC")
             .param("userId", userId).query((rs, row) -> item(rs)).list().forEach(items::add);
@@ -72,7 +73,7 @@ class DashboardService {
             .param("userId", userId).query((rs, row) -> new SprintItem("interview-" + rs.getString("id"), "PENDING_REVIEW", "复盘：" + rs.getString("company") + " · " + rs.getString("role"), "已有真实面试记录，尚未完成 AI 复盘。", "待复盘真实面试", "/interviews/" + rs.getString("id") + "/review", 70, "TODO", false, null)).list().forEach(items::add);
         jdbc.sql("SELECT id, company, role FROM mock_interviews WHERE user_id = :userId AND status = 'RUNNING' ORDER BY updated_at DESC LIMIT 1")
             .param("userId", userId).query((rs, row) -> new SprintItem("mock-" + rs.getString("id"), "MOCK", "继续 AI 文本模拟：" + rs.getString("company") + " · " + rs.getString("role"), "继续当前未完成的模拟练习。", "AI 文本模拟", "/mock-interviews", 60, "TODO", false, null)).list().forEach(items::add);
-        weaknesses(userId).stream().map(item -> new SprintItem("weakness-" + item.tag(), "WEAKNESS", "聚焦薄弱点：" + item.title(), "查看 AI 汇总分析中的具体题目证据。", "AI 薄弱点分析", item.targetPath(), 50, "TODO", false, null)).forEach(items::add);
+        weaknessFocuses.stream().map(item -> new SprintItem("weakness-" + item.tag(), "WEAKNESS", "聚焦薄弱点：" + item.title(), "查看 AI 汇总分析中的具体题目证据。", "AI 薄弱点分析", item.targetPath(), 50, "TODO", false, null)).forEach(items::add);
         return items.stream().sorted(Comparator.comparing((SprintItem item) -> !"TODO".equals(item.status())).thenComparing(SprintItem::priority, Comparator.reverseOrder())).limit(10).toList();
     }
 
