@@ -50,6 +50,9 @@ class Handler(BaseHTTPRequestHandler):
             self._simulation()
             return
         if self.path != "/v1/agent/reply":
+            if self.path == "/v1/agent/reply/stream":
+                self._stream_reply()
+                return
             self._write(404, {"error": "not found"})
             return
         if not self.internal_key or not hmac.compare_digest(self.headers.get("X-Agent-Key", ""), self.internal_key):
@@ -69,6 +72,55 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             logger.exception("Agent request failed")
             self._write(500, {"error": "Agent 服务内部错误，请稍后重试。"})
+
+    def _stream_reply(self):
+        if not self.internal_key or not hmac.compare_digest(self.headers.get("X-Agent-Key", ""), self.internal_key):
+            self._write(401, {"error": "unauthorized"})
+            return
+        started = False
+        try:
+            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            user_id = str(request.get("userId") or "").strip()
+            if not user_id or not isinstance(request.get("messages"), list):
+                raise ValueError("Agent 请求格式无效。")
+            runtime = self.runtime_factory(user_id)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            started = True
+
+            def delta(content):
+                self._event("delta", {"content": content})
+
+            runtime.stream_reply(request["messages"], request.get("context", ""), user_id, str(request.get("conversationId") or ""), delta)
+            self._event("done", {})
+            self.close_connection = True
+        except (AgentError, ValueError) as exc:
+            if not started:
+                self._write(400 if isinstance(exc, ValueError) else 502, {"error": str(exc)})
+            elif not self.wfile.closed:
+                try:
+                    self._event("error", {"message": str(exc)})
+                except Exception:
+                    pass
+            self.close_connection = True
+        except Exception:
+            logger.exception("Streaming agent request failed")
+            try:
+                if not started:
+                    self._write(500, {"error": "Agent 服务内部错误，请稍后重试。"})
+                    return
+                self._event("error", {"message": "Agent 服务内部错误，请稍后重试。"})
+            except Exception:
+                pass
+            self.close_connection = True
+
+    def _event(self, name, payload):
+        self.wfile.write((f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n").encode("utf-8"))
+        self.wfile.flush()
 
     def log_message(self, *_args):
         return

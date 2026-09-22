@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
-import { api } from "@/lib/api";
+import { api, streamApi } from "@/lib/api";
 import {
   emptyForm,
   errorMessage,
@@ -170,29 +170,6 @@ function MarkdownText({ content }: { content: string }) {
   );
 }
 
-function TypewriterText({ content, onUpdate }: { content: string; onUpdate: () => void }) {
-  const [length, setLength] = useState(0);
-
-  useEffect(() => {
-    setLength(0);
-    const timer = window.setInterval(() => {
-      setLength((current) => {
-        const next = Math.min(current + 2, content.length);
-        if (next === content.length) window.clearInterval(timer);
-        return next;
-      });
-    }, 16);
-    return () => window.clearInterval(timer);
-  }, [content]);
-
-  useEffect(() => {
-    onUpdate();
-  }, [length, onUpdate]);
-
-  return <div className="chat-rich-text"><MarkdownText content={content.slice(0, length)} />{length < content.length && <span className="typing-cursor" aria-hidden="true" />}
-  </div>;
-}
-
 export default function AiConversationsPage() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [detail, setDetail] = useState<ConversationDetail>();
@@ -213,16 +190,44 @@ export default function AiConversationsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary>();
-  const [typingMessageId, setTypingMessageId] = useState<string>();
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const conversationRequestRef = useRef(0);
+  const resumedRepliesRef = useRef(new Set<string>());
 
   const scrollToBottom = useCallback(() => {
     const content = contentScrollRef.current;
     if (shouldAutoScrollRef.current && content)
       content.scrollTop = content.scrollHeight;
   }, []);
+
+  const streamReply = useCallback(async (conversationId: string, messageId: string) => {
+    let content = "";
+    await streamApi(`/api/v1/ai-conversations/${conversationId}/messages/${messageId}/reply/stream`, { method: "POST" }, (event, raw) => {
+      const payload = JSON.parse(raw) as Partial<Message> & { content?: string; message?: string; messageId?: string };
+      if (event === "delta") {
+        content += payload.content ?? "";
+        setDetail((current) => {
+          if (!current || current.conversation.id !== conversationId) return current;
+          const existing = current.messages.find((message) => message.replyToMessageId === messageId);
+          const next: Message = {
+            ...(existing ?? { id: payload.messageId ?? `pending-${messageId}`, role: "ASSISTANT", errorMessage: null, clientRequestId: null, replyToMessageId: messageId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+            id: payload.messageId ?? existing?.id ?? `pending-${messageId}`,
+            content,
+            status: "PENDING",
+          } as Message;
+          return { ...current, messages: upsertMessage(current.messages, next) };
+        });
+        scrollToBottom();
+      } else if (event === "error") {
+        throw new Error(payload.message ?? "AI 回复失败，请重试。");
+      } else if (event === "done") {
+        const completed = payload as Message;
+        setDetail((current) => current && current.conversation.id === conversationId ? { ...current, messages: upsertMessage(current.messages, completed) } : current);
+        if (completed.updatedAt) setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, updatedAt: completed.updatedAt! } : item));
+      }
+    });
+  }, [scrollToBottom]);
 
   const availableInterviews = form.interviewPackageId
     ? interviews.filter(
@@ -279,6 +284,27 @@ export default function AiConversationsPage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    if (!detail) return;
+    const conversationId = detail.conversation.id;
+    const pending = detail.messages.filter(
+      (message) => message.role === "ASSISTANT" && message.status === "PENDING" && message.replyToMessageId && !resumedRepliesRef.current.has(message.id),
+    );
+    if (!pending.length) return;
+    pending.forEach((message) => resumedRepliesRef.current.add(message.id));
+    setSending(true);
+    void Promise.all(pending.map(async (message) => {
+      try {
+        await streamReply(conversationId, message.replyToMessageId!);
+      } catch (cause) {
+        setDetail((current) => current && current.conversation.id === conversationId
+          ? { ...current, messages: current.messages.map((item) => item.id === message.id ? { ...item, status: "FAILED", errorMessage: errorMessage(cause, "AI 回复失败，请重试。") } : item) }
+          : current);
+        setError(errorMessage(cause, "AI 回复恢复失败，请重试。"));
+      }
+    })).finally(() => setSending(false));
+  }, [detail?.conversation.id, streamReply]);
+
   async function selectConversation(id: string) {
     const request = ++conversationRequestRef.current;
     shouldAutoScrollRef.current = true;
@@ -286,7 +312,6 @@ export default function AiConversationsPage() {
     setDetail(undefined);
     setConversationLoading(true);
     setError("");
-    setTypingMessageId(undefined);
     try {
       const loaded = await api<ConversationDetail>(
         `/api/v1/ai-conversations/${id}`,
@@ -418,23 +443,7 @@ export default function AiConversationsPage() {
           },
         ],
       });
-      const replied = await api<Message>(
-        `/api/v1/ai-conversations/${detail.conversation.id}/messages/${userMessage.id}/reply`,
-        { method: "POST" },
-      );
-      setTypingMessageId(replied.status === "COMPLETED" ? replied.id : undefined);
-      setDetail((current) =>
-        current
-          ? { ...current, messages: upsertMessage(current.messages, replied) }
-          : current,
-      );
-      setConversations((items) =>
-        items.map((item) =>
-          item.id === detail.conversation.id
-            ? { ...item, updatedAt: replied.updatedAt }
-            : item,
-        ),
-      );
+      await streamReply(detail.conversation.id, userMessage.id);
     } catch (cause) {
       if (savedDetail && savedUserMessage) {
         setDetail({
@@ -488,23 +497,7 @@ export default function AiConversationsPage() {
         : current,
     );
     try {
-      const replied = await api<Message>(
-        `/api/v1/ai-conversations/${detail.conversation.id}/messages/${messageId}/reply`,
-        { method: "POST" },
-      );
-      setTypingMessageId(replied.status === "COMPLETED" ? replied.id : undefined);
-      setDetail((current) =>
-        current
-          ? { ...current, messages: upsertMessage(current.messages, replied) }
-          : current,
-      );
-      setConversations((items) =>
-        items.map((item) =>
-          item.id === detail.conversation.id
-            ? { ...item, updatedAt: replied.updatedAt }
-            : item,
-        ),
-      );
+      await streamReply(detail.conversation.id, messageId);
       setNotice("已重新请求 AI 回复。");
     } catch (cause) {
       setDetail((current) =>
@@ -854,7 +847,9 @@ export default function AiConversationsPage() {
                             key={message.id}
                           >
                             <article className="chat-message">
-                              {message.status === "PENDING" ? (
+                              {message.status === "PENDING" ? message.content ? (
+                                <><MarkdownText content={message.content} /><span className="typing-cursor" aria-label="正在生成" /></>
+                              ) : (
                                 <p className="muted">正在生成回复…</p>
                               ) : message.status === "FAILED" ? (
                                 <div>
@@ -871,8 +866,6 @@ export default function AiConversationsPage() {
                                     重试回复
                                   </button>
                                 </div>
-                              ) : message.id === typingMessageId ? (
-                                <TypewriterText content={message.content} onUpdate={scrollToBottom} />
                               ) : (
                                 <MarkdownText content={message.content} />
                               )}

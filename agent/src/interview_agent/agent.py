@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal
 
 from langchain.agents import create_agent
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.errors import GraphRecursionError
 
 
@@ -113,6 +113,33 @@ class AgentRuntime:
             "tool_calls": sum(isinstance(message, ToolMessage) for message in result_messages),
         })
         answer = str(result_messages[-1].content or "").strip()
+        if not answer:
+            raise AgentError("AI Agent 未生成最终回复，请重试。")
+        return answer
+
+    def stream_reply(self, messages: List[Dict[str, Any]], context: str, user_id: str = "", conversation_id: str = "", on_delta=None) -> str:
+        started = time.perf_counter()
+        answer_parts: List[str] = []
+        try:
+            for chunk, _metadata in self.agent.stream(
+                {"messages": self._messages(messages, context)},
+                context=AgentContext(user_id, conversation_id, self.tools, self._allows_training_task(messages)),
+                config={"recursion_limit": self.max_steps * 2 + 2},
+                stream_mode="messages",
+            ):
+                if isinstance(chunk, AIMessageChunk) and not chunk.tool_calls and isinstance(chunk.content, str) and chunk.content:
+                    answer_parts.append(chunk.content)
+                    if on_delta:
+                        on_delta(chunk.content)
+        except GraphRecursionError as exc:
+            raise AgentError("AI Agent 执行步骤过多，请缩小任务范围后重试。") from exc
+        except AgentError:
+            raise
+        except Exception as exc:
+            raise AgentError("AI Agent 超时或请求失败，请稍后重试。") from exc
+        finally:
+            self.metrics["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
+        answer = "".join(answer_parts).strip()
         if not answer:
             raise AgentError("AI Agent 未生成最终回复，请重试。")
         return answer

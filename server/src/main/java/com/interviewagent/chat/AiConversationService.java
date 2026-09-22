@@ -18,14 +18,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.io.IOException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Service
 class AiConversationService {
     private static final int MAX_MESSAGE_CHARS = 8_000;
     private static final int MAX_REPLY_CHARS = 20_000;
+    private static final int PENDING_REPLY_TIMEOUT_SECONDS = 120;
 
     private final JdbcClient jdbc;
     private final ObjectMapper json;
@@ -34,6 +41,7 @@ class AiConversationService {
     private final MaterialService materials;
     private final InterviewService interviews;
     private final WeaknessService weaknesses;
+    private final ConcurrentHashMap<String, ReplyStreamTask> activeReplies = new ConcurrentHashMap<>();
 
     AiConversationService(JdbcClient jdbc, ObjectMapper json, AgentPythonClient agent, ResumeFileService resumeFiles, MaterialService materials, InterviewService interviews, WeaknessService weaknesses) {
         this.jdbc = jdbc;
@@ -145,8 +153,115 @@ class AiConversationService {
         return assistantMessage(conversationId, assistantId);
     }
 
+    @Transactional
+    SseEmitter streamReply(String userId, String conversationId, String messageId) {
+        ConversationRow row = ownedConversation(userId, conversationId);
+        ownedUserMessage(conversationId, messageId);
+        expirePendingReplies(conversationId);
+        Message existing = assistantReply(conversationId, messageId);
+        String assistantId = existing == null ? UUID.randomUUID().toString() : existing.id();
+        if (existing == null) {
+            jdbc.sql("INSERT INTO ai_conversation_messages (id, conversation_id, role, content, status, reply_to_message_id) VALUES (:id, :conversationId, 'ASSISTANT', '', 'PENDING', :replyTo)")
+                .param("id", assistantId).param("conversationId", conversationId).param("replyTo", messageId).update();
+        } else if ("FAILED".equals(existing.status())) {
+            jdbc.sql("UPDATE ai_conversation_messages SET status = 'PENDING', content = '', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND status = 'FAILED'")
+                .param("id", assistantId).update();
+        }
+        SseEmitter emitter = new SseEmitter(120_000L);
+        if ("COMPLETED".equals(existing == null ? null : existing.status())) {
+            sendDone(emitter, assistantMessage(conversationId, assistantId));
+            return emitter;
+        }
+        ReplyStreamTask task = activeReplies.computeIfAbsent(assistantId, ignored -> new ReplyStreamTask(userId, row, assistantId));
+        task.attach(emitter);
+        if (task.start()) CompletableFuture.runAsync(task::run);
+        return emitter;
+    }
+
     void delete(String userId, String id) {
         if (jdbc.sql("DELETE FROM ai_conversations WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).update() == 0) throw notFound();
+    }
+
+    private void sendDone(SseEmitter emitter, Message message) {
+        try { emitter.send(SseEmitter.event().name("done").data(message)); }
+        catch (IOException ignored) { }
+        emitter.complete();
+    }
+
+    private final class ReplyStreamTask {
+        private final String userId;
+        private final ConversationRow row;
+        private final String assistantId;
+        private final StringBuilder answer = new StringBuilder();
+        private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
+        private final AtomicBoolean started = new AtomicBoolean();
+
+        private ReplyStreamTask(String userId, ConversationRow row, String assistantId) {
+            this.userId = userId;
+            this.row = row;
+            this.assistantId = assistantId;
+        }
+
+        private synchronized void attach(SseEmitter emitter) {
+            emitters.add(emitter);
+            Runnable remove = () -> emitters.remove(emitter);
+            emitter.onCompletion(remove);
+            emitter.onTimeout(remove);
+            emitter.onError(error -> remove.run());
+            if (answer.length() > 0) sendDelta(emitter, answer.toString());
+        }
+
+        private boolean start() { return started.compareAndSet(false, true); }
+
+        private void run() {
+            try {
+                agent.replyStream(userId, row.id(), agentMessages(userId, row), "", this::delta);
+                String result;
+                synchronized (this) { result = answer.toString().trim(); }
+                if (result.length() > MAX_REPLY_CHARS) throw new ReviewFailedException("AI 回复过长，请缩小问题范围后重试。");
+                if (containsProhibitedClaim(result)) throw new ReviewFailedException("AI 回复包含不允许的结论，请修改问题后重试。");
+                jdbc.sql("UPDATE ai_conversation_messages SET content = :content, status = 'COMPLETED', error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = :id")
+                    .param("id", assistantId).param("content", result).update();
+                jdbc.sql("UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId")
+                    .param("id", row.id()).param("userId", userId).update();
+                broadcastDone(assistantMessage(row.id(), assistantId));
+            } catch (RuntimeException exception) {
+                String error = exception instanceof ReviewFailedException && exception.getMessage() != null ? exception.getMessage() : "AI 回复失败，请重试。";
+                jdbc.sql("UPDATE ai_conversation_messages SET status = 'FAILED', error_message = :error, updated_at = CURRENT_TIMESTAMP WHERE id = :id")
+                    .param("id", assistantId).param("error", error).update();
+                broadcastError(error);
+            } finally {
+                activeReplies.remove(assistantId, this);
+            }
+        }
+
+        private void delta(String content) {
+            synchronized (this) { answer.append(content); }
+            for (SseEmitter emitter : emitters) sendDelta(emitter, content);
+        }
+
+        private void sendDelta(SseEmitter emitter, String content) {
+            try { emitter.send(SseEmitter.event().name("delta").data(Map.of("messageId", assistantId, "content", content))); }
+            catch (IOException ignored) { emitters.remove(emitter); }
+        }
+
+        private void broadcastDone(Message message) {
+            for (SseEmitter emitter : emitters) {
+                try { emitter.send(SseEmitter.event().name("done").data(message)); }
+                catch (IOException ignored) { }
+                emitter.complete();
+            }
+            emitters.clear();
+        }
+
+        private void broadcastError(String error) {
+            for (SseEmitter emitter : emitters) {
+                try { emitter.send(SseEmitter.event().name("error").data(Map.of("messageId", assistantId, "message", error))); }
+                catch (IOException ignored) { }
+                emitter.complete();
+            }
+            emitters.clear();
+        }
     }
 
     private Conversation conversation(String userId, ResultSet rs) throws SQLException {
@@ -167,6 +282,16 @@ class AiConversationService {
         return jdbc
             .sql("SELECT id, role, content, status, error_message, client_request_id, reply_to_message_id, created_at, updated_at FROM ai_conversation_messages WHERE conversation_id = :conversationId ORDER BY created_at, id")
             .param("conversationId", conversationId).query((rs, row) -> message(rs)).list();
+    }
+
+    private void expirePendingReplies(String conversationId) {
+        jdbc.sql("SELECT id FROM ai_conversation_messages WHERE conversation_id = :conversationId AND role = 'ASSISTANT' AND status = 'PENDING' AND updated_at < :expiredAt")
+            .param("conversationId", conversationId)
+            .param("expiredAt", OffsetDateTime.now().minusSeconds(PENDING_REPLY_TIMEOUT_SECONDS))
+            .query(String.class).list().stream()
+            .filter(id -> !activeReplies.containsKey(id))
+            .forEach(id -> jdbc.sql("UPDATE ai_conversation_messages SET status = 'FAILED', error_message = :error, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND status = 'PENDING'")
+                .param("id", id).param("error", "AI 回复超时，请重试。").update());
     }
 
     private Message ownedUserMessage(String conversationId, String id) {

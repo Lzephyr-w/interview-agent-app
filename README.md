@@ -282,6 +282,6 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 - V24 另增加语音题目的 ai_feedback，用于确认文本的逐题反馈；录音反馈同时保留在原音频记录中，重试复用已保存转写。无词级时间戳，不推断语速、停顿或情绪。
 - 日志只记录关联 ID、操作、结果码、错误类别和耗时，不记录资料/回答/模型原文。AI 复盘、录音导入和薄弱点分析仍使用 ReviewModelClient；通用对话仍使用 /v1/agent/reply。
 
-`VOICE_PLAN` 已合并返回 10 题计划和首题；不增加依赖、Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer、第二套会话存储或流式输出。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
+`VOICE_PLAN` 已合并返回 10 题计划和首题；不增加 Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer 或第二套会话存储。AI 对话现支持 SSE 流式输出，刷新后重新进入会话会自动恢复未完成回复，旧的非流式接口仍保留。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
 
 正常新建语音会话只发起一次 `VOICE_PLAN` 模型请求，并在同一短事务内写入计划和首题；部署期间遗留的 `AI_FIRST`/历史 `AI_CREATE` 任务仍保留兼容处理。

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.net.http.HttpTimeoutException;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +44,38 @@ public class AgentPythonClient {
             String answer = result.path("content").asText("").trim();
             if (answer.isBlank()) throw new ReviewFailedException("Agent 服务未返回有效回复，请重试。");
             return answer;
+        } catch (ReviewFailedException exception) { throw exception;
+        } catch (Exception exception) { throw new ReviewFailedException("Agent 服务暂时不可用，请稍后重试。"); }
+    }
+
+    public void replyStream(String userId, String conversationId, List<Map<String, Object>> messages, String context, Consumer<String> onDelta) {
+        if (url.isBlank() || key.isBlank()) throw new ReviewFailedException("Agent 服务尚未配置，请联系管理员后重试。");
+        try {
+            String body = json.writeValueAsString(Map.of("userId", userId, "conversationId", conversationId, "messages", messages, "context", context));
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url + "/v1/agent/reply/stream")).timeout(Duration.ofSeconds(120))
+                .header("X-Agent-Key", key).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build();
+            HttpResponse<java.util.stream.Stream<String>> response = http.send(request, HttpResponse.BodyHandlers.ofLines());
+            String event = "", data = "";
+            boolean done = false;
+            try (var lines = response.body()) {
+                var iterator = lines.iterator();
+                while (iterator.hasNext()) {
+                    String line = iterator.next();
+                    if (line.startsWith("event:")) event = line.substring(6).trim();
+                    else if (line.startsWith("data:")) data = line.substring(5).trim();
+                    else if (line.isBlank() && !data.isBlank()) {
+                        JsonNode payload = json.readTree(data);
+                        if (response.statusCode() < 200 || response.statusCode() >= 300 || "error".equals(event))
+                            throw new ReviewFailedException(payload.path("message").asText(payload.path("error").asText("Agent 服务请求失败，请稍后重试。")));
+                        if ("delta".equals(event)) onDelta.accept(payload.path("content").asText(""));
+                        if ("done".equals(event)) { done = true; break; }
+                        event = "";
+                        data = "";
+                    }
+                }
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) throw new ReviewFailedException("Agent 服务请求失败，请稍后重试。");
+            if (!done) throw new ReviewFailedException("Agent 服务流式响应未正常结束，请重试。");
         } catch (ReviewFailedException exception) { throw exception;
         } catch (Exception exception) { throw new ReviewFailedException("Agent 服务暂时不可用，请稍后重试。"); }
     }
