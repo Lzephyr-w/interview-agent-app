@@ -7,6 +7,8 @@ public final class DashboardApi {
     private DashboardApi() {}
 
     public record Dashboard(Overview overview, List<Activity> recentActivities, List<WeaknessFocus> weaknesses, List<SprintItem> sprintItems) {}
+    public record DashboardDetails(List<Activity> recentActivities, List<SprintItem> sprintItems) {}
+    public record DashboardFocus(List<WeaknessFocus> weaknesses, List<SprintItem> sprintItems) {}
     public record Overview(int interviewPackageCount, int resumeFileCount, int pendingReviewCount, int pendingTrainingTaskCount) {}
     public record Activity(String id, String type, String title, String detail, String targetPath, OffsetDateTime occurredAt) {}
     public record WeaknessFocus(String tag, String title, String targetPath) {}

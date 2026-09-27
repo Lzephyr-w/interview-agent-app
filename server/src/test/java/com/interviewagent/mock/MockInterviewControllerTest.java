@@ -62,6 +62,9 @@ class MockInterviewControllerTest {
     void isolatesSessionAndPackageAndSavesFiniteFlowAsFormalInterview() throws Exception {
         String packageA = packageFor("user-a");
 
+        mockMvc.perform(get("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("no-active-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.active").value(org.hamcrest.Matchers.nullValue()));
+
         mockMvc.perform(post("/api/v1/mock-interviews").contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andExpect(status().isUnauthorized());
         mockMvc.perform(post("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
@@ -73,7 +76,7 @@ class MockInterviewControllerTest {
             .andExpect(status().isCreated()).andExpect(jsonPath("$.aiAvailable").value(true)).andExpect(jsonPath("$.totalQuestions").value(4)).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
         worker.run();
         created = mockMvc.perform(get("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andReturn();
-        JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString());
+        JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString()).get("active");
         String sessionId = session.get("id").asText();
         String firstQuestionId = session.get("currentQuestion").get("id").asText();
 
@@ -123,7 +126,7 @@ class MockInterviewControllerTest {
             .andExpect(status().isCreated()).andReturn();
         worker.run();
         created = mockMvc.perform(get("/api/v1/mock-interviews").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andReturn();
-        JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString());
+        JsonNode session = objectMapper.readTree(created.getResponse().getContentAsString()).get("active");
 
         MvcResult skipped = mockMvc.perform(post("/api/v1/mock-interviews/{id}/skip", session.get("id").asText()).with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
             .content("{\"questionId\":\"" + session.get("currentQuestion").get("id").asText() + "\"}"))

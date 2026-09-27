@@ -50,9 +50,17 @@ class DashboardControllerTest {
             .andExpect(jsonPath("$.overview.pendingReviewCount").value(1))
             .andExpect(jsonPath("$.overview.pendingTrainingTaskCount").value(1))
             .andExpect(jsonPath("$.weaknesses").isEmpty())
+            .andExpect(jsonPath("$.recentActivities").isEmpty())
+            .andExpect(jsonPath("$.sprintItems").isEmpty());
+        mockMvc.perform(get("/api/v1/dashboard/details").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk())
             .andExpect(jsonPath("$.recentActivities[0].id").value("report-a"))
             .andExpect(jsonPath("$.recentActivities[0].title").value("公司a · 后端"))
             .andExpect(jsonPath("$.sprintItems[?(@.kind == 'TRAINING_TASK')].title").value(org.hamcrest.Matchers.hasItem("练习架构")));
+        mockMvc.perform(get("/api/v1/dashboard/focus").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.weaknesses").isEmpty())
+            .andExpect(jsonPath("$.sprintItems").isEmpty());
         verifyNoInteractions(model);
     }
 

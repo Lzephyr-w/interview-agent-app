@@ -185,6 +185,8 @@ export default function AiConversationsPage() {
   const [conversationLoading, setConversationLoading] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string>();
   const [showNew, setShowNew] = useState(false);
+  const [newOptionsLoading, setNewOptionsLoading] = useState(false);
+  const [newOptionsLoaded, setNewOptionsLoaded] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -258,23 +260,10 @@ export default function AiConversationsPage() {
     async function load() {
       setLoading(true);
       try {
-        const [
-          loadedConversations,
-          loadedPackages,
-          loadedInterviews,
-          loadedWeaknesses,
-        ] = await Promise.all([
-          api<ConversationSummary[]>("/api/v1/ai-conversations"),
-          api<Package[]>("/api/v1/interview-packages"),
-          api<Interview[]>("/api/v1/interviews"),
-          api<Weakness[]>("/api/v1/weaknesses"),
-        ]);
+        const loadedConversations = await api<ConversationSummary[]>("/api/v1/ai-conversations");
         setConversations(loadedConversations);
-        setPackages(loadedPackages);
-        setInterviews(loadedInterviews);
-        setWeaknesses(loadedWeaknesses);
         if (loadedConversations[0])
-          await selectConversation(loadedConversations[0].id);
+          void selectConversation(loadedConversations[0].id);
       } catch (cause) {
         setError(errorMessage(cause, "AI 对话加载失败，请稍后重试。"));
       } finally {
@@ -283,6 +272,27 @@ export default function AiConversationsPage() {
     }
     void load();
   }, []);
+
+  async function openNewConversation() {
+    setShowNew(true);
+    if (newOptionsLoaded || newOptionsLoading) return;
+    setNewOptionsLoading(true);
+    try {
+      const [loadedPackages, loadedInterviews, loadedWeaknesses] = await Promise.all([
+        api<Package[]>("/api/v1/interview-packages"),
+        api<Interview[]>("/api/v1/interviews"),
+        api<Weakness[]>("/api/v1/weaknesses"),
+      ]);
+      setPackages(loadedPackages);
+      setInterviews(loadedInterviews);
+      setWeaknesses(loadedWeaknesses);
+      setNewOptionsLoaded(true);
+    } catch (cause) {
+      setError(errorMessage(cause, "新建对话选项加载失败，请稍后重试。"));
+    } finally {
+      setNewOptionsLoading(false);
+    }
+  }
 
   useEffect(() => {
     if (!detail) return;
@@ -597,7 +607,7 @@ export default function AiConversationsPage() {
                         <button
                           className="secondary-button"
                           type="button"
-                          onClick={() => setShowNew(true)}
+                          onClick={() => void openNewConversation()}
                         >
                           新建
                         </button>
@@ -633,6 +643,7 @@ export default function AiConversationsPage() {
                           <p className="muted">
                             面试包只是启动线索；不选择时 Agent 会按需查询全部个人资料。
                           </p>
+                          {newOptionsLoading && <p className="muted">正在加载关联选项…</p>}
                           <label className="field">
                             面试包
                             <select

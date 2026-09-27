@@ -269,7 +269,7 @@ class AiConversationService {
     }
 
     private Conversation conversation(String userId, ConversationRow row) {
-        return new Conversation(row.id(), row.title(), row.createdAt(), row.updatedAt(), context(userId, row).sources());
+        return new Conversation(row.id(), row.title(), row.createdAt(), row.updatedAt(), contextSources(userId, row));
     }
 
     private ConversationRow ownedConversation(String userId, String id) {
@@ -334,6 +334,58 @@ class AiConversationService {
         if (packageInfo != null) addEvidenceCards(userId, packageInfo.id(), context);
         context.sources.add(new ContextSource("Agent 工具", "当前用户全部资料与训练任务", "可自主查询并创建训练任务"));
         return context.build();
+    }
+
+    private List<ContextSource> contextSources(String userId, ConversationRow row) {
+        List<ContextSource> sources = new ArrayList<>();
+        PackageSource packageInfo = row.interviewPackageId() == null ? null : packageSource(userId, row.interviewPackageId()).orElse(null);
+        if (packageInfo == null) {
+            sources.add(new ContextSource("启动资料", "未指定面试包或来源已删除", "Agent 可自主查询"));
+        } else {
+            sources.add(new ContextSource("面试包", packageInfo.company() + " · " + packageInfo.role() + " · " + packageInfo.interviewRound(), "已纳入"));
+            addResumeSource(packageInfo, sources);
+            addJdSource(packageInfo, sources);
+            jdbc.sql("SELECT c.project_name FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id AND c.user_id = :userId WHERE link.interview_package_id = :packageId ORDER BY c.updated_at DESC")
+                .param("userId", userId).param("packageId", packageInfo.id()).query(String.class).list()
+                .forEach(name -> sources.add(new ContextSource("项目证据卡", name, "已纳入")));
+        }
+        addInterviewSource(userId, row.interviewId(), sources);
+        addReviewSource(userId, row.reviewReportId(), sources);
+        if (row.weaknessTag() != null) sources.add(new ContextSource("薄弱点标签", row.weaknessTag(), "将在回复时查询"));
+        sources.add(new ContextSource("Agent 工具", "当前用户全部资料与训练任务", "可自主查询并创建训练任务"));
+        return List.copyOf(sources);
+    }
+
+    private void addResumeSource(PackageSource source, List<ContextSource> sources) {
+        if (source.resumeFilename() == null) {
+            sources.add(new ContextSource("简历文件", "来源已删除", "来源已删除"));
+        } else if ("READY".equals(source.resumeStatus())) {
+            sources.add(new ContextSource("简历文件", source.resumeFilename(), source.resumeTruncated() ? "已纳入（源文件解析文本已截断）" : "已纳入"));
+        } else {
+            sources.add(new ContextSource("简历文件", source.resumeFilename() + "（" + (source.resumeError() == null ? "正文待解析" : source.resumeError()) + "）", "待补充"));
+        }
+    }
+
+    private void addJdSource(PackageSource source, List<ContextSource> sources) {
+        if (source.jdId() == null) sources.add(new ContextSource("JD", "来源已删除", "来源已删除"));
+        else if (!source.jdReady()) sources.add(new ContextSource("JD", source.jdCompany() + " · " + source.jdRole(), "待补充"));
+        else sources.add(new ContextSource("JD", source.jdCompany() + " · " + source.jdRole(), "已纳入"));
+    }
+
+    private void addInterviewSource(String userId, String interviewId, List<ContextSource> sources) {
+        if (interviewId == null) return;
+        jdbc.sql("SELECT company, role, interview_round FROM interviews WHERE id = :id AND user_id = :userId")
+            .param("id", interviewId).param("userId", userId)
+            .query((rs, row) -> rs.getString("company") + " · " + rs.getString("role") + " · " + rs.getString("interview_round"))
+            .optional().ifPresentOrElse(label -> sources.add(new ContextSource("面试记录", label, "已纳入")), () -> sources.add(new ContextSource("面试记录", "来源已删除", "来源已删除")));
+    }
+
+    private void addReviewSource(String userId, String reviewReportId, List<ContextSource> sources) {
+        if (reviewReportId == null) return;
+        jdbc.sql("SELECT i.company, i.role FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE r.id = :id AND i.user_id = :userId")
+            .param("id", reviewReportId).param("userId", userId)
+            .query((rs, row) -> rs.getString("company") + " · " + rs.getString("role"))
+            .optional().ifPresentOrElse(label -> sources.add(new ContextSource("复盘报告", label, "已纳入")), () -> sources.add(new ContextSource("复盘报告", "来源已删除", "来源已删除")));
     }
 
     private void addResumeContext(String userId, PackageInfo packageInfo, ContextBuilder context) {
@@ -405,6 +457,12 @@ class AiConversationService {
             .param("id", id).param("userId", userId).query((rs, row) -> new PackageInfo(rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("resume_file_id"), rs.getString("job_description_id"), rs.getString("jd_company"), rs.getString("jd_role"), rs.getString("jd_content"), rs.getString("original_filename"))).optional();
     }
 
+    private java.util.Optional<PackageSource> packageSource(String userId, String id) {
+        return jdbc
+            .sql("SELECT p.id, p.company, p.role, p.interview_round, rf.original_filename, rf.parsed_status, rf.parsed_truncated, rf.parsed_error, jd.id jd_id, jd.company jd_company, jd.role jd_role, CASE WHEN jd.content IS NULL OR TRIM(jd.content) = '' THEN FALSE ELSE TRUE END jd_ready FROM interview_packages p LEFT JOIN job_descriptions jd ON jd.id = p.job_description_id AND jd.user_id = :userId LEFT JOIN resume_files rf ON rf.id = p.resume_file_id AND rf.user_id = :userId WHERE p.id = :id AND p.user_id = :userId")
+            .param("id", id).param("userId", userId).query((rs, row) -> new PackageSource(rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("original_filename"), rs.getString("parsed_status"), rs.getBoolean("parsed_truncated"), rs.getString("parsed_error"), rs.getString("jd_id"), rs.getString("jd_company"), rs.getString("jd_role"), rs.getBoolean("jd_ready"))).optional();
+    }
+
     private String ownedInterview(String userId, String id) {
         return jdbc.sql("SELECT interview_package_id FROM interviews WHERE id = :id AND user_id = :userId").param("id", id).param("userId", userId).query(String.class).optional().orElseThrow(AiConversationService::notFound);
     }
@@ -450,6 +508,7 @@ class AiConversationService {
 
     private record ConversationRow(String id, String interviewPackageId, String interviewId, String reviewReportId, String weaknessTag, String title, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
     private record PackageInfo(String id, String company, String role, String interviewRound, String resumeFileId, String jdId, String jdCompany, String jdRole, String jdContent, String resumeFilename) {}
+    private record PackageSource(String id, String company, String role, String interviewRound, String resumeFilename, String resumeStatus, boolean resumeTruncated, String resumeError, String jdId, String jdCompany, String jdRole, boolean jdReady) {}
     private record InterviewInfo(String id, String company, String role, String interviewRound, String interviewType) {}
     private record ReviewInfo(String id, String summary, String tags, String company, String role) {}
     private record EvidenceText(String label, String text) {}

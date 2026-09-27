@@ -55,6 +55,7 @@ class WeaknessControllerTest {
             .andExpect(jsonPath("$.items[0].evidence[0].questionId").value(a.question()))
             .andExpect(jsonPath("$.items[0].evidence[0].reviewReportId").value("z-new-a"))
             .andExpect(jsonPath("$.items[0].evidence[0].interviewId").value(a.interview()));
+        org.junit.jupiter.api.Assertions.assertFalse(jdbc.sql("SELECT input_version IS NULL FROM weakness_analyses WHERE user_id = 'user-a'").query(Boolean.class).single());
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(model).replyJson(prompt.capture());
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains(a.question()));
@@ -87,6 +88,19 @@ class WeaknessControllerTest {
             mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("稳定分析"));
         }
+    }
+
+    @Test void retriesInvalidOutputWithStricterPrompt() throws Exception {
+        Seed a = seed("user-a", "a", "如何验证缓存？");
+        insertReview(a.interview(), "review-a", "复盘", a.question());
+        JsonNode invalid = json.readTree("{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"a\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]},{\"tag\":\"项目深挖\",\"title\":\"d\",\"diagnosis\":\"e\",\"action\":\"f\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}");
+        doReturn(invalid, output("已修正", "系统设计", "缓存回答缺少验证", a.question())).when(model).replyJson(anyString());
+
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("已修正"));
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(model, org.mockito.Mockito.times(2)).replyJson(prompt.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getAllValues().get(1).contains("只能出现一次"));
     }
 
     @Test void marksSnapshotStaleForQuestionReviewInterviewAndResumeChanges() throws Exception {

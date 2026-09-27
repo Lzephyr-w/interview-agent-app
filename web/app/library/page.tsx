@@ -121,7 +121,7 @@ export default function LibraryPage() {
     { kind: "resource" | "resume-file"; path: string; id: string } | undefined
   >();
 
-  async function load(showLoading = true) {
+  async function loadAll(showLoading = true) {
     if (showLoading) setLoading(true);
     setError("");
     try {
@@ -141,8 +141,24 @@ export default function LibraryPage() {
       if (showLoading) setLoading(false);
     }
   }
+
+  async function loadTab(tab: Tab) {
+    setLoading(true);
+    setError("");
+    try {
+      if (tab === "resume-files") setResumeFiles(await api<ResumeFile[]>("/api/v1/resume-files"));
+      else if (tab === "job-descriptions") setJobDescriptions(await api<JobDescription[]>("/api/v1/job-descriptions"));
+      else if (tab === "evidence-cards") setEvidenceCards(await api<EvidenceCard[]>("/api/v1/evidence-cards"));
+      else await loadAll();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "资料加载失败。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    void load();
+    void loadTab("resume-files");
   }, []);
   async function save(
     path: string,
@@ -158,7 +174,7 @@ export default function LibraryPage() {
         body: JSON.stringify(body),
       });
       done();
-      await load(false);
+      await loadAll(false);
       setMessage("已保存。");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败。");
@@ -174,7 +190,7 @@ export default function LibraryPage() {
     setMessage("");
     try {
       await api<void>(`${dialog.path}/${dialog.id}`, { method: "DELETE" });
-      await load(false);
+      await loadAll(false);
       setDialog(undefined);
       setMessage(
         dialog.kind === "resume-file"
@@ -207,7 +223,7 @@ export default function LibraryPage() {
       await api<ResumeFile>("/api/v1/resume-files", { method: "POST", body });
       form.reset();
       setSelectedResumeFile(null);
-      await load(false);
+      await loadAll(false);
       setMessage("简历文件已上传。");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "上传失败。");
@@ -286,7 +302,10 @@ export default function LibraryPage() {
                   }
                   type="button"
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    void loadTab(tab.id);
+                  }}
                 >
                   <strong>{tab.label}</strong>
                   <small>{tab.hint}</small>

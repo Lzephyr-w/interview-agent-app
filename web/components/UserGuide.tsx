@@ -10,7 +10,7 @@ const steps = [
   ["04", "复盘成长", "完成逐题复盘后启动 AI 分析，再根据薄弱点创建训练任务。"],
 ];
 
-export default function UserGuide() {
+export default function UserGuide({ showLibraryLink = true }: { showLibraryLink?: boolean }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [open, setOpen] = useState(false);
 
@@ -94,9 +94,7 @@ export default function UserGuide() {
 
         <div className="guide-dialog-footer">
           <span>小提示：没有项目证据卡也可以先创建面试包，之后再补充。</span>
-          <Link className="dialog-confirm-button primary" href="/library" onClick={() => setOpen(false)}>
-            去资料库
-          </Link>
+          {showLibraryLink && <Link className="dialog-confirm-button primary" href="/library" onClick={() => setOpen(false)}>去资料库</Link>}
         </div>
       </dialog>
     </>

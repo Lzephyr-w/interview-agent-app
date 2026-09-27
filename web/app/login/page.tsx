@@ -89,7 +89,7 @@ export default function LoginPage() {
             </span>
           </div>
           <div className="auth-top-actions">
-            <UserGuide />
+            <UserGuide showLibraryLink={false} />
             <ThemeToggle />
           </div>
         </div>

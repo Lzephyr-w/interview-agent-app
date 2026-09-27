@@ -101,8 +101,13 @@ public class MaterialService {
     public void deleteEvidenceCard(String userId, String id) { delete("project_evidence_cards", userId, id); }
 
     public List<InterviewPackage> interviewPackages(String userId) {
-        return jdbc.sql("SELECT id, company, role, interview_round, resume_file_id, job_description_id FROM interview_packages WHERE user_id = :userId ORDER BY updated_at DESC")
-            .param("userId", userId).query((rs, row) -> packageFromRow(userId, rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("resume_file_id"), rs.getString("job_description_id"))).list();
+        List<InterviewPackage> packages = jdbc.sql("SELECT id, company, role, interview_round, resume_file_id, job_description_id FROM interview_packages WHERE user_id = :userId ORDER BY updated_at DESC")
+            .param("userId", userId).query((rs, row) -> new InterviewPackage(rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("resume_file_id"), rs.getString("job_description_id"), List.of())).list();
+        if (packages.isEmpty()) return packages;
+        Map<String, List<String>> cardsByPackage = jdbc.sql("SELECT interview_package_id, evidence_card_id FROM interview_package_evidence_cards WHERE interview_package_id IN (:packageIds) ORDER BY evidence_card_id")
+            .param("packageIds", packages.stream().map(InterviewPackage::id).toList()).query((rs, row) -> Map.entry(rs.getString("interview_package_id"), rs.getString("evidence_card_id"))).list().stream()
+            .collect(java.util.stream.Collectors.groupingBy(Map.Entry::getKey, java.util.stream.Collectors.mapping(Map.Entry::getValue, java.util.stream.Collectors.toList())));
+        return packages.stream().map(item -> new InterviewPackage(item.id(), item.company(), item.role(), item.interviewRound(), item.resumeFileId(), item.jobDescriptionId(), cardsByPackage.getOrDefault(item.id(), List.of()))).toList();
     }
 
     public InterviewPackage interviewPackage(String userId, String id) {

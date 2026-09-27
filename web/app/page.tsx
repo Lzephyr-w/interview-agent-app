@@ -20,6 +20,8 @@ type Dashboard = {
   weaknesses: Weakness[];
   sprintItems: SprintItem[];
 };
+type DashboardFocus = Pick<Dashboard, "weaknesses" | "sprintItems">;
+type DashboardDetails = Pick<Dashboard, "recentActivities" | "sprintItems">;
 type Activity = {
   id: string;
   type: string;
@@ -73,6 +75,8 @@ export default function HomePage() {
   const [editing, setEditing] = useState<SprintItem>();
   const [deleting, setDeleting] = useState<SprintItem>();
   const [loading, setLoading] = useState(true);
+  const [focusLoading, setFocusLoading] = useState(true);
+  const [detailsLoading, setDetailsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -81,12 +85,11 @@ export default function HomePage() {
     setLoading(true);
     setError("");
     try {
-      const [currentMe, currentDashboard] = await Promise.all([
-        api<Me>("/api/v1/me"),
-        api<Dashboard>("/api/v1/dashboard"),
-      ]);
-      setMe(currentMe);
+      const currentDashboard = await api<Dashboard>("/api/v1/dashboard");
       setDashboard(currentDashboard);
+      void api<Me>("/api/v1/me").then(setMe);
+      void loadDetails();
+      void loadFocus();
     } catch (cause) {
       setError(messageOf(cause, "首页加载失败。"));
       if (cause instanceof Error && cause.message.includes("登录")) {
@@ -94,6 +97,28 @@ export default function HomePage() {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDetails() {
+    try {
+      const details = await api<DashboardDetails>("/api/v1/dashboard/details");
+      setDashboard((current) => current ? { ...current, ...details, sprintItems: [...details.sprintItems, ...current.sprintItems.filter((item) => item.kind === "WEAKNESS")] } : current);
+    } catch (cause) {
+      setError(messageOf(cause, "近期动态和冲刺清单加载失败。"));
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
+  async function loadFocus() {
+    try {
+      const focus = await api<DashboardFocus>("/api/v1/dashboard/focus");
+      setDashboard((current) => current ? { ...current, ...focus, sprintItems: [...current.sprintItems.filter((item) => item.kind !== "WEAKNESS"), ...focus.sprintItems] } : current);
+    } catch (cause) {
+      setError(messageOf(cause, "薄弱点聚焦加载失败。"));
+    } finally {
+      setFocusLoading(false);
     }
   }
 
@@ -278,7 +303,9 @@ export default function HomePage() {
                     <h2>近期动态</h2>
                   </div>
                 </div>
-                {dashboard.recentActivities.length === 0 ? (
+                {detailsLoading ? (
+                  <p className="muted">正在加载近期动态…</p>
+                ) : dashboard.recentActivities.length === 0 ? (
                   <p className="muted">
                     还没有面试或复盘记录。先录入一次真实面试，或开始 AI 文本模拟。
                   </p>
@@ -310,7 +337,9 @@ export default function HomePage() {
                     全部薄弱点
                   </Link>
                 </div>
-                {dashboard.weaknesses.length === 0 ? (
+                {focusLoading ? (
+                  <p className="muted">正在整理薄弱点聚焦…</p>
+                ) : dashboard.weaknesses.length === 0 ? (
                   <p className="muted">
                     完成一次 AI 弱项分析后，这里会显示具体薄弱点。
                   </p>
@@ -342,7 +371,9 @@ export default function HomePage() {
                   </p>
                 </div>
               </div>
-              {dashboard.sprintItems.length === 0 ? (
+              {detailsLoading ? (
+                <p className="muted">正在加载冲刺清单…</p>
+              ) : dashboard.sprintItems.length === 0 ? (
                 <p className="muted">
                   暂无待办。上传简历、创建面试包、录入记录或开始 AI 文本模拟后，这里会出现下一步。
                 </p>

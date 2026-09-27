@@ -65,7 +65,7 @@ public class MockInterviewService {
 
     public MockInterview active(String userId) {
         return jdbc.sql("SELECT id FROM mock_interviews WHERE user_id=:user AND status='RUNNING' ORDER BY updated_at DESC LIMIT 1")
-            .param("user", userId).query(String.class).optional().map(id -> detail(userId, id)).orElseThrow(MockInterviewService::notFound);
+            .param("user", userId).query(String.class).optional().map(id -> detail(userId, id)).orElse(null);
     }
 
     @Transactional

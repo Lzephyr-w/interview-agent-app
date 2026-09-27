@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
+import javax.sql.DataSource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,11 +33,13 @@ public class WeaknessService {
     private final JdbcClient jdbc;
     private final ObjectMapper json;
     private final ReviewModelClient model;
+    private final boolean postgres;
 
-    public WeaknessService(JdbcClient jdbc, ObjectMapper json, ReviewModelClient model) {
-        this.jdbc = jdbc;
-        this.json = json;
-        this.model = model;
+    public WeaknessService(JdbcClient jdbc, ObjectMapper json, ReviewModelClient model, DataSource dataSource) {
+        this.jdbc = jdbc; this.json = json; this.model = model;
+        try (var connection = dataSource.getConnection()) {
+            postgres = connection.getMetaData().getDatabaseProductName().contains("PostgreSQL");
+        } catch (SQLException exception) { throw new IllegalStateException("弱项分析数据库不可用。", exception); }
     }
 
     public List<WeaknessItem> weaknesses(String userId) {
@@ -45,28 +48,37 @@ public class WeaknessService {
     }
 
     public WeaknessAnalysis analysis(String userId) {
-        AnalysisInput input = input(userId);
         StoredAnalysis stored = stored(userId);
         if (stored == null) return new WeaknessAnalysis(null, null, false, List.of());
-        if (!stored.fingerprint().equals(input.fingerprint())) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
+        String version = inputVersion(userId);
+        if (stored.inputVersion() != null && !stored.inputVersion().equals(version)) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
+        if (stored.inputVersion() == null && !stored.fingerprint().equals(input(userId).fingerprint())) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
+        if (stored.inputVersion() == null) jdbc.sql("UPDATE weakness_analyses SET input_version = :version WHERE user_id = :userId")
+            .param("userId", userId).param("version", version).update();
         return new WeaknessAnalysis(stored.summary(), stored.updatedAt(), false, stored.items());
     }
 
     @Transactional
     public WeaknessAnalysis analyze(String userId) {
         AnalysisInput input = input(userId);
-        ParsedAnalysis parsed = parse(model.replyJson(prompt(input)), input.questions());
+        String version = inputVersion(userId);
+        ParsedAnalysis parsed;
+        try {
+            parsed = parse(model.replyJson(prompt(input)), input.questions());
+        } catch (InvalidAnalysisException exception) {
+            parsed = parse(model.replyJson(retryPrompt(input)), input.questions());
+        }
         String items;
         try {
             items = json.writeValueAsString(parsed.items());
         } catch (Exception exception) {
             throw invalidOutput();
         }
-        int updated = jdbc.sql("UPDATE weakness_analyses SET input_fingerprint = :fingerprint, summary = :summary, items_json = :items, updated_at = CURRENT_TIMESTAMP WHERE user_id = :userId")
-            .param("userId", userId).param("fingerprint", input.fingerprint()).param("summary", parsed.summary()).param("items", items).update();
+        int updated = jdbc.sql("UPDATE weakness_analyses SET input_fingerprint = :fingerprint, input_version = :version, summary = :summary, items_json = :items, updated_at = CURRENT_TIMESTAMP WHERE user_id = :userId")
+            .param("userId", userId).param("fingerprint", input.fingerprint()).param("version", version).param("summary", parsed.summary()).param("items", items).update();
         if (updated == 0) {
-            jdbc.sql("INSERT INTO weakness_analyses (user_id, input_fingerprint, summary, items_json) VALUES (:userId, :fingerprint, :summary, :items)")
-                .param("userId", userId).param("fingerprint", input.fingerprint()).param("summary", parsed.summary()).param("items", items).update();
+            jdbc.sql("INSERT INTO weakness_analyses (user_id, input_fingerprint, input_version, summary, items_json) VALUES (:userId, :fingerprint, :version, :summary, :items)")
+                .param("userId", userId).param("fingerprint", input.fingerprint()).param("version", version).param("summary", parsed.summary()).param("items", items).update();
         }
         StoredAnalysis stored = stored(userId);
         return new WeaknessAnalysis(stored.summary(), stored.updatedAt(), false, stored.items());
@@ -130,6 +142,31 @@ public class WeaknessService {
         }
     }
 
+    private String inputVersion(String userId) {
+        String sql = """
+            SELECT kind, id, fingerprint FROM (
+              SELECT 'INTERVIEW' kind, i.id, %s fingerprint FROM interviews i JOIN interview_packages p ON p.id = i.interview_package_id WHERE i.user_id = :userId
+              UNION ALL SELECT DISTINCT 'RESUME_FILE', rf.id, %s FROM resume_files rf JOIN interview_packages p ON p.resume_file_id = rf.id JOIN interviews i ON i.interview_package_id = p.id WHERE i.user_id = :userId
+              UNION ALL SELECT 'QUESTION', q.id, %s FROM interview_questions q JOIN interviews i ON i.id = q.interview_id WHERE i.user_id = :userId
+              UNION ALL SELECT 'REVIEW', r.id, %s FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId
+              UNION ALL SELECT 'QUESTION_REVIEW', qr.id, %s FROM question_reviews qr JOIN review_reports r ON r.id = qr.review_report_id JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId
+            ) versions ORDER BY kind, id
+            """.formatted(
+                hash("i.company, i.role, i.interview_round, i.interview_type, i.interview_time, i.status, p.resume_file_id"),
+                hash("rf.parsed_status, rf.parsed_text"),
+                hash("q.interview_id, q.question_text, q.answer_text, q.self_assessment"),
+                hash("r.interview_id, r.readiness, r.summary, r.weakness_tags"),
+                hash("qr.review_report_id, qr.interview_question_id, qr.evaluation, qr.answer_evidence, qr.missing_evidence, qr.improvement_action, qr.recommended_answer_structure")
+            );
+        List<InputVersion> values = jdbc.sql(sql)
+            .param("userId", userId).query((rs, row) -> new InputVersion(rs.getString("kind"), rs.getString("id"), rs.getString("fingerprint"))).list();
+        return fingerprint(values);
+    }
+
+    private String hash(String fields) {
+        return postgres ? "MD5(CONCAT_WS('|', " + fields + "))" : "RAWTOHEX(HASH('MD5', CONCAT_WS('|', " + fields + ")))";
+    }
+
     private String prompt(AnalysisInput input) {
         return """
             你是面试复盘分析助手。仅根据下方 JSON 中已有资料生成中文 JSON，不得臆造简历事实、项目指标或面试内容。
@@ -140,6 +177,12 @@ public class WeaknessService {
             weaknesses 最多 3 项，每项 evidence 为 1 到 3 个。不得返回用户、面试或复盘 ID，除了 evidence.questionId。
             输入：
             """ + input.json();
+    }
+
+    private String retryPrompt(AnalysisInput input) {
+        return "上一次输出未通过格式校验，请重新生成。只能输出指定 JSON，不能添加任何字段或解释；weaknesses 最多 "
+            + Math.min(MAX_ITEMS, input.questions().size()) + " 项；每个 questionId 必须从输入中原样复制，且全体 evidence 中只能出现一次。资料不足时返回空的 weaknesses 数组。\n"
+            + prompt(input);
     }
 
     private ParsedAnalysis parse(JsonNode root, List<InputQuestion> questions) {
@@ -177,13 +220,13 @@ public class WeaknessService {
     }
 
     private StoredAnalysis stored(String userId) {
-        return jdbc.sql("SELECT input_fingerprint, summary, items_json, updated_at FROM weakness_analyses WHERE user_id = :userId")
+        return jdbc.sql("SELECT input_fingerprint, input_version, summary, items_json, updated_at FROM weakness_analyses WHERE user_id = :userId")
             .param("userId", userId).query((rs, row) -> stored(rs)).optional().orElse(null);
     }
 
     private StoredAnalysis stored(ResultSet rs) throws SQLException {
         try {
-            return new StoredAnalysis(rs.getString("input_fingerprint"), rs.getString("summary"), json.readValue(rs.getString("items_json"), new TypeReference<List<WeaknessItem>>() {}), rs.getObject("updated_at", OffsetDateTime.class));
+            return new StoredAnalysis(rs.getString("input_fingerprint"), rs.getString("input_version"), rs.getString("summary"), json.readValue(rs.getString("items_json"), new TypeReference<List<WeaknessItem>>() {}), rs.getObject("updated_at", OffsetDateTime.class));
         } catch (Exception exception) {
             throw new IllegalStateException("弱项分析快照格式无效。", exception);
         }
@@ -239,7 +282,7 @@ public class WeaknessService {
         return "SELECT t.id, t.title, t.weakness_tag, t.action, t.status, t.created_at, t.completed_at, t.source_question_id, t.source_interview_id, t.source_review_report_id, q.question_text source_question_text, i.company source_company, i.role source_role, i.interview_type source_interview_type FROM training_tasks t LEFT JOIN interview_questions q ON q.id = t.source_question_id LEFT JOIN interviews i ON i.id = t.source_interview_id";
     }
 
-    private String fingerprint(InputPayload payload) {
+    private String fingerprint(Object payload) {
         try {
             byte[] bytes = MessageDigest.getInstance("SHA-256").digest(json.writeValueAsString(payload).getBytes(StandardCharsets.UTF_8));
             StringBuilder result = new StringBuilder(bytes.length * 2);
@@ -283,8 +326,8 @@ public class WeaknessService {
         return usable(value) ? value : "待补充";
     }
 
-    private static ReviewFailedException invalidOutput() {
-        return new ReviewFailedException("AI 弱项分析返回格式无效，请重试。");
+    private static InvalidAnalysisException invalidOutput() {
+        return new InvalidAnalysisException();
     }
 
     private static NoSuchElementException notFound() {
@@ -292,13 +335,17 @@ public class WeaknessService {
     }
 
     private record AnalysisInput(String json, String fingerprint, List<InputQuestion> questions) {}
+    private record InputVersion(String kind, String id, String fingerprint) {}
     private record InterviewBase(String id, String company, String role, String interviewRound, String interviewType, OffsetDateTime interviewTime, String status, String resumeFileId, String resumeStatus, String resumeText) {}
     private record InputPayload(List<InputInterview> interviews) {}
     private record InputInterview(String interviewId, String company, String role, String interviewRound, String interviewType, OffsetDateTime interviewTime, String status, String resumeFileId, String resumeStatus, String resumeText, String latestReviewReportId, String latestReviewReadiness, String latestReviewSummary, String latestReviewTags, List<InputQuestion> questions) {}
     private record InputQuestion(String id, String questionText, String answerText, String selfAssessment, String reviewReportId, String evaluation, String answerEvidence, String missingEvidence, String improvementAction, String recommendedAnswerStructure, String interviewId, String company, String role, String interviewRound, String interviewType) {}
     private record LatestReview(String id, String readiness, String summary, String tags, String interviewId) {}
     private record ParsedAnalysis(String summary, List<WeaknessItem> items) {}
-    private record StoredAnalysis(String fingerprint, String summary, List<WeaknessItem> items, OffsetDateTime updatedAt) {}
+    private record StoredAnalysis(String fingerprint, String inputVersion, String summary, List<WeaknessItem> items, OffsetDateTime updatedAt) {}
     private record QuestionOwner(String id, String interviewId) {}
     private record ValidTask(String title, String tag, String action, String status, OffsetDateTime completedAt, String sourceQuestionId, String sourceInterviewId, String sourceReviewReportId) {}
+    private static class InvalidAnalysisException extends ReviewFailedException {
+        InvalidAnalysisException() { super("AI 弱项分析返回格式无效，请重试。"); }
+    }
 }

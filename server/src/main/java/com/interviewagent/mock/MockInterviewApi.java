@@ -20,4 +20,5 @@ public final class MockInterviewApi {
         OffsetDateTime createdAt, OffsetDateTime updatedAt, MockQuestion currentQuestion,
         List<MockQuestion> questions, Task task
     ) {}
+    public record ActiveMockInterview(MockInterview active) {}
 }

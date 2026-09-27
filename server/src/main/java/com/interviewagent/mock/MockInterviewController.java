@@ -26,8 +26,8 @@ public class MockInterviewController {
     }
 
     @GetMapping
-    MockInterview active(@AuthenticationPrincipal Jwt jwt) {
-        return service.active(jwt.getSubject());
+    ActiveMockInterview active(@AuthenticationPrincipal Jwt jwt) {
+        return new ActiveMockInterview(service.active(jwt.getSubject()));
     }
 
     @PostMapping("/{id}/answer")

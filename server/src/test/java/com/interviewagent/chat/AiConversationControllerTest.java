@@ -2,7 +2,6 @@ package com.interviewagent.chat;
 
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -85,12 +84,10 @@ class AiConversationControllerTest {
             .andExpect(jsonPath("$[0].messages").doesNotExist());
         verify(resumeFiles, org.mockito.Mockito.never()).parsedText(anyString(), anyString());
         jdbc.sql("UPDATE resume_files SET parsed_status = 'PENDING', parsed_text = NULL WHERE id = :id").param("id", resumeA).update();
-        doReturn(new ResumeFileService.ParsedResume("候选人具有 Java 与 Spring Boot 项目经验。", "READY", false, null))
-            .when(resumeFiles).parsedText("user-a", resumeA);
         mockMvc.perform(get("/api/v1/ai-conversations/{id}", conversation).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.conversation.contextSources[1].state").value("已纳入"));
-        verify(resumeFiles).parsedText("user-a", resumeA);
+            .andExpect(jsonPath("$.conversation.contextSources[1].state").value("待补充"));
+        verify(resumeFiles, org.mockito.Mockito.never()).parsedText(anyString(), anyString());
         mockMvc.perform(post("/api/v1/ai-conversations").with(jwt().jwt(token -> token.subject("user-b"))).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"interviewPackageId\":\"" + packageB + "\",\"interviewId\":\"" + interviewA + "\"}"))
             .andExpect(status().isNotFound());

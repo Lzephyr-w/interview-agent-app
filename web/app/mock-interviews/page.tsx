@@ -43,6 +43,7 @@ type MockInterview = {
   questions: Question[];
   task: { id: string; taskType: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
+type ActiveMockInterview = { active: MockInterview | null };
 
 const emptyForm = { packageId: "", company: "", role: "", round: "" };
 
@@ -95,8 +96,9 @@ export default function MockInterviewsPage() {
   }, [session?.id, session?.task?.id, session?.task?.status]);
 
   useEffect(() => {
-    void api<MockInterview>("/api/v1/mock-interviews")
-      .then((active) => {
+    void api<ActiveMockInterview>("/api/v1/mock-interviews")
+      .then(({ active }) => {
+        if (!active) return;
         setPendingSession(active);
         setDialog("resume");
       })

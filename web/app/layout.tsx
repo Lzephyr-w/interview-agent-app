@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import InlineConstraintValidation from "../components/InlineConstraintValidation";
+import WeaknessAnalysisProvider from "../components/WeaknessAnalysisProvider";
 import "./styles/globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +15,7 @@ export default function RootLayout({
     <html lang="zh-CN">
       <body>
         <InlineConstraintValidation />
-        {children}
+        <WeaknessAnalysisProvider>{children}</WeaknessAnalysisProvider>
       </body>
     </html>
   );

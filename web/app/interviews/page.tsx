@@ -170,12 +170,8 @@ export default function InterviewsPage() {
     setLoading(true);
     setError("");
     try {
-      const [nextInterviews, nextPackages] = await Promise.all([
-        api<Interview[]>("/api/v1/interviews"),
-        api<Package[]>("/api/v1/interview-packages"),
-      ]);
-      setInterviews(nextInterviews);
-      setPackages(nextPackages);
+      if (mode === "list") setInterviews(await api<Interview[]>("/api/v1/interviews"));
+      if (mode === "new" || mode === "edit") setPackages(await api<Package[]>("/api/v1/interview-packages"));
     } catch (cause) {
       setError(errorMessage(cause, "面试记录加载失败。"));
     } finally {

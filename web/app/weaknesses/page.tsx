@@ -5,19 +5,10 @@ import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
+import { useWeaknessAnalysis, type WeaknessAnalysis, type WeaknessEvidence } from "@/components/WeaknessAnalysisProvider";
 import { api } from "@/lib/api";
 
-type Evidence = {
-  questionId: string;
-  reviewReportId: string | null;
-  interviewId: string;
-  questionText: string;
-  company: string;
-  role: string;
-  interviewRound: string;
-  interviewType: "REAL" | "MOCK";
-  reason: string;
-};
+type Evidence = WeaknessEvidence;
 type Weakness = {
   tag: string;
   title: string;
@@ -25,12 +16,7 @@ type Weakness = {
   action: string;
   evidence: Evidence[];
 };
-type Analysis = {
-  summary: string | null;
-  analyzedAt: string | null;
-  stale: boolean;
-  items: Weakness[];
-};
+type Analysis = WeaknessAnalysis & { items: Weakness[] };
 type TaskSource = {
   questionId: string | null;
   questionText: string | null;
@@ -58,13 +44,14 @@ function messageOf(cause: unknown, fallback: string) {
 }
 
 export default function WeaknessesPage() {
-  const [analysis, setAnalysis] = useState<Analysis>();
+  const { analysis: sharedAnalysis, analyzing, loadAnalysis: refreshAnalysis, startAnalysis } = useWeaknessAnalysis();
+  const analysis = sharedAnalysis as Analysis | undefined;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activePanel, setActivePanel] = useState<"analysis" | "tasks">("analysis");
   const [draft, setDraft] = useState(emptyDraft);
   const [editing, setEditing] = useState<Task>();
-  const [loading, setLoading] = useState(true);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [dialog, setDialog] = useState<Task>();
@@ -73,19 +60,28 @@ export default function WeaknessesPage() {
   const initialLoadStarted = useRef(false);
 
   async function load() {
-    setLoading(true);
     setError("");
+    void loadAnalysis();
+    void loadTasks();
+  }
+
+  async function loadAnalysis() {
     try {
-      const [nextAnalysis, nextTasks] = await Promise.all([
-        api<Analysis>("/api/v1/weaknesses/analysis"),
-        api<Task[]>("/api/v1/training-tasks"),
-      ]);
-      setAnalysis(nextAnalysis);
-      setTasks(nextTasks);
+      await refreshAnalysis();
     } catch (cause) {
-      setError(messageOf(cause, "薄弱点分析和训练任务加载失败。"));
+      setError(messageOf(cause, "薄弱点分析加载失败。"));
     } finally {
-      setLoading(false);
+      setAnalysisLoading(false);
+    }
+  }
+
+  async function loadTasks() {
+    try {
+      setTasks(await api<Task[]>("/api/v1/training-tasks"));
+    } catch (cause) {
+      setError(messageOf(cause, "训练任务加载失败。"));
+    } finally {
+      setTasksLoading(false);
     }
   }
 
@@ -96,16 +92,11 @@ export default function WeaknessesPage() {
   }, []);
 
   async function analyze() {
-    setAnalyzing(true);
     setError("");
     try {
-      const next = await api<Analysis>("/api/v1/weaknesses/analysis", { method: "POST" });
-      setAnalysis(next);
-      setMessage("AI 弱项分析已更新。");
+      await startAnalysis();
     } catch (cause) {
       setError(messageOf(cause, "AI 分析失败，请稍后重试。"));
-    } finally {
-      setAnalyzing(false);
     }
   }
 
@@ -214,19 +205,16 @@ export default function WeaknessesPage() {
           <p className="intro">基于当前面试记录、逐题复盘和关联简历的 AI 分析；不代表通过概率或招聘结论。</p>
         </section>
         <Toast error={error} notice={message} onDismissError={() => setError("")} onDismissNotice={() => setMessage("")} />
-        {loading ? (
-          <section className="library-section"><p className="muted">正在加载分析和训练任务…</p></section>
-        ) : (
-          <>
+        <>
             <section className="library-section weakness-workspace">
             <div className="interview-tabs" id="weakness-panel-tabs" role="tablist" aria-label="薄弱点页面内容">
               <button className={`interview-tab${activePanel === "analysis" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "analysis"} onClick={() => setActivePanel("analysis")}>
                 <strong>AI 分析</strong>
-                <small>{analysis?.items.length ?? 0} 项</small>
+                <small>{analysisLoading ? "加载中" : `${analysis?.items.length ?? 0} 项`}</small>
               </button>
               <button className={`interview-tab${activePanel === "tasks" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "tasks"} onClick={() => setActivePanel("tasks")}>
                 <strong>训练任务</strong>
-                <small>{tasks.length} 条</small>
+                <small>{tasksLoading ? "加载中" : `${tasks.length} 条`}</small>
               </button>
             </div>
             {activePanel === "analysis" ? <div className="weakness-report">
@@ -240,7 +228,9 @@ export default function WeaknessesPage() {
                   {analyzing ? "AI 分析处理中…" : analysis?.analyzedAt ? "重新分析" : "开始 AI 分析"}
                 </button>
               </div>
-              {needsAnalysis ? (
+              {analysisLoading ? (
+                <p className="analysis-empty" role="status">正在加载 AI 分析…</p>
+              ) : needsAnalysis ? (
                 <p className="analysis-empty" role="status">
                   {analysis?.stale ? "当前面试、逐题复盘或关联简历已变化。旧分析已隐藏，请重新分析。" : "暂无可用分析。完成面试记录和逐题复盘后，点击“开始 AI 分析”。"}
                 </p>
@@ -302,7 +292,7 @@ export default function WeaknessesPage() {
             </section>
             <section className="library-section weakness-section">
               <div className="section-heading"><div><p className="profile-label">SAVED TASKS</p><h2>我的训练任务</h2></div></div>
-              {tasks.length === 0 ? <p className="muted">暂无训练任务。</p> : (
+              {tasksLoading ? <p className="muted">正在加载训练任务…</p> : tasks.length === 0 ? <p className="muted">暂无训练任务。</p> : (
                 <ul className="resource-list">
                   {tasks.map((task) => (
                     <li className="resource-item" key={task.id}>
@@ -326,8 +316,7 @@ export default function WeaknessesPage() {
             </div>
             </>}
             </section>
-          </>
-        )}
+        </>
       </main>
       <ConfirmDialog open={Boolean(dialog)} title="删除训练任务" description={dialog ? `确定删除“${dialog.title}”吗？` : ""} confirmLabel="删除" confirmTone="danger" busy={deleting} onCancel={() => setDialog(undefined)} onConfirm={() => void removeTask()} />
     </AppShell>
