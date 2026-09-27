@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -38,6 +38,14 @@ type InterviewPackage = {
   jobDescriptionId: string | null;
   evidenceCardIds: string[];
 };
+type InterviewPackageForm = {
+  company?: string;
+  role?: string;
+  interviewRound: string;
+  resumeFileId: string;
+  jobDescriptionId: string;
+  evidenceCardIds: string[];
+};
 type Tab =
   "resume-files" | "job-descriptions" | "evidence-cards" | "interview-packages";
 
@@ -48,9 +56,7 @@ const emptyEvidenceCard = {
   projectDescriptionAndResponsibilities: "",
   projectHighlights: "",
 };
-const emptyPackage = {
-  company: "",
-  role: "",
+const emptyPackage: InterviewPackageForm = {
   interviewRound: "",
   resumeFileId: "",
   jobDescriptionId: "",
@@ -68,12 +74,14 @@ function Field({
   value,
   onChange,
   multiline = false,
+  rows,
   hint,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   multiline?: boolean;
+  rows?: number;
   hint?: string;
 }) {
   return (
@@ -83,6 +91,7 @@ function Field({
       {multiline ? (
         <textarea
           required
+          rows={rows}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -109,9 +118,10 @@ export default function LibraryPage() {
   const [interviewPackage, setInterviewPackage] = useState(emptyPackage);
   const [packageId, setPackageId] = useState<string>();
   const [activeTab, setActiveTab] = useState<Tab>("resume-files");
+  const [loadedTabs, setLoadedTabs] = useState<Set<Tab>>(() => new Set());
+  const [loadingTab, setLoadingTab] = useState<Tab | undefined>("resume-files");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
   const [selectedResumeFile, setSelectedResumeFile] = useState<File | null>(
     null,
   );
@@ -121,8 +131,7 @@ export default function LibraryPage() {
     { kind: "resource" | "resume-file"; path: string; id: string } | undefined
   >();
 
-  async function loadAll(showLoading = true) {
-    if (showLoading) setLoading(true);
+  async function loadAll() {
     setError("");
     try {
       const [nextFiles, nextJds, nextCards, nextPackages] = await Promise.all([
@@ -135,25 +144,29 @@ export default function LibraryPage() {
       setJobDescriptions(nextJds);
       setEvidenceCards(nextCards);
       setPackages(nextPackages);
+      setLoadedTabs(new Set(tabs.map((tab) => tab.id)));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资料加载失败。");
-    } finally {
-      if (showLoading) setLoading(false);
     }
   }
 
   async function loadTab(tab: Tab) {
-    setLoading(true);
+    if (loadedTabs.has(tab)) return;
+    setLoadingTab(tab);
     setError("");
     try {
       if (tab === "resume-files") setResumeFiles(await api<ResumeFile[]>("/api/v1/resume-files"));
       else if (tab === "job-descriptions") setJobDescriptions(await api<JobDescription[]>("/api/v1/job-descriptions"));
       else if (tab === "evidence-cards") setEvidenceCards(await api<EvidenceCard[]>("/api/v1/evidence-cards"));
-      else await loadAll();
+      else {
+        await loadAll();
+        return;
+      }
+      setLoadedTabs((current) => new Set(current).add(tab));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资料加载失败。");
     } finally {
-      setLoading(false);
+      setLoadingTab((current) => current === tab ? undefined : current);
     }
   }
 
@@ -174,7 +187,7 @@ export default function LibraryPage() {
         body: JSON.stringify(body),
       });
       done();
-      await loadAll(false);
+      await loadAll();
       setMessage("已保存。");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败。");
@@ -190,7 +203,7 @@ export default function LibraryPage() {
     setMessage("");
     try {
       await api<void>(`${dialog.path}/${dialog.id}`, { method: "DELETE" });
-      await loadAll(false);
+      await loadAll();
       setDialog(undefined);
       setMessage(
         dialog.kind === "resume-file"
@@ -223,7 +236,7 @@ export default function LibraryPage() {
       await api<ResumeFile>("/api/v1/resume-files", { method: "POST", body });
       form.reset();
       setSelectedResumeFile(null);
-      await loadAll(false);
+      await loadAll();
       setMessage("简历文件已上传。");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "上传失败。");
@@ -290,11 +303,8 @@ export default function LibraryPage() {
           onDismissError={() => setError("")}
           onDismissNotice={() => setMessage("")}
         />
-        {loading ? (
-          <p className="muted">正在加载资料…</p>
-        ) : (
-          <div className="library-layout">
-            <nav className="library-tabs" aria-label="资料分类">
+        <div className="library-layout">
+          <nav className="library-tabs" aria-label="资料分类">
               {tabs.map((tab) => (
                 <button
                   className={
@@ -308,18 +318,19 @@ export default function LibraryPage() {
                   }}
                 >
                   <strong>{tab.label}</strong>
-                  <small>{tab.hint}</small>
+                  <small>{loadingTab === tab.id ? "加载中…" : tab.hint}</small>
                 </button>
               ))}
-            </nav>
-            <div className="library-content">
+          </nav>
+          <div className="library-content">
               {activeTab === "resume-files" && (
-                <section className="library-section">
-                  <h2>简历文件</h2>
-                  <p className="muted">
-                    仅支持 PDF、DOC、DOCX，最大 10 MiB。文件仅对当前账户可见。
-                  </p>
-                  <form className="library-form" onSubmit={uploadResumeFile}>
+                <section className="library-section library-workspace">
+                  <div className="library-editor">
+                    <h2>简历文件</h2>
+                    <p className="muted">
+                      仅支持 PDF、DOC、DOCX，最大 10 MiB。文件仅对当前账户可见。
+                    </p>
+                    <form className="library-form" onSubmit={uploadResumeFile}>
                     <label className="field">
                       选择文件
                       <input
@@ -336,8 +347,10 @@ export default function LibraryPage() {
                         {uploading ? "正在上传…" : "上传简历文件"}
                       </button>
                     </div>
-                  </form>
-                  <ul className="resource-list">
+                    </form>
+                  </div>
+                  <SavedResources title="已保存的简历" count={resumeFiles.length} loading={loadingTab === "resume-files"}>
+                    <ul className="resource-list">
                     {resumeFiles.map((file) => (
                       <li className="resource-item" key={file.id}>
                         <div>
@@ -384,13 +397,15 @@ export default function LibraryPage() {
                     {resumeFiles.length === 0 && (
                       <li className="muted">暂无简历文件。</li>
                     )}
-                  </ul>
+                    </ul>
+                  </SavedResources>
                 </section>
               )}
               {activeTab === "job-descriptions" && (
-                <section className="library-section">
-                  <h2>岗位 JD</h2>
-                  <form
+                <section className="library-section library-workspace">
+                  <div className="library-editor">
+                    <h2>岗位 JD</h2>
+                    <form
                     className="library-form"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault();
@@ -421,10 +436,11 @@ export default function LibraryPage() {
                         }
                       />
                     </div>
-                    <Field
-                      label="JD 文本"
-                      multiline
-                      value={jobDescription.content}
+                      <Field
+                        label="JD 文本"
+                        multiline
+                        rows={16}
+                        value={jobDescription.content}
                       onChange={(content) =>
                         setJobDescription({ ...jobDescription, content })
                       }
@@ -446,25 +462,29 @@ export default function LibraryPage() {
                         </button>
                       )}
                     </div>
-                  </form>
-                  <ResourceList
-                    items={jobDescriptions}
-                    label={(item) => `${item.company} · ${item.role}`}
-                    detail={(item) => item.content}
-                    onEdit={(item) => {
-                      setJobDescription(item);
-                      setJobDescriptionId(item.id);
-                    }}
-                    onDelete={(id) =>
-                      void remove("/api/v1/job-descriptions", id)
-                    }
-                  />
+                    </form>
+                  </div>
+                  <SavedResources title="已保存的岗位 JD" count={jobDescriptions.length} loading={loadingTab === "job-descriptions"}>
+                    <ResourceList
+                      items={jobDescriptions}
+                      label={(item) => `${item.company} · ${item.role}`}
+                      detail={(item) => item.content}
+                      onEdit={(item) => {
+                        setJobDescription(item);
+                        setJobDescriptionId(item.id);
+                      }}
+                      onDelete={(id) =>
+                        void remove("/api/v1/job-descriptions", id)
+                      }
+                    />
+                  </SavedResources>
                 </section>
               )}
               {activeTab === "evidence-cards" && (
-                <section className="library-section">
-                  <h2>项目证据卡</h2>
-                  <form
+                <section className="library-section library-workspace">
+                  <div className="library-editor">
+                    <h2>项目证据卡</h2>
+                    <form
                     className="library-form"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault();
@@ -534,8 +554,10 @@ export default function LibraryPage() {
                         </button>
                       )}
                     </div>
-                  </form>
-                  <ul className="resource-list">
+                    </form>
+                  </div>
+                  <SavedResources title="已保存的项目证据卡" count={evidenceCards.length} loading={loadingTab === "evidence-cards"}>
+                    <ul className="resource-list">
                     {evidenceCards.map((item) => (
                       <li className="resource-item evidence-card-item" key={item.id}>
                         <div className="evidence-card-summary">
@@ -561,18 +583,20 @@ export default function LibraryPage() {
                       </li>
                     ))}
                     {evidenceCards.length === 0 && <li className="muted">暂无资料。</li>}
-                  </ul>
+                    </ul>
+                  </SavedResources>
                 </section>
               )}
               {activeTab === "interview-packages" && (
-                <section className="library-section">
-                  <h2>面试包</h2>
-                  <p className="muted">
-                    选择已有简历文件、JD
-                    和项目证据卡，组成一次面试所用资料；文件上传在“简历文件”Tab
-                    完成。
-                  </p>
-                  <form
+                <section className="library-section library-workspace">
+                  <div className="library-editor">
+                    <h2>面试包</h2>
+                    <p className="muted">
+                      选择已有简历文件、JD
+                      和项目证据卡，组成一次面试所用资料；文件上传在“简历文件”Tab
+                      完成。
+                    </p>
+                    <form
                     className="library-form"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault();
@@ -591,22 +615,6 @@ export default function LibraryPage() {
                       );
                     }}
                   >
-                    <div className="form-row">
-                      <Field
-                        label="公司"
-                        value={interviewPackage.company}
-                        onChange={(company) =>
-                          setInterviewPackage({ ...interviewPackage, company })
-                        }
-                      />
-                      <Field
-                        label="岗位"
-                        value={interviewPackage.role}
-                        onChange={(role) =>
-                          setInterviewPackage({ ...interviewPackage, role })
-                        }
-                      />
-                    </div>
                     <Field
                       label="面试轮次"
                       value={interviewPackage.interviewRound}
@@ -642,12 +650,15 @@ export default function LibraryPage() {
                       <select
                         required
                         value={interviewPackage.jobDescriptionId}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const selected = jobDescriptions.find((item) => item.id === event.target.value);
                           setInterviewPackage({
                             ...interviewPackage,
+                            company: selected?.company ?? "",
+                            role: selected?.role ?? "",
                             jobDescriptionId: event.target.value,
-                          })
-                        }
+                          });
+                        }}
                       >
                         <option value="">请选择 JD</option>
                         {jobDescriptions.map((item) => (
@@ -709,35 +720,37 @@ export default function LibraryPage() {
                         </button>
                       )}
                     </div>
-                  </form>
-                  <ResourceList
-                    items={packages}
-                    label={(item) =>
-                      `${item.company} · ${item.role} · ${item.interviewRound}`
-                    }
-                    detail={(item) =>
-                      `关联 ${item.evidenceCardIds.length} 张项目证据卡`
-                    }
-                    onEdit={(item) => {
-                      setInterviewPackage({
-                        company: item.company,
-                        role: item.role,
-                        interviewRound: item.interviewRound,
-                        resumeFileId: item.resumeFileId ?? "",
-                        jobDescriptionId: item.jobDescriptionId ?? "",
-                        evidenceCardIds: item.evidenceCardIds,
-                      });
-                      setPackageId(item.id);
-                    }}
-                    onDelete={(id) =>
-                      void remove("/api/v1/interview-packages", id)
-                    }
-                  />
+                    </form>
+                  </div>
+                  <SavedResources title="已保存的面试包" count={packages.length} loading={loadingTab === "interview-packages"}>
+                    <ResourceList
+                      items={packages}
+                      label={(item) =>
+                        `${item.company} · ${item.role} · ${item.interviewRound}`
+                      }
+                      detail={(item) =>
+                        `关联 ${item.evidenceCardIds.length} 张项目证据卡`
+                      }
+                      onEdit={(item) => {
+                        setInterviewPackage({
+                          company: item.company,
+                          role: item.role,
+                          interviewRound: item.interviewRound,
+                          resumeFileId: item.resumeFileId ?? "",
+                          jobDescriptionId: item.jobDescriptionId ?? "",
+                          evidenceCardIds: item.evidenceCardIds,
+                        });
+                        setPackageId(item.id);
+                      }}
+                      onDelete={(id) =>
+                        void remove("/api/v1/interview-packages", id)
+                      }
+                    />
+                  </SavedResources>
                 </section>
               )}
-            </div>
           </div>
-        )}
+        </div>
       </main>
       <ConfirmDialog
         open={dialog !== undefined}
@@ -758,6 +771,31 @@ export default function LibraryPage() {
         onCancel={() => setDialog(undefined)}
       />
     </AppShell>
+  );
+}
+
+function SavedResources({
+  title,
+  count,
+  loading,
+  children,
+}: {
+  title: string;
+  count: number;
+  loading: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="library-saved" aria-live="polite">
+      <div className="section-heading">
+        <div>
+          <p className="profile-label">SAVED</p>
+          <h2>{title}</h2>
+        </div>
+        <span className="library-count">{loading ? "加载中…" : `${count} 项`}</span>
+      </div>
+      {loading ? <p className="muted">正在读取已保存的资料…</p> : children}
+    </section>
   );
 }
 

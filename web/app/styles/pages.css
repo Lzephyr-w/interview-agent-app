@@ -43,6 +43,58 @@
 .library-content {
   min-width: 0;
 }
+.library-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
+  gap: 28px;
+  align-items: start;
+}
+.library-editor {
+  min-width: 0;
+}
+.library-saved {
+  min-width: 0;
+  max-height: calc(100vh - 156px);
+  padding-right: 8px;
+  overflow: auto;
+}
+.library-saved .section-heading {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  padding: 0 0 12px;
+  background: var(--paper);
+}
+.library-saved h2 {
+  font-size: 22px;
+}
+.library-count {
+  color: var(--green);
+  font-weight: 800;
+}
+.library-saved .resource-list {
+  margin-top: 0;
+}
+.library-saved .resource-item p {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.library-saved .resource-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.library-saved .resource-item > div:first-child {
+  min-width: 0;
+}
+.library-saved .resource-item .item-actions {
+  justify-self: start;
+  margin-top: 10px;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
 .interview-list,
 .interview-form {
   margin-top: 26px;
@@ -382,7 +434,6 @@
 .resource-item {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
   align-items: stretch;
   padding: 14px;
   background: var(--surface);

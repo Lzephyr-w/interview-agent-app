@@ -38,9 +38,9 @@ class MaterialControllerTest {
             .contentType(MediaType.APPLICATION_JSON).content("{\"company\":\"A 公司\",\"role\":\"后端工程师\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFileId + "\",\"jobDescriptionId\":\"" + jdId + "\",\"evidenceCardIds\":[\"" + cardId + "\"]}"))
             .andExpect(status().isNotFound());
 
-        id(create("/api/v1/interview-packages", "user-a", "{\"company\":\"A 公司\",\"role\":\"后端工程师\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFileId + "\",\"jobDescriptionId\":\"" + jdId + "\",\"evidenceCardIds\":[\"" + cardId + "\"]}"));
+        id(create("/api/v1/interview-packages", "user-a", "{\"company\":\"客户端公司\",\"role\":\"客户端岗位\",\"interviewRound\":\"技术一面\",\"resumeFileId\":\"" + resumeFileId + "\",\"jobDescriptionId\":\"" + jdId + "\",\"evidenceCardIds\":[\"" + cardId + "\"]}"));
         mockMvc.perform(get("/api/v1/interview-packages").with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$[0].resumeId").doesNotExist()).andExpect(jsonPath("$[0].resumeFileId").value(resumeFileId)).andExpect(jsonPath("$[0].evidenceCardIds[0]").value(cardId));
+            .andExpect(status().isOk()).andExpect(jsonPath("$[0].company").value("A 公司")).andExpect(jsonPath("$[0].role").value("后端工程师")).andExpect(jsonPath("$[0].resumeId").doesNotExist()).andExpect(jsonPath("$[0].resumeFileId").value(resumeFileId)).andExpect(jsonPath("$[0].evidenceCardIds[0]").value(cardId));
     }
 
     @Test void evidenceCardCrudUsesFourCoreFieldsAndValidatesThem() throws Exception {

@@ -30,6 +30,7 @@ public class WeaknessService {
     private static final Set<String> TAGS = Set.of("技术基础", "算法与数据结构", "系统设计", "项目深挖", "业务理解", "行为面", "沟通表达", "岗位匹配", "简历风险", "英语表达");
     private static final Set<String> STATUSES = Set.of("NOT_STARTED", "IN_PROGRESS", "COMPLETED");
     private static final int MAX_ITEMS = 3;
+    private static final String INPUT_VERSION_PREFIX = "v2:";
     private final JdbcClient jdbc;
     private final ObjectMapper json;
     private final ReviewModelClient model;
@@ -51,10 +52,12 @@ public class WeaknessService {
         StoredAnalysis stored = stored(userId);
         if (stored == null) return new WeaknessAnalysis(null, null, false, List.of());
         String version = inputVersion(userId);
-        if (stored.inputVersion() != null && !stored.inputVersion().equals(version)) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
-        if (stored.inputVersion() == null && !stored.fingerprint().equals(input(userId).fingerprint())) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
-        if (stored.inputVersion() == null) jdbc.sql("UPDATE weakness_analyses SET input_version = :version WHERE user_id = :userId")
+        if (stored.inputVersion() != null && stored.inputVersion().startsWith(INPUT_VERSION_PREFIX) && !stored.inputVersion().equals(version)) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
+        if (stored.inputVersion() == null || !stored.inputVersion().startsWith(INPUT_VERSION_PREFIX)) {
+            if (!stored.fingerprint().equals(input(userId).fingerprint())) return new WeaknessAnalysis(null, stored.updatedAt(), true, List.of());
+            jdbc.sql("UPDATE weakness_analyses SET input_version = :version WHERE user_id = :userId")
             .param("userId", userId).param("version", version).update();
+        }
         return new WeaknessAnalysis(stored.summary(), stored.updatedAt(), false, stored.items());
     }
 
@@ -143,6 +146,7 @@ public class WeaknessService {
     }
 
     private String inputVersion(String userId) {
+        if (postgres) return INPUT_VERSION_PREFIX + rowVersion(userId);
         String sql = """
             SELECT kind, id, fingerprint FROM (
               SELECT 'INTERVIEW' kind, i.id, %s fingerprint FROM interviews i JOIN interview_packages p ON p.id = i.interview_package_id WHERE i.user_id = :userId
@@ -160,6 +164,21 @@ public class WeaknessService {
             );
         List<InputVersion> values = jdbc.sql(sql)
             .param("userId", userId).query((rs, row) -> new InputVersion(rs.getString("kind"), rs.getString("id"), rs.getString("fingerprint"))).list();
+        return INPUT_VERSION_PREFIX + fingerprint(values);
+    }
+
+    private String rowVersion(String userId) {
+        String sql = """
+            SELECT kind, id, version FROM (
+              SELECT 'INTERVIEW' kind, i.id, i.xmin::text version FROM interviews i WHERE i.user_id = :userId
+              UNION ALL SELECT DISTINCT 'RESUME_FILE', rf.id, rf.xmin::text FROM resume_files rf JOIN interview_packages p ON p.resume_file_id = rf.id JOIN interviews i ON i.interview_package_id = p.id WHERE i.user_id = :userId
+              UNION ALL SELECT 'QUESTION', q.id, q.xmin::text FROM interview_questions q JOIN interviews i ON i.id = q.interview_id WHERE i.user_id = :userId
+              UNION ALL SELECT 'REVIEW', r.id, r.xmin::text FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId
+              UNION ALL SELECT 'QUESTION_REVIEW', qr.id, qr.xmin::text FROM question_reviews qr JOIN review_reports r ON r.id = qr.review_report_id JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId
+            ) versions ORDER BY kind, id
+            """;
+        List<InputVersion> values = jdbc.sql(sql)
+            .param("userId", userId).query((rs, row) -> new InputVersion(rs.getString("kind"), rs.getString("id"), rs.getString("version"))).list();
         return fingerprint(values);
     }
 

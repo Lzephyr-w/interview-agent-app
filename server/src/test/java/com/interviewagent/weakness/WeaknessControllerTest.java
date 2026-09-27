@@ -55,7 +55,7 @@ class WeaknessControllerTest {
             .andExpect(jsonPath("$.items[0].evidence[0].questionId").value(a.question()))
             .andExpect(jsonPath("$.items[0].evidence[0].reviewReportId").value("z-new-a"))
             .andExpect(jsonPath("$.items[0].evidence[0].interviewId").value(a.interview()));
-        org.junit.jupiter.api.Assertions.assertFalse(jdbc.sql("SELECT input_version IS NULL FROM weakness_analyses WHERE user_id = 'user-a'").query(Boolean.class).single());
+        org.junit.jupiter.api.Assertions.assertTrue(jdbc.sql("SELECT input_version FROM weakness_analyses WHERE user_id = 'user-a'").query(String.class).single().startsWith("v2:"));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(model).replyJson(prompt.capture());
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains(a.question()));

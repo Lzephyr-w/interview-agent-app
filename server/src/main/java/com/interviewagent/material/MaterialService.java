@@ -139,10 +139,10 @@ public class MaterialService {
     private InterviewPackage packageFromRequest(String id, String userId, InterviewPackageRequest request) {
         String resumeFileId = required(request.resumeFileId(), "简历文件", 200); String jobDescriptionId = required(request.jobDescriptionId(), "JD", 200);
         resumeFiles.metadata(userId, resumeFileId);
-        jobDescription(userId, jobDescriptionId);
+        JobDescription jobDescription = jobDescription(userId, jobDescriptionId);
         List<String> cardIds = request.evidenceCardIds() == null ? List.of() : request.evidenceCardIds().stream().distinct().toList();
         cardIds.forEach(cardId -> evidenceCard(userId, cardId));
-        return new InterviewPackage(id, required(request.company(), "公司", 200), required(request.role(), "岗位", 200), required(request.interviewRound(), "面试轮次", 200), resumeFileId, jobDescriptionId, cardIds);
+        return new InterviewPackage(id, jobDescription.company(), jobDescription.role(), required(request.interviewRound(), "面试轮次", 200), resumeFileId, jobDescriptionId, cardIds);
     }
 
     private InterviewPackage packageFromRow(String userId, String id, String company, String role, String interviewRound, String resumeFileId, String jobDescriptionId) {
