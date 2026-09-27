@@ -1,6 +1,9 @@
 import { getSession, signOut } from "@/lib/auth";
 
 type ApiOptions = Omit<RequestInit, "headers"> & { headers?: HeadersInit };
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 const pendingGets = new Map<string, Promise<unknown>>();
 let redirectingToLogin = false;
 
@@ -41,7 +44,7 @@ export function api<T>(
       const body = (await response.json().catch(() => null)) as {
         message?: string;
       } | null;
-      throw new Error(body?.message ?? "服务暂时不可用，请稍后重试。");
+      throw new ApiError(body?.message ?? "服务暂时不可用，请稍后重试。", response.status);
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;

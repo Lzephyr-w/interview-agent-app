@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 type Package = {
   id: string;
@@ -13,6 +13,23 @@ type Package = {
   interviewRound: string;
 };
 type Audio = { status: string; transcriptError: string };
+type AnswerStart = { questionId: string; answerExpiresAt: string };
+type AudioUpload = {
+  id: string;
+  chunkSizeBytes: number;
+  totalBytes: number;
+  totalParts: number;
+  receivedParts: number[];
+  status: string;
+};
+type SavedAudioUpload = {
+  key: string;
+  sessionId: string;
+  questionId: string;
+  uploadId: string;
+  sha256: string;
+  blob: Blob;
+};
 type Question = {
   id: string;
   questionText: string;
@@ -36,8 +53,6 @@ type Session = {
 const QUESTION_LIMIT = 10;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const TRANSCRIPTION_SAMPLE_RATE = 16_000;
-// ponytail: mirrors the server's fixed five-minute answer window; make it API-configured if that limit changes.
-const ANSWER_DURATION_MS = 5 * 60 * 1000;
 const questionTypeLabel = {
   FUNDAMENTAL: "技术基础",
   PROJECT: "项目实践",
@@ -46,6 +61,44 @@ const questionTypeLabel = {
 };
 const errorText = (error: unknown, fallback: string) =>
   error instanceof Error ? error.message : fallback;
+
+const audioUploadKey = (sessionId: string, questionId: string) =>
+  `${sessionId}:${questionId}`;
+const openAudioUploads = () =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("ai-mock-audio-uploads", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("uploads", { keyPath: "key" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+async function savedAudioUpload(key: string) {
+  const db = await openAudioUploads();
+  return await new Promise<SavedAudioUpload | undefined>((resolve, reject) => {
+    const request = db.transaction("uploads").objectStore("uploads").get(key);
+    request.onsuccess = () => { db.close(); resolve(request.result as SavedAudioUpload | undefined); };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+async function saveAudioUpload(value: SavedAudioUpload) {
+  const db = await openAudioUploads();
+  await new Promise<void>((resolve, reject) => {
+    const request = db.transaction("uploads", "readwrite").objectStore("uploads").put(value);
+    request.onsuccess = () => { db.close(); resolve(); };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+async function removeAudioUpload(key: string) {
+  const db = await openAudioUploads();
+  await new Promise<void>((resolve, reject) => {
+    const request = db.transaction("uploads", "readwrite").objectStore("uploads").delete(key);
+    request.onsuccess = () => { db.close(); resolve(); };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+async function sha256(blob: Blob) {
+  const bytes = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function Icon({ name }: { name: "mic" | "stop" | "sound" | "close" | "play" }) {
   const paths = {
@@ -83,6 +136,8 @@ export default function AiMockInterviewRoomPage() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recording, setRecording] = useState(false);
   const [preparingRecording, setPreparingRecording] = useState(false);
+  const [uploadPending, setUploadPending] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [countdownDeadline, setCountdownDeadline] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -143,6 +198,12 @@ export default function AiMockInterviewRoomPage() {
     return () => window.clearInterval(timer);
   }, [session?.id, session?.task?.id, session?.task?.status]);
   useEffect(() => () => window.speechSynthesis?.cancel(), [current?.id]);
+  useEffect(() => {
+    if (!session?.id || !current?.id) return;
+    void savedAudioUpload(audioUploadKey(session.id, current.id))
+      .then((saved) => setUploadPending(Boolean(saved)))
+      .catch(() => undefined);
+  }, [current?.id, session?.id]);
   useEffect(() => {
     if (current && spokenQuestion.current !== current.id) {
       spokenQuestion.current = current.id;
@@ -277,7 +338,7 @@ export default function AiMockInterviewRoomPage() {
       return;
     }
     window.speechSynthesis?.pause();
-    if (preparingRecording || recording || busy) return;
+    if (preparingRecording || recording || busy || uploadPending) return;
     setCountdownDeadline(null);
     setRemaining(null);
     setPreparingRecording(true);
@@ -287,15 +348,15 @@ export default function AiMockInterviewRoomPage() {
         activeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         microphone.current = activeStream;
       }
-      const started = await api<Session>(
+      const started = await api<AnswerStart>(
         `/api/v1/ai-mock-interviews/${session?.id}/questions/${current.id}/start-answer`,
         { method: "POST" },
       );
-      if (started.currentQuestion?.id !== current.id) {
-        setSession(started);
-        return;
-      }
-      setCountdownDeadline(Date.now() + ANSWER_DURATION_MS);
+      if (started.questionId !== current.id) return;
+      setCountdownDeadline(new Date(started.answerExpiresAt).getTime());
+      setSession((previous) => previous?.currentQuestion?.id === current.id
+        ? { ...previous, currentQuestion: { ...previous.currentQuestion, answerExpiresAt: started.answerExpiresAt } }
+        : previous);
       const mimeType = MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
         ? "audio/ogg;codecs=opus"
         : "";
@@ -313,9 +374,13 @@ export default function AiMockInterviewRoomPage() {
           });
           void (async () => {
             try {
-              const { audio, silent } = await toWav(recorded);
-              if (silent) await skipAnswer();
-              else await upload(audio);
+              if (recorded.type.startsWith("audio/ogg")) await upload(recorded);
+              else {
+                // ponytail: retain WAV fallback until the server can transcode WebM for the OGG/WAV-only transcription provider.
+                const { audio, silent } = await toWav(recorded);
+                if (silent) await skipAnswer();
+                else await upload(audio);
+              }
             } catch (caught) {
               setError(errorText(caught, "录音处理失败，请重新录音。"));
               setBusy(false);
@@ -324,7 +389,6 @@ export default function AiMockInterviewRoomPage() {
         }
       };
       value.start();
-      setSession(started);
       setRecording(true);
     } catch (caught) {
       setError(
@@ -410,16 +474,47 @@ export default function AiMockInterviewRoomPage() {
       throw new Error("录音超过 10 MiB，请缩短回答后重新录音。");
     setBusy(true);
     try {
-      const form = new FormData();
-      form.append(
-        "file",
-        blob,
-        blob.type === "audio/wav" ? "answer.wav" : "answer.ogg",
-      );
+      const key = audioUploadKey(session.id, current.id);
+      const digest = await sha256(blob);
+      let saved = await savedAudioUpload(key);
+      if (!saved) {
+        saved = { key, sessionId: session.id, questionId: current.id, uploadId: "", sha256: digest, blob };
+        await saveAudioUpload(saved);
+      }
+      if (saved.sha256 !== digest)
+        throw new Error("已有未完成录音，请继续上传或放弃后重新录音。");
+      let transfer: AudioUpload;
+      if (saved.uploadId) {
+        transfer = await api<AudioUpload>(
+          `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/audio-uploads/${saved.uploadId}`,
+        );
+      } else {
+        transfer = await api<AudioUpload>(
+          `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/audio-uploads`,
+          { method: "POST", body: JSON.stringify({ totalBytes: blob.size, sha256: digest }) },
+        );
+        saved = { ...saved, uploadId: transfer.id };
+        await saveAudioUpload(saved);
+      }
+      if (transfer.status !== "UPLOADING") throw new Error("录音上传已过期，请重新录音。");
+      const received = new Set(transfer.receivedParts);
+      setUploadPending(true);
+      setUploadProgress(received.size / transfer.totalParts);
+      for (let partNo = 0; partNo < transfer.totalParts; partNo += 1) {
+        if (received.has(partNo)) continue;
+        const start = partNo * transfer.chunkSizeBytes;
+        const part = blob.slice(start, Math.min(blob.size, start + transfer.chunkSizeBytes));
+        await uploadPart(session.id, current.id, transfer, partNo, part);
+        received.add(partNo);
+        setUploadProgress(received.size / transfer.totalParts);
+      }
       const updated = await api<Session>(
-        `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/audio`,
-        { method: "POST", body: form },
+        `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/audio-uploads/${transfer.id}/complete`,
+        { method: "POST" },
       );
+      await removeAudioUpload(key);
+      setUploadPending(false);
+      setUploadProgress(0);
       setSession(updated);
       const failed =
         updated.currentQuestion?.audio?.status === "FAILED"
@@ -429,11 +524,63 @@ export default function AiMockInterviewRoomPage() {
       else
         setNotice(
           updated.currentQuestion
-            ? "回答已提交，正在进入下一题。"
+            ? "录音已提交，正在后台处理。"
             : "10 道题已完成，可以结束模拟。 ",
         );
     } catch (caught) {
-      setError(errorText(caught, "提交回答失败，请重新录音。"));
+      setUploadPending(true);
+      setError(errorText(caught, "上传已暂停，可继续上传或放弃后重新录音。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function uploadPart(sessionId: string, questionId: string, transfer: AudioUpload, partNo: number, part: Blob) {
+    const digest = await sha256(part);
+    const start = partNo * transfer.chunkSizeBytes;
+    const end = start + part.size - 1;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await api<void>(
+          `/api/v1/ai-mock-interviews/${sessionId}/questions/${questionId}/audio-uploads/${transfer.id}/parts/${partNo}`,
+          {
+            method: "PUT",
+            body: part,
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Range": `bytes ${start}-${end}/${transfer.totalBytes}`,
+              "X-Chunk-SHA256": digest,
+            },
+          },
+        );
+        return;
+      } catch (caught) {
+        const retryable = !(caught instanceof ApiError) || [408, 429, 500, 502, 503, 504].includes(caught.status);
+        if (!retryable || attempt === 2) throw caught;
+        await new Promise((resolve) => window.setTimeout(resolve, 500 * 2 ** attempt));
+      }
+    }
+  }
+  async function resumeUpload() {
+    if (!session || !current) return;
+    const saved = await savedAudioUpload(audioUploadKey(session.id, current.id));
+    if (!saved) { setUploadPending(false); return; }
+    await upload(saved.blob);
+  }
+  async function abandonUpload() {
+    if (!session || !current) return;
+    const key = audioUploadKey(session.id, current.id);
+    const saved = await savedAudioUpload(key);
+    setBusy(true);
+    try {
+      if (saved?.uploadId) {
+        setSession(await api<Session>(`/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/audio-uploads/${saved.uploadId}`, { method: "DELETE" }));
+      }
+      await removeAudioUpload(key);
+      setUploadPending(false);
+      setUploadProgress(0);
+      setNotice("已放弃未完成上传，可以重新录音。 ");
+    } catch (caught) {
+      setError(errorText(caught, "无法放弃上传，请稍后重试。"));
     } finally {
       setBusy(false);
     }
@@ -629,7 +776,7 @@ export default function AiMockInterviewRoomPage() {
             <h1>{current.questionText}</h1>
             {preparingRecording || busy || blocksQuestion ? (
               <p className="ai-room-processing">
-                {preparingRecording ? "正在准备回答…" : "正在提交回答并准备下一题…"}
+                {preparingRecording ? "正在准备回答…" : uploadPending ? `正在上传录音 ${Math.round(uploadProgress * 100)}%…` : "正在提交回答并准备下一题…"}
               </p>
             ) : recording ? (
               <>
@@ -662,6 +809,14 @@ export default function AiMockInterviewRoomPage() {
                   >
                     <Icon name="close" />
                   </button>
+                </div>
+              </>
+            ) : uploadPending ? (
+              <>
+                <p className="ai-room-listening">录音上传已暂停（{Math.round(uploadProgress * 100)}%）</p>
+                <div className="ai-room-actions">
+                  <button type="button" className="ai-room-primary" onClick={() => void resumeUpload()}>继续上传</button>
+                  <button type="button" className="ai-room-icon ai-room-cancel" aria-label="放弃录音" title="放弃录音" onClick={() => void abandonUpload()}><Icon name="close" /></button>
                 </div>
               </>
             ) : (

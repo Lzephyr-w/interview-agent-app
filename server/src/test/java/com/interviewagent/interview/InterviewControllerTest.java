@@ -145,7 +145,7 @@ class InterviewControllerTest {
         jdbc.sql("INSERT INTO ai_mock_interview_questions (id,ai_mock_interview_id,question_text,state,sort_order) VALUES ('timer-question','timer-session','请说明缓存策略。','OPEN',0)").update();
 
         mockMvc.perform(post("/api/v1/ai-mock-interviews/{id}/questions/{questionId}/start-answer", "timer-session", "timer-question").with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.currentQuestion.answerExpiresAt").isNotEmpty());
+            .andExpect(status().isOk()).andExpect(jsonPath("$.questionId").value("timer-question")).andExpect(jsonPath("$.answerExpiresAt").isNotEmpty());
         org.junit.jupiter.api.Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE id='timer-question' AND answer_started_at IS NOT NULL AND answer_expires_at IS NOT NULL").query(Integer.class).single());
     }
 

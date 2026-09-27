@@ -268,6 +268,39 @@ class AiMockQuestionAgentTest {
         verify(storage).delete(org.mockito.ArgumentMatchers.contains(assetId));
     }
 
+    @Test
+    void resumableAudioUploadIsOwnedIdempotentAndCompletesOnce() throws Exception {
+        String user="chunk-user", packageId=packageFor(user), sessionId=UUID.randomUUID().toString(), questionId=UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,:user,:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)").param("id",sessionId).param("user",user).param("package",packageId).update();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order,answer_started_at,answer_expires_at) VALUES(:id,:session,'请说明事件循环。','OPEN',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP + INTERVAL '5' MINUTE)").param("id",questionId).param("session",sessionId).update();
+        byte[] wav="RIFFxxxxWAVEdata".getBytes();
+        String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(wav));
+        String base="/api/v1/ai-mock-interviews/"+sessionId+"/questions/"+questionId+"/audio-uploads";
+        mockMvc.perform(post(base).contentType("application/json").content("{\"totalBytes\":"+wav.length+",\"sha256\":\""+sha+"\"}").with(jwt().jwt(t->t.subject("other-user")))).andExpect(status().isNotFound());
+        String uploadId=json.readTree(mockMvc.perform(post(base).contentType("application/json").content("{\"totalBytes\":"+wav.length+",\"sha256\":\""+sha+"\"}").with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).path("id").asText();
+        String part=base+"/"+uploadId+"/parts/0";
+        for(int attempt=0;attempt<2;attempt++) mockMvc.perform(put(part).content(wav).header("Content-Range","bytes 0-"+(wav.length-1)+"/"+wav.length).header("X-Chunk-SHA256",sha).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isNoContent());
+        verify(storage,org.mockito.Mockito.times(1)).upload(org.mockito.ArgumentMatchers.contains("ai-mock-staging/"),eq("application/octet-stream"),org.mockito.ArgumentMatchers.eq(wav));
+        when(storage.download(org.mockito.ArgumentMatchers.contains("ai-mock-staging/"))).thenReturn(wav);
+        String complete=base+"/"+uploadId+"/complete";
+        mockMvc.perform(post(complete).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk()).andExpect(jsonPath("$.task.taskType").value("AI_FINALIZE_AUDIO"));
+        verify(storage,never()).download(org.mockito.ArgumentMatchers.contains("ai-mock-staging/"));
+        mockMvc.perform(post(complete).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
+        worker.run();
+        assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE question_id=:question").param("question",questionId).query(Integer.class).single());
+        assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_upload_parts WHERE upload_id=:id").param("id",uploadId).query(Integer.class).single());
+    }
+
+    @Test
+    void resumableUploadPreflightAllowsItsIntegrityHeaders() throws Exception {
+        mockMvc.perform(options("/api/v1/ai-mock-interviews/session/questions/question/audio-uploads/upload/parts/0")
+            .header("Origin", "http://localhost:3000")
+            .header("Access-Control-Request-Method", "PUT")
+            .header("Access-Control-Request-Headers", "content-range,x-chunk-sha256"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Access-Control-Allow-Headers", org.hamcrest.Matchers.allOf(org.hamcrest.Matchers.containsString("content-range"), org.hamcrest.Matchers.containsString("x-chunk-sha256"))));
+    }
+
     private String packageFor(String user) {
         String id = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO interview_packages(id,user_id,company,role,interview_round) VALUES(:id,:user,'测试公司','前端开发','技术一面')").param("id", id).param("user", user).update();
