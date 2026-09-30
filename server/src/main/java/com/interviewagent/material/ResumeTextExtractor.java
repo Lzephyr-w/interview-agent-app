@@ -12,10 +12,10 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.stereotype.Component;
 
 @Component
-class ResumeTextExtractor {
+public class ResumeTextExtractor {
     static final int MAX_STORED_CHARS = 40_000;
 
-    ExtractedText extract(String contentType, byte[] content) throws IOException {
+    public ExtractedText extract(String contentType, byte[] content) throws IOException {
         String text = switch (contentType) {
             case "application/pdf" -> pdf(content);
             case "application/msword" -> doc(content);
@@ -46,5 +46,5 @@ class ResumeTextExtractor {
         }
     }
 
-    record ExtractedText(String text, boolean truncated) {}
+    public record ExtractedText(String text, boolean truncated) {}
 }

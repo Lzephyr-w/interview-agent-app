@@ -50,6 +50,19 @@ def test_operations(operation):
     assert len(model.prompts) == 1
 
 
+def test_knowledge_only_extends_text_contract_and_prompt():
+    payload = request()
+    payload["input"]["knowledge"] = "来源：React.md；片段：useEffect 处理副作用。"
+    model = Model('{"questionText":"useEffect 如何处理副作用？"}')
+    assert generate(payload, lambda remaining: model)["result"]["questionText"] == "useEffect 如何处理副作用？"
+    assert "必须紧扣input.knowledge" in model.prompts[0]
+    payload = request("VOICE_PLAN")
+    payload["input"]["knowledge"] = "不允许传给语音模拟"
+    with pytest.raises(SimulationError) as failure:
+        validate_request(payload)
+    assert failure.value.code == "INVALID_REQUEST"
+
+
 def test_invalid_structure_returns_retryable_error_after_one_call():
     model = Model("not json", '{"questionText":"如何验证？"}')
     with pytest.raises(SimulationError) as failure:

@@ -119,7 +119,7 @@ public class InterviewService {
         QuestionRequest valid = questionRequest(request);
         if (jdbc.sql("UPDATE interview_questions SET question_text = :question, answer_text = :answer, self_assessment = :assessment, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND interview_id = :interviewId")
             .param("id", questionId).param("interviewId", interviewId).param("question", valid.questionText()).param("answer", valid.answerText()).param("assessment", valid.selfAssessment()).update() == 0) throw notFound();
-        return new InterviewQuestion(question.id(), valid.questionText(), valid.answerText(), valid.selfAssessment(), question.sortOrder());
+        return new InterviewQuestion(question.id(), valid.questionText(), valid.answerText(), valid.selfAssessment(), question.sortOrder(), question.aiFeedback());
     }
 
     void deleteQuestion(String userId, String interviewId, String questionId) {
@@ -184,7 +184,7 @@ public class InterviewService {
         QuestionRequest valid = questionRequest(request); String id = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO interview_questions (id, interview_id, question_text, answer_text, self_assessment, sort_order) VALUES (:id, :interviewId, :question, :answer, :assessment, :order)")
             .param("id", id).param("interviewId", interviewId).param("question", valid.questionText()).param("answer", valid.answerText()).param("assessment", valid.selfAssessment()).param("order", order).update();
-        return new InterviewQuestion(id, valid.questionText(), valid.answerText(), valid.selfAssessment(), order);
+        return new InterviewQuestion(id, valid.questionText(), valid.answerText(), valid.selfAssessment(), order, "");
     }
 
     private QuestionRequest questionRequest(QuestionRequest request) {
@@ -204,12 +204,12 @@ public class InterviewService {
     }
 
     private InterviewQuestion question(String questionId, String interviewId) {
-        return jdbc.sql("SELECT id, question_text, answer_text, self_assessment, sort_order FROM interview_questions WHERE id = :id AND interview_id = :interviewId")
+        return jdbc.sql("SELECT id, question_text, answer_text, self_assessment, sort_order, ai_feedback FROM interview_questions WHERE id = :id AND interview_id = :interviewId")
             .param("id", questionId).param("interviewId", interviewId).query((rs, row) -> question(rs)).optional().orElseThrow(InterviewService::notFound);
     }
 
     private List<InterviewQuestion> questions(String interviewId) {
-        return jdbc.sql("SELECT id, question_text, answer_text, self_assessment, sort_order FROM interview_questions WHERE interview_id = :interviewId ORDER BY sort_order, created_at")
+        return jdbc.sql("SELECT id, question_text, answer_text, self_assessment, sort_order, ai_feedback FROM interview_questions WHERE interview_id = :interviewId ORDER BY sort_order, created_at")
             .param("interviewId", interviewId).query((rs, row) -> question(rs)).list();
     }
 
@@ -265,7 +265,7 @@ public class InterviewService {
     private static String text(JsonNode node, String name, int maximum) { String value = node.path(name).asText("").trim(); if (value.isBlank() || value.length() > maximum) throw invalidFormat(); return value; }
     private static List<String> textArray(JsonNode node, int maximum, int maxChars) { if (!node.isArray() || node.size() > maximum) throw invalidFormat(); List<String> values = new ArrayList<>(); for (JsonNode item : node) { String value = item.asText("").trim(); if (value.isBlank() || value.length() > maxChars) throw invalidFormat(); values.add(value); } if (new LinkedHashSet<>(values).size() != values.size()) throw invalidFormat(); return values; }
     private static InterviewSummary summary(ResultSet rs) throws java.sql.SQLException { return new InterviewSummary(rs.getString("id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getObject("interview_time", OffsetDateTime.class), rs.getString("status"), rs.getString("result"), rs.getString("interview_package_id"), rs.getString("interview_type"), rs.getString("simulation_type")); }
-    private static InterviewQuestion question(ResultSet rs) throws java.sql.SQLException { return new InterviewQuestion(rs.getString("id"), rs.getString("question_text"), rs.getString("answer_text"), rs.getString("self_assessment"), rs.getInt("sort_order")); }
+    private static InterviewQuestion question(ResultSet rs) throws java.sql.SQLException { return new InterviewQuestion(rs.getString("id"), rs.getString("question_text"), rs.getString("answer_text"), rs.getString("self_assessment"), rs.getInt("sort_order"), rs.getString("ai_feedback")); }
     private static String required(String value, String label) { return required(value, label, Integer.MAX_VALUE); }
     private static String required(String value, String label, int maximum) { String result = optional(value); if (result.isBlank()) throw new IllegalArgumentException(label + "不能为空。"); return limited(result, label, maximum); }
     private static String optional(String value) { return value == null ? "" : value.trim(); }

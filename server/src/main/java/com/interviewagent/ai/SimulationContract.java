@@ -24,9 +24,14 @@ public final class SimulationContract {
     public static void input(String operation, JsonNode data) {
         try {
             if (!OPERATIONS.contains(operation)) throw invalid();
+            boolean knowledge = operation.startsWith("TEXT_") && data.has("knowledge");
             if (operation.equals("VOICE_QUESTION")) fields(data,"materials","history","slot");
-            else if (operation.contains("FEEDBACK") || operation.equals("TEXT_FOLLOW_UP")) fields(data,"materials","history","questionText","answer");
+            else if (operation.contains("FEEDBACK") || operation.equals("TEXT_FOLLOW_UP")) {
+                if (knowledge) fields(data,"materials","history","questionText","answer","knowledge");
+                else fields(data,"materials","history","questionText","answer");
+            } else if (knowledge) fields(data,"materials","history","knowledge");
             else fields(data,"materials","history");
+            if (knowledge) text(data,"knowledge",6000,false);
             JsonNode m = data.path("materials");
             Set<String> materialFields = new HashSet<>(); m.fieldNames().forEachRemaining(materialFields::add);
             Set<String> baseMaterials = Set.of("company","role","round","jd","resume","cards");

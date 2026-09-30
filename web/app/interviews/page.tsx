@@ -32,6 +32,7 @@ type Question = {
   answerText: string;
   selfAssessment: string;
   sortOrder: number;
+  aiFeedback: string;
 };
 type QuestionReview = {
   questionId: string;
@@ -961,6 +962,12 @@ export default function InterviewsPage() {
                               <b>自评</b>
                               {labels[item.selfAssessment]}
                             </p>
+                            {item.aiFeedback && (
+                              <p>
+                                <b>AI 反馈</b>
+                                {item.aiFeedback}
+                              </p>
+                            )}
                           </div>
                         ) : (
                           <QuestionEditor

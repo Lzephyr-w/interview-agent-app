@@ -13,6 +13,8 @@ type Package = {
   role: string;
   interviewRound: string;
 };
+type Category = { id: string; name: string };
+type KnowledgeDocument = { id: string; categoryId: string };
 
 type Question = {
   id: string;
@@ -24,6 +26,8 @@ type Question = {
   parentQuestionId: string | null;
   state: "PENDING" | "OPEN" | "ANSWERED" | "SKIPPED";
   sortOrder: number;
+  sourceTitle: string | null;
+  sourceLocation: string | null;
 };
 
 type MockInterview = {
@@ -33,6 +37,7 @@ type MockInterview = {
   interviewRound: string;
   status: "RUNNING" | "FINISHED";
   mode: string;
+  sourceMode: "STANDARD" | "KNOWLEDGE";
   aiAvailable: boolean;
   aiMessage: string;
   totalQuestions: number;
@@ -59,6 +64,11 @@ function mainQuestionNumber(question: Question, questions: Question[]) {
 
 export default function MockInterviewsPage() {
   const [packages, setPackages] = useState<Package[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const [sourceMode, setSourceMode] = useState<"STANDARD" | "KNOWLEDGE">("STANDARD");
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [mainQuestionCount, setMainQuestionCount] = useState(4);
   const [form, setForm] = useState(emptyForm);
   const [session, setSession] = useState<MockInterview>();
   const [pendingSession, setPendingSession] = useState<MockInterview>();
@@ -76,8 +86,14 @@ export default function MockInterviewsPage() {
     async function bootstrap() {
       setLoading(true);
       try {
-        const loaded = await api<Package[]>("/api/v1/interview-packages");
+        const [loaded, nextCategories, nextDocuments] = await Promise.all([
+          api<Package[]>("/api/v1/interview-packages"),
+          api<Category[]>("/api/v1/knowledge/categories"),
+          api<KnowledgeDocument[]>("/api/v1/knowledge/documents"),
+        ]);
         setPackages(loaded);
+        setCategories(nextCategories);
+        setKnowledgeDocuments(nextDocuments);
       } catch (cause) {
         setError(message(cause, "面试包加载失败，请稍后重试。"));
       } finally {
@@ -141,6 +157,9 @@ export default function MockInterviewsPage() {
           company: form.company,
           role: form.role,
           interviewRound: form.round,
+          totalQuestions: mainQuestionCount,
+          sourceMode,
+          categoryIds: sourceMode === "KNOWLEDGE" ? categoryIds : [],
         }),
       });
       setSession(created);
@@ -266,10 +285,13 @@ export default function MockInterviewsPage() {
   );
   const lastSubmitted = history?.[history.length - 1];
   const pendingFollowUp = Boolean(
-    session?.task &&
+    session?.task?.taskType === "MOCK_NEXT" &&
       !session.currentQuestion &&
-      lastSubmitted?.questionKind === "MAIN" &&
-      lastSubmitted.answerText.trim(),
+      lastSubmitted?.answerText.trim() &&
+      (lastSubmitted?.questionKind === "MAIN" ||
+        (lastSubmitted?.questionKind === "FOLLOW_UP" &&
+          lastSubmitted.selfAssessment === "UNCERTAIN" &&
+          session.questions.filter((item) => item.parentQuestionId === lastSubmitted.parentQuestionId).length < 2)),
   );
   const currentQuestionIsFollowUp = Boolean(
     pendingFollowUp || session?.currentQuestion?.questionKind === "FOLLOW_UP",
@@ -287,7 +309,7 @@ export default function MockInterviewsPage() {
     <AppShell>
       <main className="app-page">
         <section className="hero-card page-hero text-mock-hero">
-          <p className="eyebrow">CLOSED LOOP 4</p>
+          <p className="eyebrow">TEXT INTERVIEW</p>
           <h1>
             用一轮回答，<em>练到经得起追问。</em>
           </h1>
@@ -312,7 +334,7 @@ export default function MockInterviewsPage() {
                 <p className="profile-label">
                   {session.company} · {session.role}
                 </p>
-                <h2>{session.interviewRound} 文本模拟</h2>
+                <h2>{session.interviewRound} {session.sourceMode === "KNOWLEDGE" ? "知识库" : ""}文本模拟</h2>
               </div>
               {session.status === "RUNNING" && (
                 <button
@@ -340,7 +362,7 @@ export default function MockInterviewsPage() {
                     {currentQuestionIsFollowUp && <small className="mock-progress-followup">追问</small>}
                   </strong>
                   <span>
-                    已完成 {session.completedQuestions} 道主问题；追问不计入 4 道主问题上限
+                    已完成 {session.completedQuestions} 道主问题；每道可能有 1–2 道追问，追问不计入所选数量
                   </span>
                 </div>
                 {blocksQuestion && session.task?.status === "FAILED" ? (
@@ -377,6 +399,7 @@ export default function MockInterviewsPage() {
                         : "主问题"}
                     </p>
                     <h3>{session.currentQuestion.questionText}</h3>
+                    {session.currentQuestion.sourceTitle && <p className="muted">来源：{session.currentQuestion.sourceTitle} · {session.currentQuestion.sourceLocation}</p>}
                     <label className="field" htmlFor="mock-answer">
                       我的回答
                       <textarea
@@ -391,7 +414,7 @@ export default function MockInterviewsPage() {
                           setAnswer(event.target.value);
                           if (answerError) setAnswerError("");
                         }}
-                        placeholder="只写你确定的经历、事实和指标；没有的信息请写“待补充”。"
+                        placeholder="请输入回答内容，若不作答请点击“跳过”。"
                       />
                       {answerError && (
                         <p
@@ -473,6 +496,7 @@ export default function MockInterviewsPage() {
                               </small>
                             </summary>
                             <div className="mock-history-detail">
+                              {item.sourceTitle && <p>来源：{item.sourceTitle} · {item.sourceLocation}</p>}
                               <p>
                                 <b>我的回答</b>
                                 {item.state === "SKIPPED" ? "已跳过" : item.answerText}
@@ -528,6 +552,7 @@ export default function MockInterviewsPage() {
                     {session.questions.map((item) => (
                       <li key={item.id}>
                         <strong>{item.questionText}</strong>
+                        {item.sourceTitle && <span>来源：{item.sourceTitle} · {item.sourceLocation}</span>}
                         <span>{item.state === "SKIPPED" ? "已跳过" : item.answerText}</span>
                         <em>AI 反馈：{item.aiFeedback || "待补充"}</em>
                       </li>
@@ -601,10 +626,37 @@ export default function MockInterviewsPage() {
                     }
                   />
                 </label>
+                <div className="mock-count-row">
+                  <label htmlFor="mock-main-count">主问题数量</label>
+                  <select
+                    id="mock-main-count"
+                    value={mainQuestionCount}
+                    aria-describedby="mock-count-hint"
+                    onChange={(event) => setMainQuestionCount(Number(event.target.value))}
+                  >
+                    {Array.from({ length: 10 }, (_, index) => index + 1).map((count) => (
+                      <option key={count} value={count}>{count}</option>
+                    ))}
+                  </select>
+                  <span>道</span>
+                  <span className="field-hint" id="mock-count-hint">每道主问题可能有 1–2 道追问，追问不计入题数。</span>
+                </div>
+                <fieldset className="field">
+                  <legend>出题方式</legend>
+                  <label><input type="radio" name="sourceMode" checked={sourceMode === "STANDARD"} onChange={() => setSourceMode("STANDARD")} /> 常规模拟</label>{" "}
+                  <label><input type="radio" name="sourceMode" checked={sourceMode === "KNOWLEDGE"} onChange={() => setSourceMode("KNOWLEDGE")} /> 基于知识库</label>
+                </fieldset>
+                {sourceMode === "KNOWLEDGE" && <fieldset className="field">
+                  <legend>选择知识库类别（可多选）</legend>
+                  {categories.map((category) => <label key={category.id}>
+                    <input type="checkbox" checked={categoryIds.includes(category.id)} disabled={!knowledgeDocuments.some((doc) => doc.categoryId === category.id)} onChange={(event) => setCategoryIds((current) => event.target.checked ? [...current, category.id] : current.filter((id) => id !== category.id))} /> {category.name}（{knowledgeDocuments.filter((doc) => doc.categoryId === category.id).length} 份文档）
+                  </label>)}
+                  {categories.length === 0 && <p className="muted">暂无类别，请先到资料库导入知识库文档。</p>}
+                </fieldset>}
                 <p className="muted">
-                  每次开始都会创建一场新的文字模拟。AI 将结合已解析简历、JD 和证据卡出题；缺失资料会正常降级为待补充。
+                  {sourceMode === "KNOWLEDGE" ? `本场将从 ${knowledgeDocuments.filter((doc) => categoryIds.includes(doc.categoryId)).length} 份文档检索出题依据。` : "每次开始都会创建一场新的文字模拟。AI 将结合已解析简历、JD 和证据卡出题。"}
                 </p>
-                <button className="primary-button" disabled={saving}>
+                <button className="primary-button" disabled={saving || (sourceMode === "KNOWLEDGE" && categoryIds.length === 0)}>
                   {saving ? "正在创建…" : "开始 AI 文本模拟"}
                 </button>
               </form>

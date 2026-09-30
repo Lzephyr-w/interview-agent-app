@@ -5,6 +5,7 @@ import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
+import KnowledgeLibrary from "@/components/KnowledgeLibrary";
 import { api, apiBlob } from "@/lib/api";
 
 type ResumeFile = {
@@ -47,7 +48,7 @@ type InterviewPackageForm = {
   evidenceCardIds: string[];
 };
 type Tab =
-  "resume-files" | "job-descriptions" | "evidence-cards" | "interview-packages";
+  "resume-files" | "job-descriptions" | "evidence-cards" | "interview-packages" | "knowledge";
 
 const emptyJobDescription = { company: "", role: "", content: "" };
 const emptyEvidenceCard = {
@@ -67,6 +68,7 @@ const tabs: { id: Tab; label: string; hint: string }[] = [
   { id: "job-descriptions", label: "岗位 JD", hint: "岗位要求" },
   { id: "evidence-cards", label: "项目证据卡", hint: "项目事实" },
   { id: "interview-packages", label: "面试包", hint: "组合资料" },
+  { id: "knowledge", label: "知识库", hint: "分类与文档" },
 ];
 
 function Field({
@@ -158,6 +160,7 @@ export default function LibraryPage() {
       if (tab === "resume-files") setResumeFiles(await api<ResumeFile[]>("/api/v1/resume-files"));
       else if (tab === "job-descriptions") setJobDescriptions(await api<JobDescription[]>("/api/v1/job-descriptions"));
       else if (tab === "evidence-cards") setEvidenceCards(await api<EvidenceCard[]>("/api/v1/evidence-cards"));
+      else if (tab === "knowledge") { setLoadedTabs((current) => new Set(current).add(tab)); return; }
       else {
         await loadAll();
         return;
@@ -283,13 +286,13 @@ export default function LibraryPage() {
   return (
     <AppShell>
       <main className="app-page">
-        <section className="hero-card page-hero library-hero">
-          <p className="eyebrow">CLOSED LOOP 1</p>
+        <section className={activeTab === "knowledge" ? "hero-card page-hero library-hero knowledge-page-hero" : "hero-card page-hero library-hero"}>
+          <p className="eyebrow">{activeTab === "knowledge" ? "KNOWLEDGE BASE" : "CLOSED LOOP 1"}</p>
           <h1>
-            把经历，<em>整理成可用证据。</em>
+            {activeTab === "knowledge" ? <>把资料，<em>变成面试题。</em></> : <>把经历，<em>整理成可用证据。</em></>}
           </h1>
           <p className="intro">
-            简历文件、岗位资料和项目事实分开管理，再按需组合成面试包。
+            {activeTab === "knowledge" ? "分类导入文档，文本模拟时选择知识库出题。" : "简历文件、岗位资料和项目事实分开管理，再按需组合成面试包。"}
           </p>
           <div className="hero-actions">
             <Link className="text-link" href="/">
@@ -323,6 +326,7 @@ export default function LibraryPage() {
               ))}
           </nav>
           <div className="library-content">
+              {activeTab === "knowledge" && <KnowledgeLibrary />}
               {activeTab === "resume-files" && (
                 <section className="library-section library-workspace">
                   <div className="library-editor">
