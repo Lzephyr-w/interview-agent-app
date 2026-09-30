@@ -27,9 +27,51 @@ function Start-DevTerminal([string]$directory, [string]$command, [string]$logFil
     $logFileLiteral = ConvertTo-PowerShellLiteral $logFile
     $utf8 = '$OutputEncoding=[System.Text.UTF8Encoding]::new();[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();chcp 65001 > $null;'
     $command = "$utf8 $command 2>&1 | Tee-Object -FilePath $logFileLiteral -Append"
-    Start-Process -FilePath "powershell.exe" -WorkingDirectory $directory -ArgumentList @(
+    return Start-Process -FilePath "powershell.exe" -WorkingDirectory $directory -ArgumentList @(
         "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command
-    ) -WindowStyle Normal | Out-Null
+    ) -WindowStyle Normal -PassThru
+}
+
+function Stop-PreviousDevTerminals {
+    $terminals = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+        $_.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.CommandLine.IndexOf($runtimeLogs, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.CommandLine -like "*Tee-Object*"
+    })
+
+    foreach ($terminal in $terminals) {
+        $killOutput = & "$env:SystemRoot\System32\taskkill.exe" /PID $terminal.ProcessId /T /F 2>&1
+        $killExitCode = $LASTEXITCODE
+        try { Wait-Process -Id $terminal.ProcessId -Timeout 10 -ErrorAction Stop } catch { }
+        if (Get-Process -Id $terminal.ProcessId -ErrorAction SilentlyContinue) {
+            $reason = ($killOutput -join " ").Trim()
+            throw "Could not stop previous project terminal PID $($terminal.ProcessId) (taskkill exit=$killExitCode): $reason. Refusing to start a second process that would share its log file."
+        }
+    }
+
+    return $terminals.Count
+}
+
+function Stop-ProjectServerOnPort {
+    $listener = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $listener) { return }
+    $serverProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)"
+    $mavenProcess = if ($serverProcess) { Get-CimInstance Win32_Process -Filter "ProcessId = $($serverProcess.ParentProcessId)" }
+    # ponytail: stop only a verified server from this repository; leave unrelated port owners alone.
+    if ($serverProcess.Name -ne "java.exe" -or
+        $serverProcess.CommandLine -notlike "*com.interviewagent.InterviewAgentApplication*" -or
+        -not $mavenProcess -or
+        $mavenProcess.CommandLine.IndexOf($server, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+        $mavenProcess.CommandLine -notlike "*spring-boot:run*") {
+        throw "Port 8080 is occupied by PID $($listener.OwningProcess). Stop that process before starting the project."
+    }
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $mavenProcess.ProcessId /T /F | Out-Null
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not (Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "Project server PID $($listener.OwningProcess) did not release port 8080."
 }
 
 function Resolve-CommandPath([string[]]$names) {
@@ -134,9 +176,18 @@ if (-not [string]::IsNullOrWhiteSpace($javaHome) -and (Test-Path -LiteralPath (J
     $serverCommand = "`$env:JAVA_HOME=$javaHomeLiteral; `$env:Path=($(ConvertTo-PowerShellLiteral (Join-Path $javaHome 'bin')) + ';' + `$env:Path); $serverCommand"
 }
 
-Start-DevTerminal $agent $agentCommand (Join-Path $runtimeLogs "agent.log")
-Start-DevTerminal $server $serverCommand (Join-Path $runtimeLogs "server.log")
-Start-DevTerminal $web "pnpm dev" (Join-Path $runtimeLogs "web.log")
+$stoppedTerminals = Stop-PreviousDevTerminals
+if ($stoppedTerminals -gt 0) {
+    Write-Host "Stopped $stoppedTerminals previous dev terminal(s)."
+}
+Stop-ProjectServerOnPort
+foreach ($service in @(
+    @{ Directory = $agent; Command = $agentCommand; Log = (Join-Path $runtimeLogs "agent.log") },
+    @{ Directory = $server; Command = $serverCommand; Log = (Join-Path $runtimeLogs "server.log") },
+    @{ Directory = $web; Command = "pnpm dev"; Log = (Join-Path $runtimeLogs "web.log") }
+)) {
+    Start-DevTerminal $service.Directory $service.Command $service.Log | Out-Null
+}
 
 Write-Host "Python: $agentPython"
 Write-Host "Maven: $mavenCommand"

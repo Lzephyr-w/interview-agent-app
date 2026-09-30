@@ -147,7 +147,7 @@ export default function WeaknessesPage() {
           sourceReviewReportId: draft.sourceReviewReportId || null,
         }),
       });
-      setTasks((current) => (editing ? current.map((item) => (item.id === saved.id ? saved : item)) : [saved, ...current]));
+      setTasks((current) => (editing ? current.map((item) => (item.id === saved.id ? saved : item)) : current.some((item) => item.id === saved.id) ? current : [saved, ...current]));
       setEditing(undefined);
       setDraft(emptyDraft);
       setMessage(editing ? "训练任务已更新。" : "训练任务已创建。");

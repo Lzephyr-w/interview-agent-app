@@ -27,7 +27,13 @@ class AiMockQuestionAgent {
         JsonNode result=model.simulate("VOICE_PLAN",Map.of("materials",materials,"history",List.of()));
         try {
             SimulationContract.modelResult("VOICE_PLAN",result);
-            List<PlanItem> plan=parsePlan(result,false);
+            List<PlanItem> plan=parsePlan(result,false,false);
+            if (adjacentError(plan) != null) {
+                String reason=adjacentError(plan);
+                plan=reorderPlanSlots(plan);
+                if (plan == null) throw invalidPlan(reason);
+                log.info("ai_mock_timing stage=plan_slots_reordered reason={}",reason);
+            }
             if (plan.stream().anyMatch(item -> !item.projectName.isBlank() && !grounded(item.projectName,materials))) throw invalidPlan("project_name_not_grounded");
             QuestionDraft first=parseQuestion(result.path("firstQuestion"));
             String error=qualityError(first,plan.getFirst(),List.of());
@@ -57,6 +63,10 @@ class AiMockQuestionAgent {
     }
 
     List<PlanItem> parsePlan(JsonNode root, boolean legacy) {
+        return parsePlan(root,legacy,true);
+    }
+
+    private List<PlanItem> parsePlan(JsonNode root, boolean legacy, boolean checkAdjacency) {
         JsonNode items = legacy && root.isArray() ? root : root.path("plan");
         if (legacy && items.isTextual()) {
             try { items=json.readTree(items.asText()); } catch(Exception ignored) { throw invalidPlan("legacy_json"); }
@@ -75,16 +85,51 @@ class AiMockQuestionAgent {
             if (!legacy) {
                 if (!(i<5 ? item.type.equals("FUNDAMENTAL") : i<9 ? item.type.equals("PROJECT") : Set.of("SCENARIO","BEHAVIORAL").contains(item.type))) throw invalidPlan("type_distribution");
                 if (item.type.equals("PROJECT") && item.projectName.isBlank()) throw invalidPlan("project_name_required");
-                if(i>0) {
-                    PlanItem previous=result.get(i-1);
-                    if(same(previous.projectName,item.projectName)) throw invalidPlan("adjacent_project");
-                    if(same(previous.technology,item.technology)) throw invalidPlan("adjacent_technology");
-                    if(same(previous.angle,item.angle)) throw invalidPlan("adjacent_angle");
-                }
+                if(checkAdjacency && i>0 && adjacentError(result.get(i-1),item)!=null)
+                    throw invalidPlan(adjacentError(result.get(i-1),item));
             }
             result.add(item);
         }
         return List.copyOf(result);
+    }
+
+    private static String adjacentError(List<PlanItem> plan) {
+        for(int i=1;i<plan.size();i++) {
+            String error=adjacentError(plan.get(i-1),plan.get(i));
+            if(error!=null) return error;
+        }
+        return null;
+    }
+
+    private static String adjacentError(PlanItem previous,PlanItem item) {
+        if(same(previous.projectName,item.projectName)) return "adjacent_project";
+        if(same(previous.technology,item.technology)) return "adjacent_technology";
+        if(same(previous.angle,item.angle)) return "adjacent_angle";
+        return null;
+    }
+
+    private static List<PlanItem> reorderPlanSlots(List<PlanItem> plan) {
+        // ponytail: fixed first question, then at most 24 × 24 orders of the remaining same-type slots.
+        for(List<PlanItem> fundamentals:slotOrders(plan,1))
+            for(List<PlanItem> projects:slotOrders(fundamentals,5))
+                if(adjacentError(projects)==null) return projects;
+        return null;
+    }
+
+    private static List<List<PlanItem>> slotOrders(List<PlanItem> plan,int start) {
+        List<List<PlanItem>> result=new ArrayList<>();
+        int end=start+4;
+        for(int a=start;a<end;a++) for(int b=start;b<end;b++) for(int c=start;c<end;c++) for(int d=start;d<end;d++) {
+            if(a==b||a==c||a==d||b==c||b==d||c==d) continue;
+            List<PlanItem> candidate=new ArrayList<>(plan);
+            int[] order={a,b,c,d};
+            for(int i=0;i<4;i++) {
+                PlanItem item=plan.get(order[i]);
+                candidate.set(start+i,new PlanItem(start+i+1,item.type,item.competency,item.projectName,item.technology,item.angle));
+            }
+            result.add(List.copyOf(candidate));
+        }
+        return result;
     }
 
     String serialize(List<PlanItem> plan) {

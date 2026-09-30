@@ -13,8 +13,14 @@ class AiMockInterviewController {
     AiMockInterviewController(AiMockInterviewService service) { this.service = service; }
     @GetMapping Session list(@AuthenticationPrincipal Jwt jwt) { return service.active(jwt.getSubject()); }
     @PostMapping @ResponseStatus(HttpStatus.CREATED) Session create(@AuthenticationPrincipal Jwt jwt, @RequestBody StartRequest request) { return service.create(jwt.getSubject(), request); }
+    @PostMapping("/prepare") @ResponseStatus(HttpStatus.CREATED) Session prepare(@AuthenticationPrincipal Jwt jwt, @RequestBody StartRequest request) { return service.prepare(jwt.getSubject(), request); }
     @GetMapping("/{id}") Session get(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.get(jwt.getSubject(), id); }
+    @PostMapping("/{id}/begin") Session begin(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.begin(jwt.getSubject(), id); }
     @PostMapping("/{id}/questions/{questionId}/start-answer") AnswerStart startAnswer(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId) { return service.startAnswer(jwt.getSubject(), id, questionId); }
+    @GetMapping("/{id}/questions/{questionId}/next-preview") ResponseEntity<NextPreview> nextPreview(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId, @RequestParam(defaultValue = "false") boolean optional) {
+        var preview=service.nextPreview(jwt.getSubject(), id, questionId);
+        return optional && preview.isEmpty() ? ResponseEntity.noContent().build() : ResponseEntity.of(preview);
+    }
     @PostMapping("/{id}/questions/{questionId}/skip-answer") Session skipAnswer(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId) { return service.skipAnswer(jwt.getSubject(), id, questionId); }
     @PostMapping("/{id}/questions/{questionId}/expire") Session expire(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId) { return service.expire(jwt.getSubject(), id, questionId); }
     @PostMapping("/{id}/questions/{questionId}/audio") Session audio(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @PathVariable String questionId, @RequestParam("file") MultipartFile file) { return service.audio(jwt.getSubject(), id, questionId, file); }

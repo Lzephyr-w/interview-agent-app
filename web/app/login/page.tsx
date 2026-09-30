@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { signIn, signUp } from "@/lib/auth";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -18,9 +18,11 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(emptyFieldErrors);
+  const submitting = useRef(false);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const email = String(form.get("email"));
@@ -49,6 +51,7 @@ export default function LoginPage() {
       return;
     }
     setFieldErrors(emptyFieldErrors);
+    submitting.current = true;
     setLoading(true);
     try {
       if (registering) {
@@ -66,6 +69,7 @@ export default function LoginPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "登录失败。");
     } finally {
+      submitting.current = false;
       setLoading(false);
     }
   }

@@ -196,6 +196,8 @@ export default function AiConversationsPage() {
   const shouldAutoScrollRef = useRef(true);
   const conversationRequestRef = useRef(0);
   const resumedRepliesRef = useRef(new Set<string>());
+  const streamingRepliesRef = useRef(new Map<string, Promise<void>>());
+  const sendingRef = useRef(false);
 
   const scrollToBottom = useCallback(() => {
     const content = contentScrollRef.current;
@@ -204,8 +206,11 @@ export default function AiConversationsPage() {
   }, []);
 
   const streamReply = useCallback(async (conversationId: string, messageId: string) => {
+    const key = `${conversationId}:${messageId}`;
+    const pending = streamingRepliesRef.current.get(key);
+    if (pending) return pending;
     let content = "";
-    await streamApi(`/api/v1/ai-conversations/${conversationId}/messages/${messageId}/reply/stream`, { method: "POST" }, (event, raw) => {
+    const request = streamApi(`/api/v1/ai-conversations/${conversationId}/messages/${messageId}/reply/stream`, { method: "POST" }, (event, raw) => {
       const payload = JSON.parse(raw) as Partial<Message> & { content?: string; message?: string; messageId?: string };
       if (event === "delta") {
         content += payload.content ?? "";
@@ -229,6 +234,12 @@ export default function AiConversationsPage() {
         if (completed.updatedAt) setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, updatedAt: completed.updatedAt! } : item));
       }
     });
+    streamingRepliesRef.current.set(key, request);
+    try {
+      await request;
+    } finally {
+      streamingRepliesRef.current.delete(key);
+    }
   }, [scrollToBottom]);
 
   const availableInterviews = form.interviewPackageId
@@ -395,7 +406,7 @@ export default function AiConversationsPage() {
         createdAt: created.conversation.createdAt,
         updatedAt: created.conversation.updatedAt,
       };
-      setConversations((items) => [summary, ...items]);
+      setConversations((items) => items.some((item) => item.id === summary.id) ? items : [summary, ...items]);
       setSelectedConversationId(created.conversation.id);
       setDetail(created);
       setForm(emptyForm);
@@ -411,7 +422,8 @@ export default function AiConversationsPage() {
 
   async function send(event: FormEvent) {
     event.preventDefault();
-    if (!detail || !draft.trim()) return;
+    if (!detail || !draft.trim() || sendingRef.current) return;
+    sendingRef.current = true;
     shouldAutoScrollRef.current = true;
     setSending(true);
     setError("");
@@ -481,6 +493,7 @@ export default function AiConversationsPage() {
         ),
       );
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }

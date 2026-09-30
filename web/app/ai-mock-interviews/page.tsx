@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import Toast from "@/components/Toast";
@@ -17,8 +17,23 @@ export default function AiMockInterviewsPage() {
   const [packages, setPackages] = useState<Package[]>([]);
   const [packageId, setPackageId] = useState("");
   const [error, setError] = useState("");
+  const [entering, setEntering] = useState(false);
+  const preparing = useRef<Record<string, Promise<void>>>({});
   const router = useRouter();
   const selected = packages.find((item) => item.id === packageId);
+  function prepareSelected(id: string) {
+    const key = `ai-mock-prepared:${id}`;
+    if (window.sessionStorage.getItem(`ai-mock-session:${id}`)) return Promise.resolve();
+    if (window.sessionStorage.getItem(key)) return Promise.resolve();
+    if (!preparing.current[id]) {
+      window.sessionStorage.setItem(`ai-mock-selected-at:${id}`, String(Date.now()));
+      preparing.current[id] = api<{ id: string }>("/api/v1/ai-mock-interviews/prepare", {
+        method: "POST", body: JSON.stringify({ interviewPackageId: id }),
+      }).then((session) => { window.sessionStorage.setItem(key, session.id); })
+        .catch(() => { delete preparing.current[id]; /* the room will retry if needed */ });
+    }
+    return preparing.current[id];
+  }
   useEffect(() => {
     void api<Package[]>("/api/v1/interview-packages")
       .then(setPackages)
@@ -26,6 +41,9 @@ export default function AiMockInterviewsPage() {
         setError(caught instanceof Error ? caught.message : "加载面试包失败。"),
       );
   }, []);
+  useEffect(() => {
+    if (packageId) void prepareSelected(packageId);
+  }, [packageId]);
   return (
     <AppShell>
       <main className="app-page">
@@ -35,7 +53,7 @@ export default function AiMockInterviewsPage() {
             <em>专注表达，逐题练习。</em>
           </h1>
           <p className="intro">
-            选择一个面试包后进入独立面试室；面试官将在你点击开始时生成第一题。
+            选择面试包后会提前准备第一题；点击开始后进入正式面试。
           </p>
         </section>
         <Toast
@@ -88,14 +106,14 @@ export default function AiMockInterviewsPage() {
             <p>内容由AI生成,请仔细甄别。</p>
             <button
               className="primary-button"
-              disabled={!packageId}
-              onClick={() =>
-                router.push(
-                  `/ai-mock-interviews/room?packageId=${encodeURIComponent(packageId)}`,
-                )
-              }
+              disabled={!packageId || entering}
+              onClick={async () => {
+                setEntering(true);
+                await prepareSelected(packageId);
+                router.push(`/ai-mock-interviews/room?packageId=${encodeURIComponent(packageId)}`);
+              }}
             >
-              进入面试室 →
+              {entering ? "正在进入…" : "进入面试室 →"}
             </button>
           </div>
         </section>

@@ -13,5 +13,6 @@ public final class AiMockInterviewApi {
     public record AudioUpload(String id, int chunkSizeBytes, long totalBytes, int totalParts, List<Integer> receivedParts, String status, OffsetDateTime expiresAt) {}
     public record Audio(String id, String status, String transcript, String transcriptError, String feedback, Long durationMs) {}
     public record Question(String id, String questionText, String questionType, String competency, String confirmedAnswerText, String state, int sortOrder, OffsetDateTime answerExpiresAt, Audio audio) {}
+    public record NextPreview(String questionText, int sortOrder) {}
     public record Session(String id, String company, String role, String interviewRound, String status, OffsetDateTime startedAt, String finalInterviewId, int totalQuestions, Question currentQuestion, Task task) {}
 }

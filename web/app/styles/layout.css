@@ -160,28 +160,12 @@
 }
 :root[data-theme="dark"] .page-hero {
   --page-hero-image: var(--hero-image-dark);
-  background-image:
-    linear-gradient(
-      90deg,
-      rgb(8 28 21 / 95%) 0%,
-      rgb(8 28 21 / 84%) 46%,
-      rgb(8 28 21 / 42%) 78%,
-      rgb(8 28 21 / 28%) 100%
-    ),
-    var(--page-hero-image);
+  background: var(--page-hero-image) center / cover no-repeat;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .page-hero {
     --page-hero-image: var(--hero-image-dark);
-    background-image:
-      linear-gradient(
-        90deg,
-        rgb(8 28 21 / 95%) 0%,
-        rgb(8 28 21 / 84%) 46%,
-        rgb(8 28 21 / 42%) 78%,
-        rgb(8 28 21 / 28%) 100%
-      ),
-      var(--page-hero-image);
+    background: var(--page-hero-image) center / cover no-repeat;
   }
 }
 
@@ -266,6 +250,14 @@
 @media (max-width: 700px) {
   .page-hero {
     min-height: 235px;
-    background-position: 68% center;
+    background-position: 44% center;
+  }
+  :root[data-theme="dark"] .page-hero {
+    background-position: 30% center;
+  }
+}
+@media (max-width: 700px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .page-hero {
+    background-position: 30% center;
   }
 }

@@ -2,6 +2,7 @@ web/.next/
 web/.next-dev/
 web/node_modules/
 server/target/
+runtime-logs/
 .m2/
 .env
 **/.env.local

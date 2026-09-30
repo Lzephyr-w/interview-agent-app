@@ -5,6 +5,7 @@ import static com.interviewagent.ai.AiTaskApi.Task;
 import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -50,10 +51,13 @@ public class AiMockTaskService {
     public void check() {
         ClaimedTask task=current.get();
         if (task==null) throw new IllegalStateException("后台任务租约已失效。");
+        String resourceTable=table(task);
+        String expires=task.taskType().startsWith("AI_")?" AND expires_at>CURRENT_TIMESTAMP":"";
+        if (jdbc.sql("UPDATE ai_mock_tasks SET locked_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND resource_id=:resource AND task_type=:type AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND EXISTS (SELECT 1 FROM "+resourceTable+" WHERE id=:resource AND user_id=:user AND status='RUNNING'"+expires+")")
+            .param("id",task.id()).param("user",task.userId()).param("resource",task.resourceId()).param("type",task.taskType()).param("token",task.workerToken()).update()==1) return;
         if (task.taskType().startsWith("AI_")) expireVoice(task.userId(),task.resourceId());
         running(task,false);
-        if (jdbc.sql("UPDATE ai_mock_tasks SET locked_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND resource_id=:resource AND task_type=:type AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
-            .param("id",task.id()).param("user",task.userId()).param("resource",task.resourceId()).param("type",task.taskType()).param("token",task.workerToken()).update()!=1) throw new IllegalStateException("后台任务租约已失效。");
+        throw new IllegalStateException("后台任务租约已失效。");
     }
 
     public void write(Runnable write) {
@@ -69,7 +73,7 @@ public class AiMockTaskService {
     }
 
     public boolean hasActive(String user,String resource) {
-        return jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:id AND status IN ('PENDING','PROCESSING')").param("user",user).param("id",resource).query(Integer.class).single()>0;
+        return jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:id AND status IN ('PENDING','PROCESSING') AND task_type <> 'AI_PREPARE_NEXT'").param("user",user).param("id",resource).query(Integer.class).single()>0;
     }
 
     public void cancelForResource(String user,String resource) {
@@ -83,8 +87,8 @@ public class AiMockTaskService {
         String related = relatedId == null ? "" : relatedId;
         if (jdbc.sql("SELECT id FROM ai_mock_tasks WHERE task_type=:type AND resource_id=:resource AND related_id=:related")
             .param("type", type).param("resource", resourceId).param("related", related).query(String.class).optional().isPresent()) return;
-        jdbc.sql("INSERT INTO ai_mock_tasks(id,user_id,task_type,resource_id,related_id,status,max_attempts) VALUES(:id,:user,:type,:resource,:related,'PENDING',:max)")
-            .param("id", UUID.randomUUID().toString()).param("user", userId).param("type", type).param("resource", resourceId).param("related", related).param("max", MAX_ATTEMPTS).update();
+        jdbc.sql("INSERT INTO ai_mock_tasks(id,user_id,task_type,resource_id,related_id,status,max_attempts,available_at) VALUES(:id,:user,:type,:resource,:related,'PENDING',:max,:available)")
+            .param("id", UUID.randomUUID().toString()).param("user", userId).param("type", type).param("resource", resourceId).param("related", related).param("max", MAX_ATTEMPTS).param("available", OffsetDateTime.now()).update();
     }
 
     public Task get(String userId, String id) {
@@ -98,22 +102,24 @@ public class AiMockTaskService {
     }
 
     public Task latestVoice(String userId, String resourceId) {
-        return jdbc.sql("SELECT id,task_type,resource_id,status,attempts,max_attempts,error,created_at,updated_at FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:resource AND status <> 'COMPLETED' ORDER BY CASE WHEN task_type='AI_FEEDBACK' THEN 1 ELSE 0 END, created_at DESC LIMIT 1")
+        return jdbc.sql("SELECT id,task_type,resource_id,status,attempts,max_attempts,error,created_at,updated_at FROM ai_mock_tasks WHERE user_id=:user AND resource_id=:resource AND status <> 'COMPLETED' AND task_type <> 'AI_PREPARE_NEXT' ORDER BY CASE WHEN task_type='AI_FEEDBACK' THEN 1 ELSE 0 END, created_at DESC LIMIT 1")
             .param("user", userId).param("resource", resourceId).query((rs, row) -> api(rs)).optional().orElse(null);
     }
 
     @Transactional
     public ClaimedTask claim() {
         expireStale();
-        String id = jdbc.sql("SELECT id FROM ai_mock_tasks WHERE ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts ORDER BY CASE WHEN task_type IN ('AI_NEXT','MOCK_NEXT') THEN 0 ELSE 1 END,available_at,created_at LIMIT 1")
+        String id = jdbc.sql("SELECT candidate.id FROM ai_mock_tasks candidate WHERE ((candidate.status='PENDING' AND candidate.available_at<=CURRENT_TIMESTAMP) OR (candidate.status='PROCESSING' AND candidate.locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND candidate.attempts < candidate.max_attempts AND NOT EXISTS (SELECT 1 FROM ai_mock_tasks active WHERE active.resource_id=candidate.resource_id AND active.status='PROCESSING' AND active.locked_at>=CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND NOT ((candidate.task_type='AI_PREPARE_NEXT' AND active.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')) OR (active.task_type='AI_PREPARE_NEXT' AND candidate.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')))) ORDER BY CASE WHEN candidate.task_type IN ('AI_NEXT','MOCK_NEXT','AI_FINALIZE_AUDIO','AI_AUDIO') THEN 0 WHEN candidate.task_type='AI_PREPARE_NEXT' THEN 2 ELSE 1 END,candidate.available_at,candidate.created_at LIMIT 1")
             .query(String.class).list().stream().findFirst().orElse(null);
         if (id == null) return null;
         String token = UUID.randomUUID().toString();
         int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,error='',worker_token=:token,locked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND ((status='PENDING' AND available_at<=CURRENT_TIMESTAMP) OR (status='PROCESSING' AND locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND attempts < max_attempts")
             .param("id", id).param("token", token).update();
         if (updated == 0) return null;
-        return jdbc.sql("SELECT id,user_id,task_type,resource_id,related_id,worker_token FROM ai_mock_tasks WHERE id=:id AND worker_token=:token")
-            .param("id", id).param("token", token).query((rs, row) -> new ClaimedTask(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6))).single();
+        ClaimedTask task=jdbc.sql("SELECT id,user_id,task_type,resource_id,related_id,worker_token,available_at FROM ai_mock_tasks WHERE id=:id AND worker_token=:token")
+            .param("id", id).param("token", token).query((rs, row) -> new ClaimedTask(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),Math.max(0,System.currentTimeMillis()-rs.getObject(7,OffsetDateTime.class).toInstant().toEpochMilli()))).single();
+        if(task.taskType().startsWith("AI_")) org.slf4j.LoggerFactory.getLogger(AiMockTaskService.class).info("ai_mock_timing stage=queue taskId={} sessionId={} taskType={} queue_wait_ms={}",task.id(),task.resourceId(),task.taskType(),task.queueWaitMs());
+        return task;
     }
 
     @Transactional
@@ -127,14 +133,17 @@ public class AiMockTaskService {
         String error = stableError(exception);
         boolean retryable=exception instanceof SimulationException e && e.retryable();
         int attempts=jdbc.sql("SELECT attempts FROM ai_mock_tasks WHERE id=:id").param("id",task.id()).query(Integer.class).optional().orElse(0);
+        long retryDelaySeconds = retryable && Set.of("AI_NEXT","AI_PREPARE_NEXT").contains(task.taskType())
+            && exception instanceof SimulationException e
+            && e.code().equals("INVALID_MODEL_OUTPUT") ? 0 : attempts<=1 ? 5 : 15;
         jdbc.sql("UPDATE ai_mock_tasks SET status=CASE WHEN :retry AND attempts<max_attempts THEN 'PENDING' ELSE 'FAILED' END,error=:error,available_at=:available,locked_at=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
-            .param("id",task.id()).param("token",task.workerToken()).param("error",error).param("retry",retryable).param("available",OffsetDateTime.now().plusSeconds(attempts<=1?5:15)).update();
+            .param("id",task.id()).param("token",task.workerToken()).param("error",error).param("retry",retryable).param("available",OffsetDateTime.now().plusSeconds(retryDelaySeconds)).update();
     }
 
     @Transactional(noRollbackFor = IllegalStateException.class)
     public void retry(String userId, String id) {
         Task existing=get(userId,id);
-        ClaimedTask task=new ClaimedTask(id,userId,existing.taskType(),existing.resourceId(),"","");
+        ClaimedTask task=new ClaimedTask(id,userId,existing.taskType(),existing.resourceId(),"","",0);
         if(task.taskType().startsWith("AI_")) expireVoice(userId,task.resourceId());
         running(task,true);
         int updated = jdbc.sql("UPDATE ai_mock_tasks SET status='PENDING',attempts=0,error='',locked_at=NULL,worker_token=NULL,available_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND status='FAILED'")
@@ -161,5 +170,5 @@ public class AiMockTaskService {
 
     private static NoSuchElementException notFound() { return new NoSuchElementException("任务不存在或无权访问。"); }
 
-    public record ClaimedTask(String id, String userId, String taskType, String resourceId, String relatedId, String workerToken) {}
+    public record ClaimedTask(String id, String userId, String taskType, String resourceId, String relatedId, String workerToken, long queueWaitMs) {}
 }

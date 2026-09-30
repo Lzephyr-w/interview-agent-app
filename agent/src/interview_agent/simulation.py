@@ -2,7 +2,10 @@
 import asyncio
 import json
 import logging
+import os
 import time
+import urllib.parse
+import urllib.request
 from uuid import UUID
 
 VERSION = "simulation.v1"
@@ -170,7 +173,7 @@ def validate_result(operation, result, materials):
 
 
 PROMPTS = {
-    "VOICE_PLAN": '一次返回计划和第一题。固定10项：第1-5题FUNDAMENTAL（岗位核心技术或基础原理），第6-9题PROJECT（只能深挖真实项目或经历），第10题SCENARIO或BEHAVIORAL（真实场景、故障、性能、架构、协作或需求变化）。资料优先级：JD岗位职责与技能 > 面试轮次 > 简历真实经历 > 证据卡。基础题和第10题资料不足时使用岗位相关通用问题；PROJECT不得编造项目。PROJECT的projectName必须逐字选择input.materials.experienceAnchors中的真实项目或实习经历锚点；证据卡不是前置条件，同一段实习可从不同角度考察，但不得拼接出锚点列表之外的新名称。competency是简短能力点，technology是简短技术点，angle是简短问题角度，三者都不得写成问题或作答清单。全部competency语义不同，相邻非空projectName、technology、angle不得相同；前端等岗位按实际资料分散浏览器、语言、框架、工程化、性能、安全等能力。firstQuestion必须严格匹配第1个slot的type、competency、projectName、technology，只考察一个主要目标。只返回 {"plan":[{"order":1,"type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":"","angle":"角度"},...共10项],"firstQuestion":{"questionText":"一道问题","type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":""}}。',
+    "VOICE_PLAN": '一次返回计划和第一题。固定10项：第1-5题FUNDAMENTAL（岗位核心技术或基础原理），第6-9题PROJECT（只能深挖真实项目或经历），第10题SCENARIO或BEHAVIORAL（真实场景、故障、性能、架构、协作或需求变化）。资料优先级：JD岗位职责与技能 > 面试轮次 > 简历真实经历 > 证据卡。基础题和第10题资料不足时使用岗位相关通用问题；PROJECT不得编造项目。PROJECT的projectName必须逐字选择input.materials.experienceAnchors中的真实项目或实习经历锚点；证据卡不是前置条件，同一段实习可从不同角度考察，但不得拼接出锚点列表之外的新名称。第6-9题若有两个以上真实锚点，先按A/B/A/B交替分配项目，每个项目最多两题，确保相邻不同。competency是简短能力点，technology是简短技术点，angle是简短问题角度，三者都不得写成问题或作答清单。全部competency语义不同，相邻非空projectName、technology、angle不得相同；前端等岗位按实际资料分散浏览器、语言、框架、工程化、性能、安全等能力。firstQuestion必须严格匹配第1个slot的type、competency、projectName、technology，只考察一个主要目标。只返回 {"plan":[{"order":1,"type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":"","angle":"角度"},...共10项],"firstQuestion":{"questionText":"一道问题","type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":""}}。',
     "VOICE_QUESTION": '严格执行slot，type、competency、projectName、technology必须与slot完全一致。只出一道中文问题，只考察一个主要目标，必须具体、可独立回答；不得串联多个场景、多个问号或多项作答任务。资料优先级：JD岗位职责与技能 > 面试轮次 > 简历真实经历 > 证据卡。PROJECT只能逐字引用input.materials.experienceAnchors中的真实项目或实习经历锚点，证据卡不是前置条件，不得创造或拼接项目名；资料不足时不要反复要求介绍项目，非PROJECT题应提出岗位相关、可独立回答的问题。不得与全部历史问题语义重复，不得换词重复能力点，不得连续使用同一项目、技术或问句开头。返回 {"questionText":"一道问题","type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":""}。',
     "TEXT_MAIN_QUESTION": '只生成一道新的主问题，只考察一个主要能力点，具体且可独立回答。不得重复历史题，也不得换词复问同一能力点。资料不足时生成岗位相关通用问题，不要把待补充本身作为问题答案。返回 {"questionText":"一道问题"}。',
     "TEXT_FOLLOW_UP": '只生成一道具体、可回答的追问，只从因果、个人贡献、证据、取舍中补足一个缺口。不得复述主问题、历史问题或同时追问多个缺口。返回 {"questionText":"一道追问"}。',
@@ -194,6 +197,20 @@ async def _invoke(model, messages, remaining):
     return await asyncio.wait_for(model.ainvoke(messages), timeout=remaining)
 
 
+def _model_diagnostics(model):
+    base = getattr(model, "openai_api_base", None) or getattr(model, "base_url", None)
+    try:
+        parsed = urllib.parse.urlsplit(str(base or ""))
+        endpoint = f"{parsed.hostname}:{parsed.port}" if parsed.hostname and parsed.port else parsed.hostname or "unknown"
+        bypass = urllib.request.proxy_bypass(parsed.hostname) if parsed.hostname else False
+    except ValueError:
+        endpoint, bypass = "unknown", False
+    proxy_configured = bool(urllib.request.getproxies()) or any(
+        os.getenv(name) for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    )
+    return getattr(model, "model_name", None) or getattr(model, "model", None) or "unknown", endpoint, proxy_configured, bypass
+
+
 def generate(request, model_factory):
     validate_request(request)
     messages = [{"role": "system", "content":
@@ -206,15 +223,55 @@ def generate(request, model_factory):
     if remaining <= 0:
         raise SimulationError("MODEL_TIMEOUT")
     started = time.monotonic()
+    model_init_started = time.monotonic()
+    phase = "model_init"
+    model_init_ms = 0
+    model_name, endpoint, proxy_configured, proxy_bypass = "unknown", "unknown", False, False
+    invoke_started = None
+    prompt_chars = sum(len(message["content"]) for message in messages)
     try:
         model = model_factory(remaining)
+        model_init_ms = round((time.monotonic() - model_init_started) * 1000)
         remaining = (request["deadlineAtEpochMs"] - time.time()*1000)/1000
-        response = asyncio.run(_invoke(model, messages, max(0, remaining)))
+        model_name, endpoint, proxy_configured, proxy_bypass = _model_diagnostics(model)
+        logger.info(
+            "simulation model request operation=%s requestId=%s model=%s endpoint=%s timeout_budget_ms=%s model_init_ms=%s prompt_chars=%s proxy_configured=%s proxy_bypass=%s",
+            request["operation"], request["requestId"], model_name, endpoint, round(max(0, remaining) * 1000),
+            model_init_ms, prompt_chars, proxy_configured, proxy_bypass,
+        )
+        invoke_started = time.monotonic()
+        phase = "invoke"
+        try:
+            response = asyncio.run(_invoke(model, messages, max(0, remaining)))
+        except (TimeoutError, asyncio.TimeoutError) as error:
+            logger.warning(
+                "simulation model timeout operation=%s requestId=%s attempt=1 phase=invoke elapsed_ms=%s invoke_elapsed_ms=%s timeout_budget_ms=%s model_init_ms=%s cause_type=%s endpoint=%s model=%s proxy_configured=%s proxy_bypass=%s prompt_chars=%s",
+                request["operation"], request["requestId"], round((time.monotonic() - started) * 1000),
+                round((time.monotonic() - invoke_started) * 1000), round(max(0, remaining) * 1000), model_init_ms,
+                type(error).__module__ + "." + type(error).__name__, endpoint, model_name,
+                proxy_configured, proxy_bypass, prompt_chars,
+            )
+            raise
+        invoke_elapsed_ms = round((time.monotonic() - invoke_started) * 1000)
+        usage = getattr(response, "usage_metadata", None) or {}
+        logger.info(
+            "simulation model response operation=%s requestId=%s invoke_elapsed_ms=%s input_tokens=%s output_tokens=%s total_tokens=%s",
+            request["operation"], request["requestId"], invoke_elapsed_ms,
+            usage.get("input_tokens", "unknown"), usage.get("output_tokens", "unknown"), usage.get("total_tokens", "unknown"),
+        )
     except (TimeoutError, asyncio.TimeoutError):
-        logger.warning("simulation model timeout operation=%s attempt=1 elapsed_ms=%s", request["operation"], round((time.monotonic() - started) * 1000))
         raise SimulationError("MODEL_TIMEOUT") from None
     except Exception as error:
         code = "MODEL_TIMEOUT" if "timeout" in type(error).__name__.lower() else "MODEL_UNAVAILABLE"
+        logger.warning(
+            "simulation model error operation=%s requestId=%s attempt=1 phase=%s elapsed_ms=%s invoke_elapsed_ms=%s model_init_ms=%s cause_type=%s endpoint=%s model=%s proxy_configured=%s proxy_bypass=%s prompt_chars=%s",
+            request["operation"], request["requestId"], phase,
+            round((time.monotonic() - started) * 1000),
+            round((time.monotonic() - invoke_started) * 1000) if invoke_started is not None else 0,
+            model_init_ms or round((time.monotonic() - model_init_started) * 1000),
+            type(error).__module__ + "." + type(error).__name__, endpoint, model_name,
+            proxy_configured, proxy_bypass, prompt_chars,
+        )
         raise SimulationError(code) from None
     if time.time()*1000 >= request["deadlineAtEpochMs"]:
         raise SimulationError("MODEL_TIMEOUT")

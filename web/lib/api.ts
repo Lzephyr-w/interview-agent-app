@@ -5,6 +5,7 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 const pendingGets = new Map<string, Promise<unknown>>();
+const pendingWrites = new Map<string, Promise<unknown>>();
 let redirectingToLogin = false;
 
 function redirectToLogin() {
@@ -49,7 +50,21 @@ export function api<T>(
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   };
-  if ((options.method ?? "GET").toUpperCase() !== "GET") return request();
+  const method = (options.method ?? "GET").toUpperCase();
+  if (method !== "GET") {
+    if (options.body != null && typeof options.body !== "string") return request();
+    // ponytail: identical in-flight writes share one request; uploads keep their own bodies.
+    const key = JSON.stringify([session.accessToken, method, path, options.body]);
+    const pending = pendingWrites.get(key) as Promise<T> | undefined;
+    if (pending) return pending;
+    const result = request();
+    pendingWrites.set(key, result);
+    void result.then(
+      () => pendingWrites.delete(key),
+      () => pendingWrites.delete(key),
+    );
+    return result;
+  }
   const key = `${session.accessToken}:${path}`;
   const pending = pendingGets.get(key) as Promise<T> | undefined;
   if (pending) return pending;
