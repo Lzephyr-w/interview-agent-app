@@ -37,6 +37,7 @@ type Task = {
 };
 
 const statusLabels = { NOT_STARTED: "待开始", IN_PROGRESS: "进行中", COMPLETED: "已完成" };
+const weaknessTags = ["技术基础", "算法与数据结构", "系统设计", "项目深挖", "业务理解", "行为面", "沟通表达", "岗位匹配", "简历风险", "英语表达"];
 const emptyDraft = { title: "", weaknessTag: "", action: "", status: "NOT_STARTED" as Task["status"], sourceQuestionId: "", sourceInterviewId: "", sourceReviewReportId: "" };
 
 function messageOf(cause: unknown, fallback: string) {
@@ -48,6 +49,8 @@ export default function WeaknessesPage() {
   const analysis = sharedAnalysis as Analysis | undefined;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activePanel, setActivePanel] = useState<"analysis" | "tasks">("analysis");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<Task["status"] | "ALL">("ALL");
   const [draft, setDraft] = useState(emptyDraft);
   const [editing, setEditing] = useState<Task>();
   const [analysisLoading, setAnalysisLoading] = useState(true);
@@ -102,6 +105,7 @@ export default function WeaknessesPage() {
 
   function beginCreate(item: Weakness, evidence: Evidence) {
     setActivePanel("tasks");
+    setComposerOpen(true);
     setEditing(undefined);
     setMessage("");
     setDraft({
@@ -118,6 +122,7 @@ export default function WeaknessesPage() {
 
   function beginEdit(task: Task) {
     setActivePanel("tasks");
+    setComposerOpen(true);
     setEditing(task);
     setMessage("");
     setDraft({
@@ -150,6 +155,8 @@ export default function WeaknessesPage() {
       setTasks((current) => (editing ? current.map((item) => (item.id === saved.id ? saved : item)) : current.some((item) => item.id === saved.id) ? current : [saved, ...current]));
       setEditing(undefined);
       setDraft(emptyDraft);
+      setComposerOpen(false);
+      setStatusFilter("ALL");
       setMessage(editing ? "训练任务已更新。" : "训练任务已创建。");
     } catch (cause) {
       setError(messageOf(cause, "训练任务保存失败。"));
@@ -195,6 +202,7 @@ export default function WeaknessesPage() {
   }
 
   const needsAnalysis = !analysis || analysis.stale || analysis.items.length === 0;
+  const visibleTasks = tasks.filter((task) => statusFilter === "ALL" || task.status === statusFilter);
 
   return (
     <AppShell>
@@ -277,37 +285,45 @@ export default function WeaknessesPage() {
                   <h2>{editing ? "编辑训练任务" : "创建训练任务"}</h2>
                   <p className="muted">任务保存练习内容快照；来源删除后，任务仍会保留。</p>
                 </div>
-                {editing && <button className="secondary-button" type="button" onClick={() => { setEditing(undefined); setDraft(emptyDraft); }}>取消编辑</button>}
+                {composerOpen ? <button className="secondary-button" type="button" disabled={saving} onClick={() => { setComposerOpen(false); setEditing(undefined); setDraft(emptyDraft); }}>取消</button> : <button className="primary-button training-create-button" type="button" onClick={() => { setEditing(undefined); setDraft(emptyDraft); setComposerOpen(true); }}>＋ 创建训练任务</button>}
               </div>
-              {draft.weaknessTag ? (
+              {composerOpen ? (
                 <form className="library-form" onSubmit={saveTask}>
                   <label className="field">标题<input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-                  <label className="field">关联弱项标签<input readOnly value={draft.weaknessTag} /></label>
+                  <label className="field">关联弱项标签{draft.sourceQuestionId ? <input readOnly value={draft.weaknessTag} /> : <select required value={draft.weaknessTag} onChange={(event) => setDraft({ ...draft, weaknessTag: event.target.value })}><option value="">请选择弱项标签</option>{weaknessTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}</label>
                   <label className="field">建议动作 / 练习内容<textarea required value={draft.action} onChange={(event) => setDraft({ ...draft, action: event.target.value })} /></label>
                   <label className="field">状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as Task["status"] })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                   <p className="muted">来源：{draft.sourceQuestionId ? "已精确关联问题" : "未关联（可选）"}</p>
                   <div className="form-actions"><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : editing ? "保存任务" : "创建任务"}</button><button className="secondary-button" type="button" onClick={() => { setEditing(undefined); setDraft(emptyDraft); }}>清空</button></div>
                 </form>
-              ) : <p className="muted">从上方的薄弱点创建训练任务，保留首条具体问题作为精确来源。</p>}
+              ) : <p className="muted">直接添加练习计划，也可以从 AI 分析结果创建关联任务。</p>}
             </section>
-            <section className="library-section weakness-section">
-              <div className="section-heading"><div><p className="profile-label">SAVED TASKS</p><h2>我的训练任务</h2></div></div>
-              {tasksLoading ? <p className="muted">正在加载训练任务…</p> : tasks.length === 0 ? <p className="muted">暂无训练任务。</p> : (
-                <ul className="resource-list">
-                  {tasks.map((task) => (
-                    <li className="resource-item" key={task.id}>
-                      <div>
-                        <strong>{task.title}</strong>
-                        <p><span className="task-tag">{task.weaknessTag}</span> · 创建于 {new Date(task.createdAt).toLocaleString()}</p>
-                        <p className="task-action">{task.action}</p>
-                        {task.source?.questionText && <p>具体问题：{task.source.questionText}</p>}
-                        {task.source?.label && <p className="task-source">来源：{task.source.label} {task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}`}>查看面试</Link>} {task.source.reviewReportId && task.source.interviewId && <Link className="text-link" href={`/interviews/${task.source.interviewId}/review`}>查看复盘</Link>}</p>}
-                      </div>
-                      <div className="item-actions">
-                        <select aria-label={`更新${task.title}状态`} value={task.status} onChange={(event) => void updateStatus(task, event.target.value as Task["status"])}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                        <button className="secondary-button" type="button" onClick={() => beginEdit(task)}>编辑</button>
-                        <button className="danger-button" type="button" onClick={() => setDialog(task)}>删除</button>
-                      </div>
+            <section className="library-section weakness-section saved-training-tasks">
+              <div className="section-heading"><div><p className="profile-label">SAVED TASKS</p><h2>我的训练任务</h2></div><div className="training-task-toolbar">{!tasksLoading && <span className="training-task-count">{statusFilter === "ALL" ? `${tasks.length} 项任务` : `${visibleTasks.length} / ${tasks.length} 项任务`}</span>}<select aria-label="筛选任务状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as Task["status"] | "ALL")}><option value="ALL">全部状态</option>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></div>
+              {tasksLoading ? <p className="muted">正在加载训练任务…</p> : visibleTasks.length === 0 ? <p className="muted">{tasks.length === 0 ? "暂无训练任务，点击上方按钮创建第一项任务。" : "当前状态下暂无任务，可以切换其他状态查看。"}</p> : (
+                <ul className="training-task-list">
+                  {visibleTasks.map((task) => (
+                    <li className="training-task-card" key={task.id}>
+                      <header className="training-task-header">
+                        <div>
+                          <h3>{task.title}</h3>
+                          <div className="training-task-meta"><span className="task-tag">{task.weaknessTag}</span><time dateTime={task.createdAt}>创建于 {new Date(task.createdAt).toLocaleDateString()}</time></div>
+                        </div>
+                        <select className="training-task-status" data-status={task.status} aria-label={`更新${task.title}状态`} value={task.status} onChange={(event) => void updateStatus(task, event.target.value as Task["status"])}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                      </header>
+                      <div className="training-task-content"><span>练习内容</span><p>{task.action}</p></div>
+                      {task.source?.questionText && <div className="training-task-question"><span>关联问题</span><p>{task.source.questionText}</p></div>}
+                      <footer className="training-task-footer">
+                        <div className="training-task-source">
+                          {task.source?.label && <span>来源：{task.source.label}</span>}
+                          {task.source?.interviewId && <Link href={`/interviews/${task.source.interviewId}`}>查看面试 ↗</Link>}
+                          {task.source?.reviewReportId && task.source.interviewId && <Link href={`/interviews/${task.source.interviewId}/review`}>查看复盘 ↗</Link>}
+                        </div>
+                        <div className="training-task-actions">
+                          <button type="button" onClick={() => beginEdit(task)}>编辑任务</button>
+                          <button className="training-task-delete" type="button" onClick={() => setDialog(task)}>删除</button>
+                        </div>
+                      </footer>
                     </li>
                   ))}
                 </ul>

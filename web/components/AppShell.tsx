@@ -1,10 +1,11 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import UserGuide from "@/components/UserGuide";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import { signOut } from "@/lib/auth";
 
 const links = [
@@ -20,11 +21,13 @@ const links = [
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const current = links.find((link) =>
     link.href === "/" ? pathname === "/" : pathname.startsWith(link.href),
   );
 
   function logout() {
+    setLogoutDialogOpen(false);
     void signOut();
     router.replace("/login");
     router.refresh();
@@ -71,13 +74,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <div className="topbar-actions">
             <UserGuide />
             <ThemeToggle />
-            <button className="theme-toggle" type="button" onClick={logout}>
+            <button className="theme-toggle" type="button" onClick={() => setLogoutDialogOpen(true)}>
               退出登录
             </button>
           </div>
         </header>
         {children}
       </div>
+      <ConfirmDialog
+        open={logoutDialogOpen}
+        title="确定退出登录？"
+        description="退出后需要重新登录才能继续使用。"
+        confirmLabel="确认退出"
+        confirmTone="danger"
+        onConfirm={logout}
+        onCancel={() => setLogoutDialogOpen(false)}
+      />
     </div>
   );
 }

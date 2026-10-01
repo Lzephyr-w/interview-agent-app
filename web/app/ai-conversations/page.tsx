@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import AppShell from "@/components/AppShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
@@ -225,7 +225,6 @@ export default function AiConversationsPage() {
           } as Message;
           return { ...current, messages: upsertMessage(current.messages, next) };
         });
-        scrollToBottom();
       } else if (event === "error") {
         throw new Error(payload.message ?? "AI 回复失败，请重试。");
       } else if (event === "done") {
@@ -240,7 +239,7 @@ export default function AiConversationsPage() {
     } finally {
       streamingRepliesRef.current.delete(key);
     }
-  }, [scrollToBottom]);
+  }, []);
 
   const availableInterviews = form.interviewPackageId
     ? interviews.filter(
@@ -263,9 +262,10 @@ export default function AiConversationsPage() {
         content.scrollHeight - content.scrollTop - content.clientHeight < 24;
   }
 
-  useEffect(() => {
+  // Follow the committed height before a queued scroll event can disable following.
+  useLayoutEffect(() => {
     scrollToBottom();
-  }, [detail?.conversation.id, detail?.messages, scrollToBottom]);
+  }, [detail?.conversation.id, detail?.messages, loading, conversationLoading, scrollToBottom]);
 
   useEffect(() => {
     async function load() {
@@ -582,23 +582,11 @@ export default function AiConversationsPage() {
           onDismissError={() => setError("")}
           onDismissNotice={() => setNotice("")}
         />
-     {/*    <section className="hero-card page-hero chat-hero">
-          <p className="eyebrow">AI CONVERSATION</p>
-          <h1>
-            让线索连接成，<em>更完整的准备。</em>
-          </h1>
-          <p className="intro">围绕你的资料、面试与复盘，自由追问并继续训练。</p>
-        </section> */}
-        {loading ? (
-          <section className="library-section chat-loading">
-            <p className="muted">正在加载对话…</p>
-          </section>
-        ) : (
           <section
             className={`chat-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
           >
-            <aside className="chat-sidebar-panel" aria-label="AI 对话列表">
-              <div className="chat-sidebar-scroll">
+            <aside className="chat-sidebar-panel" aria-label="AI 对话列表" aria-busy={loading}>
+              <div className="chat-sidebar-content">
                 {sidebarCollapsed ? (
                   <button
                     className="chat-sidebar-toggle"
@@ -612,18 +600,8 @@ export default function AiConversationsPage() {
                   </button>
                 ) : (
                   <>
-                    <div className="section-heading">
-                      <div>
-                        <p className="profile-label">历史对话</p>
-                      </div>
-                      <div className="chat-sidebar-actions">
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          onClick={() => void openNewConversation()}
-                        >
-                          新建
-                        </button>
+                    <div className="chat-sidebar-heading">
+                      <span>历史对话 <small>{loading ? "…" : conversations.length}</small></span>
                         <button
                           className="chat-sidebar-toggle"
                           type="button"
@@ -633,10 +611,13 @@ export default function AiConversationsPage() {
                             setSidebarCollapsed(true);
                           }}
                         >
-                          ‹
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6" /></svg>
                         </button>
-                      </div>
                     </div>
+                    <button className="chat-new-button" type="button" disabled={loading} onClick={() => void openNewConversation()}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+                      开启新对话
+                    </button>
                     {showNew && (
                       <div
                         className="chat-create-backdrop"
@@ -652,7 +633,7 @@ export default function AiConversationsPage() {
                           aria-labelledby="chat-create-title"
                           onSubmit={createConversation}
                         >
-                          <h2 id="chat-create-title">新建 AI Agent 对话</h2>
+                          <h2 id="chat-create-title">开启一场新对话</h2>
                           <p className="muted">
                             面试包只是启动线索；不选择时 Agent 会按需查询全部个人资料。
                           </p>
@@ -767,10 +748,15 @@ export default function AiConversationsPage() {
                         </form>
                       </div>
                     )}
+                    <div className="chat-sidebar-scroll">
                     <div className="chat-conversation-list">
-                      {conversations.length === 0 ? (
+                      {loading ? (
+                        <div className="chat-history-skeleton" aria-hidden="true">
+                          {[0, 1, 2, 3].map((item) => <span key={item} />)}
+                        </div>
+                      ) : conversations.length === 0 ? (
                         <p className="muted">
-                          暂无历史对话。选择面试包后创建第一场对话。
+                          还没有对话，开启你的第一次交流。
                         </p>
                       ) : (
                         conversations.map((item) => (
@@ -785,13 +771,13 @@ export default function AiConversationsPage() {
                             <button
                               className="chat-conversation-select"
                               type="button"
+                              aria-current={selectedConversationId === item.id ? "true" : undefined}
+                              title={item.title}
                               onClick={() => void selectConversation(item.id)}
                             >
                               <strong>{item.title}</strong>
                               <small>
-                                {new Date(item.updatedAt).toLocaleString(
-                                  "zh-CN",
-                                )}
+                                {new Date(item.updatedAt).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}
                               </small>
                             </button>
                             <button
@@ -809,36 +795,46 @@ export default function AiConversationsPage() {
                         ))
                       )}
                     </div>
+                    </div>
                   </>
                 )}
               </div>
             </aside>
             <section className="chat-main" aria-label="当前 AI 对话">
-              {conversationLoading ? (
-                <div className="library-section">
+              <div className="chat-heading">
+                <div className="chat-heading-title">
+                  <span className="chat-heading-avatar"><img src="/images/ai-assistant.png" alt="" /></span>
+                  <div>
+                    <p className="chat-kicker">智面 · 面试搭档</p>
+                    <h2>{detail?.conversation.title ?? conversations.find((item) => item.id === selectedConversationId)?.title ?? "AI 对话"}</h2>
+                  </div>
+                </div>
+                <span className={`chat-session-status${sending || loading || conversationLoading ? " is-thinking" : ""}`}><i />{loading || conversationLoading ? "加载中" : sending ? "正在思考" : "随时交流"}</span>
+              </div>
+              {loading || conversationLoading ? (
+                <div className="chat-content-scroll chat-loading-content">
+                <div className="chat-empty-state" role="status">
+                  <picture className="chat-loading-robot">
+                    <source media="(prefers-reduced-motion: reduce)" srcSet="/images/home-robot-still.webp" />
+                    <img src="/images/home-robot-loop.gif" width="112" height="136" alt="" />
+                  </picture>
                   <p className="muted">正在加载对话…</p>
                 </div>
+                </div>
               ) : !detail ? (
-                <div className="library-section">
-                  <h2>开始一场 Agent 对话</h2>
-                  <p className="muted">
-                    Agent 可以自主查找资料、连续调用业务工具并创建训练任务。
-                  </p>
+                <div className="chat-empty-state">
+                  <img src="/images/ai-assistant.png" alt="" />
+                  <p className="chat-kicker">YOUR AI PARTNER</p>
+                  <h2>把面试疑问，聊成下一步。</h2>
+                  <p className="muted">从项目梳理到面试复盘，智面陪你一起找到答案。</p>
+                  <button className="primary-button" type="button" onClick={() => void openNewConversation()}>开启新对话 ↗</button>
                 </div>
               ) : (
-                <>
                   <div className="chat-content-scroll" ref={contentScrollRef} onScroll={updateAutoScroll}>
-                    <div className="chat-heading">
-                      <div>
-                        <p className="profile-label">当前会话</p>
-                        <h2>{detail.conversation.title}</h2>
-                      </div>
-                    </div>
-                    <section
+                    <details
                       className="chat-context"
-                      aria-labelledby="chat-context-title"
                     >
-                      <h3 id="chat-context-title">Agent 启动线索与权限</h3>
+                      <summary><span>关联资料 <small>{detail.conversation.contextSources.length} 项</small></span><span>查看对话上下文</span></summary>
                       <p className="muted">
                         下列资料会直接提供给 Agent；它也可按需查询当前账户的其他资料。
                       </p>
@@ -853,7 +849,7 @@ export default function AiConversationsPage() {
                           ),
                         )}
                       </ul>
-                    </section>
+                    </details>
                     <div
                       className="chat-messages"
                       role="log"
@@ -861,9 +857,25 @@ export default function AiConversationsPage() {
                       aria-label="对话消息"
                     >
                       {detail.messages.length === 0 ? (
-                        <p className="muted">
-                          输入目标开始对话。Agent 会自主查询资料、调用工具并完成多步任务。
-                        </p>
+                        <div className="chat-empty-state">
+                          <img src="/images/ai-assistant.png" alt="" />
+                          <p className="chat-kicker">LET’S TALK</p>
+                          <h2>你的下一次进步，从这里开始。</h2>
+                          <p className="muted">聊聊项目、复盘一次面试，或一起制定练习计划。</p>
+                          <div className="chat-starters">
+                            {[
+                              ["梳理项目亮点", "根据我的简历，帮我梳理项目亮点，并准备可能的面试追问。"],
+                              ["复盘面试表现", "查看我的面试复盘，找出回答中最值得改进的地方。"],
+                              ["制定训练计划", "结合我的薄弱点，推荐下一步的练习计划。"],
+                            ].map(([title, prompt], index) => (
+                              <button key={title} type="button" onClick={() => {
+                                setDraft(prompt);
+                                setDraftRequestId(undefined);
+                                document.getElementById("chat-draft")?.focus();
+                              }}><small>0{index + 1} / 开始探索</small><strong>{title}<span aria-hidden="true">↗</span></strong></button>
+                            ))}
+                          </div>
+                        </div>
                       ) : (
                         detail.messages.map((message) => (
                           <div
@@ -871,6 +883,7 @@ export default function AiConversationsPage() {
                             key={message.id}
                           >
                             <article className="chat-message">
+                              <div className="chat-message-meta"><strong>{message.role === "USER" ? "你" : "智面"}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></div>
                               {message.status === "PENDING" ? message.content ? (
                                 <><MarkdownText content={message.content} /><span className="typing-cursor" aria-label="正在生成" /></>
                               ) : (
@@ -904,6 +917,7 @@ export default function AiConversationsPage() {
                       )}
                     </div>
                   </div>
+              )}
                   <form className="chat-composer" onSubmit={send}>
                     <label
                       className="field"
@@ -912,6 +926,7 @@ export default function AiConversationsPage() {
                     >
                       <textarea
                         id="chat-draft"
+                        disabled={loading || conversationLoading || !detail}
                         value={draft}
                         onChange={(event) => {
                           setDraft(event.target.value);
@@ -926,24 +941,23 @@ export default function AiConversationsPage() {
                             event.currentTarget.form?.requestSubmit();
                           }
                         }}
-                        placeholder="例如：查看我的复盘，找出最重要的弱项并创建一个训练任务。"
+                        rows={2}
+                        placeholder="想聊点什么？输入你的问题，或继续追问…"
                       />
                     </label>
                     <div className="form-actions chat-composer-actions">
-                      <span className="muted">Ctrl/Cmd + Enter 发送</span>
+                      <span className="muted"><kbd>Ctrl / ⌘</kbd> + <kbd>Enter</kbd> 发送</span>
                       <button
                         className="primary-button"
-                        disabled={sending || !draft.trim()}
+                        disabled={loading || conversationLoading || !detail || sending || !draft.trim()}
                       >
                         {sending ? "正在处理…" : "发送"}
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
                       </button>
                     </div>
                   </form>
-                </>
-              )}
             </section>
           </section>
-        )}
       </main>
       <ConfirmDialog
         open={deleteTarget !== undefined}
