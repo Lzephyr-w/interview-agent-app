@@ -18,14 +18,15 @@ spring:
     create-schemas: true
   servlet:
     multipart:
-      max-file-size: 25MB
-      max-request-size: 27MB
+      max-file-size: 800MB
+      max-request-size: 810MB
 management:
   endpoints:
     web:
       exposure:
         include: health
 app:
+  ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
   supabase:
     url: ${SUPABASE_URL}
     storage-url: ${SUPABASE_STORAGE_URL:${app.supabase.url}/storage/v1}
@@ -40,14 +41,19 @@ app:
     url: ${AI_REVIEW_API_URL:}
     api-key: ${AI_REVIEW_API_KEY:}
     model: ${AI_REVIEW_MODEL:}
+    request-timeout-seconds: ${AI_REVIEW_TIMEOUT_SECONDS:240}
   ai-mock-audio:
     bucket: ${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}
-  interview-import-audio:
-    bucket: ${SUPABASE_INTERVIEW_IMPORT_AUDIO_BUCKET:${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}}
-  transcription:
-    url: ${AI_TRANSCRIPTION_API_URL:}
-    api-key: ${AI_TRANSCRIPTION_API_KEY:}
-    model: ${AI_TRANSCRIPTION_MODEL:}
+  tencent-asr:
+    secret-id: ${TENCENT_CLOUD_SECRET_ID:}
+    secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
+    region: ${TENCENT_CLOUD_REGION:ap-shanghai}
+    engine-model-type: ${TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE:16k_zh}
+  interview-import:
+    engine: ${INTERVIEW_IMPORT_ASR_ENGINE:}
+    hotwords: ${INTERVIEW_IMPORT_ASR_HOTWORDS:}
+    request-timeout-seconds: ${INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS:90}
+    analysis-budget-seconds: ${INTERVIEW_IMPORT_AI_BUDGET_SECONDS:900}
   agent:
     url: ${AGENT_SERVICE_URL:http://localhost:8090}
     internal-key: ${AGENT_INTERNAL_KEY:}

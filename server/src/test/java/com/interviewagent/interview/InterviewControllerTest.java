@@ -97,6 +97,40 @@ class InterviewControllerTest {
         org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).review(anyString());
     }
 
+    @Test void mapsShortReviewIdsAndRejectsUnknownOrDuplicateReferences() throws Exception {
+        String user = "short-review-id-user";
+        String interview = createInterview(user, packageFor(user));
+        java.util.List<String> questions = new java.util.ArrayList<>();
+        for (int index = 0; index < 2; index++) questions.add(id(mockMvc.perform(post("/api/v1/interviews/{id}/questions", interview).with(jwt().jwt(token -> token.subject(user))).contentType(MediaType.APPLICATION_JSON)
+            .content("{\"questionText\":\"项目难点是什么？\",\"answerText\":\"缓存一致性。\",\"selfAssessment\":\"UNCERTAIN\"}"))
+            .andExpect(status().isCreated()).andReturn()));
+        var output = objectMapper.createObjectNode().put("readiness", "基本准备").put("summary", "待补充");
+        output.putArray("weaknessTags");
+        var items = output.putArray("questionReviews");
+        for (String reference : java.util.List.of("Q2", "Q1")) {
+            var item = items.addObject().put("questionId", reference);
+            for (String field : java.util.List.of("evaluation", "answerEvidence", "missingEvidence", "improvementAction", "recommendedAnswerStructure")) item.put(field, "待补充");
+            item.putArray("possibleFollowups");
+        }
+        var unknown = output.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) unknown.path("questionReviews").get(0)).put("questionId", "Q3");
+        var duplicate = output.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) duplicate.path("questionReviews").get(0)).put("questionId", "Q1");
+        for (var invalid : java.util.List.of(unknown, duplicate)) {
+            when(model.review(anyString())).thenReturn(invalid);
+            mockMvc.perform(post("/api/v1/interviews/{id}/review", interview).with(jwt().jwt(token -> token.subject(user)))).andExpect(status().isBadGateway());
+            org.junit.jupiter.api.Assertions.assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM review_reports WHERE interview_id=:id").param("id", interview).query(Integer.class).single());
+        }
+        org.mockito.Mockito.clearInvocations(model);
+        when(model.review(anyString())).thenReturn(output);
+        mockMvc.perform(post("/api/v1/interviews/{id}/review", interview).with(jwt().jwt(token -> token.subject(user))))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.questionReviews[*].questionId", org.hamcrest.Matchers.containsInAnyOrder(questions.toArray(String[]::new))));
+        var prompt = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(model).review(prompt.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("\"questionId\":\"Q1\""));
+        questions.forEach(question -> org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains(question)));
+    }
+
     @Test void distinguishesTextAndVoiceSimulationSources() throws Exception {
         String packageId = packageFor("user-a");
         String textInterview = createInterview("user-a", packageId);

@@ -14,6 +14,7 @@ type ConfirmDialogProps = {
   alternativeLabel?: string;
   alternativeTone?: ConfirmTone;
   busy?: boolean;
+  buttonOnly?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   onAlternative?: () => void;
@@ -29,6 +30,7 @@ export default function ConfirmDialog({
   alternativeLabel,
   alternativeTone = "danger",
   busy = false,
+  buttonOnly = false,
   onConfirm,
   onCancel,
   onAlternative,
@@ -53,7 +55,7 @@ export default function ConfirmDialog({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        if (!busy) onCancelRef.current();
+        if (!busy && !buttonOnly) onCancelRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -80,7 +82,7 @@ export default function ConfirmDialog({
       document.removeEventListener("keydown", handleKeyDown);
       previousFocus?.focus();
     };
-  }, [busy, confirmTone, open]);
+  }, [busy, buttonOnly, confirmTone, open]);
 
   if (!open) return null;
 
@@ -88,7 +90,7 @@ export default function ConfirmDialog({
     <div
       className="confirm-dialog-backdrop"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) onCancel();
+        if (event.target === event.currentTarget && !busy && !buttonOnly) onCancel();
       }}
     >
       <div

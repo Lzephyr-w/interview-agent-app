@@ -1,5 +1,6 @@
 package com.interviewagent.ai.storage;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.InetSocketAddress;
 import java.net.ProxySelector;
 import java.net.URI;
@@ -17,20 +18,30 @@ import org.springframework.stereotype.Service;
 public class AiAudioStorage {
     private static final Logger log = LoggerFactory.getLogger(AiAudioStorage.class);
     private final HttpClient client;
-    private final String url, bucket, importBucket, key;
+    private final String url, bucket, key;
+    private final ObjectMapper json;
 
-    public AiAudioStorage(@Value("${app.supabase.storage-url}") String url, @Value("${app.ai-mock-audio.bucket:ai-mock-audio}") String bucket, @Value("${app.interview-import-audio.bucket:interview-import-audio}") String importBucket, @Value("${SUPABASE_STORAGE_SERVICE_KEY:}") String key) {
-        this.url = url.replaceAll("/+$", ""); this.bucket = bucket; this.importBucket = importBucket; this.key = key; this.client = httpClient();
+    public AiAudioStorage(ObjectMapper json, @Value("${app.supabase.storage-url}") String url, @Value("${app.ai-mock-audio.bucket:ai-mock-audio}") String bucket, @Value("${SUPABASE_STORAGE_SERVICE_KEY:}") String key) {
+        this.json=json; this.url = url.replaceAll("/+$", ""); this.bucket = bucket; this.key = key; this.client = httpClient();
     }
 
     public void upload(String path, String type, byte[] bytes) { send(HttpRequest.newBuilder(uri(path)).header("Content-Type", type).POST(HttpRequest.BodyPublishers.ofByteArray(bytes)).build(), HttpResponse.BodyHandlers.discarding()); }
     public byte[] download(String path) { return send(HttpRequest.newBuilder(uri(path)).GET().build(), HttpResponse.BodyHandlers.ofByteArray()).body(); }
     public void delete(String path) { send(HttpRequest.newBuilder(uri(path)).DELETE().build(), HttpResponse.BodyHandlers.discarding()); }
-    public void uploadImport(String path, String type, byte[] bytes) { send(HttpRequest.newBuilder(uri(importBucket, path)).header("Content-Type", type).POST(HttpRequest.BodyPublishers.ofByteArray(bytes)).build(), HttpResponse.BodyHandlers.discarding()); }
-    public void deleteImport(String path) { send(HttpRequest.newBuilder(uri(importBucket, path)).DELETE().build(), HttpResponse.BodyHandlers.discarding()); }
+    public String signedUrl(String path) { return signedUrl(bucket, path); }
 
-    private URI uri(String path) { return uri(bucket, path); }
-    private URI uri(String targetBucket, String path) { return URI.create(url + "/object/" + targetBucket + "/" + path); }
+    private String signedUrl(String targetBucket, String path) {
+        try {
+            String body=json.writeValueAsString(java.util.Map.of("expiresIn",3600));
+            String response=send(HttpRequest.newBuilder(URI.create(url+"/object/sign/"+targetBucket+"/"+path)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString()).body();
+            String signed=json.readTree(response).path("signedURL").asText();
+            if(signed.isBlank()) throw new IllegalStateException("无法生成录音临时访问链接。");
+            return signed.startsWith("http")?signed:url+(signed.startsWith("/")?signed:"/"+signed);
+        } catch(IllegalStateException exception) { throw exception; }
+        catch(Exception exception) { throw new IllegalStateException("无法生成录音临时访问链接。",exception); }
+    }
+
+    private URI uri(String path) { return URI.create(url + "/object/" + bucket + "/" + path); }
     private static HttpClient httpClient() {
         HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10));
         String proxy = System.getenv("HTTPS_PROXY"); if (proxy == null || proxy.isBlank()) proxy = System.getenv("HTTP_PROXY");
@@ -38,10 +49,13 @@ public class AiAudioStorage {
         return builder.build();
     }
     private <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> body) {
+        return send(request, body, Duration.ofSeconds(60));
+    }
+    private <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> body, Duration timeout) {
         if (key.isBlank()) throw new IllegalStateException("服务器未配置音频存储访问凭据。");
         long started=System.nanoTime();
         try {
-            HttpResponse<T> response = client.send(HttpRequest.newBuilder(request.uri()).timeout(Duration.ofSeconds(60)).method(request.method(), request.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody())).headers("Authorization", "Bearer " + key, "apikey", key, "Content-Type", request.headers().firstValue("Content-Type").orElse("application/octet-stream")).build(), body);
+            HttpResponse<T> response = client.send(HttpRequest.newBuilder(request.uri()).timeout(timeout).method(request.method(), request.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody())).headers("Authorization", "Bearer " + key, "apikey", key, "Content-Type", request.headers().firstValue("Content-Type").orElse("application/octet-stream")).build(), body);
             if (response.statusCode() / 100 != 2) {
                 log.warn("audio_storage_response method={} host={} status={} elapsed_ms={}",request.method(),request.uri().getHost(),response.statusCode(),(System.nanoTime()-started)/1_000_000);
                 throw new IllegalStateException(storageError(response.statusCode()));

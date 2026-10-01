@@ -1,6 +1,6 @@
-# AI 面试助手
+# 智面 · AI 面试训练平台
 
-AI 面试助手是面向求职准备的前后端分离应用，围绕简历、岗位 JD、项目证据和面试记录构建可追溯的准备闭环。它提供 AI 文本与语音模拟、录音转写、智能复盘、薄弱点训练及 AI Agent 对话，帮助用户完成从资料整理、模拟练习到复盘改进的全流程准备。
+智面 · AI 面试训练平台是面向求职准备的前后端分离应用，围绕简历、岗位 JD、项目证据和面试记录构建可追溯的准备闭环。它提供 AI 文本与语音模拟、录音转写、智能复盘、薄弱点训练及 AI Agent 对话，帮助用户完成从资料整理、模拟练习到复盘改进的全流程准备。
 
 ## 1. 项目简介与核心功能
 
@@ -17,19 +17,19 @@ AI 面试助手是面向求职准备的前后端分离应用，围绕简历、�
 - **真实面试记录**：创建、编辑和删除面试；维护问题、回答和自评；支持粘贴转写文本按空行分段；支持上传录音、语音转写、AI 识别问答后检查并加入面试记录。
 - **AI 复盘**：根据面试问题、回答和关联资料生成复盘报告、准备度、逐题建议和薄弱点标签；支持查看和删除历史复盘。
 - **AI 文本模拟**：开始时可选择 1–10 道主问题（旧请求默认 4 道）；每道已回答的主问题可能有 1–2 道追问，追问不计入主问题数量。支持跳过、逐题 AI 反馈，并在完成后保存为正式面试记录。
-- **知识库文本模拟**：在资料库按类别导入 MD、XLSX、DOC、DOCX；文本模拟可选择一个或多个类别，逐题检索文档片段并显示来源。仍需面试包提供岗位与真实经历背景；语音模拟暂不使用知识库。
+- **知识库模拟**：在资料库按类别导入 MD、XLSX、DOC、DOCX；文本与语音模拟都可选择一个或多个类别，逐题检索文档片段并显示来源。仍需面试包提供岗位与真实经历背景。
 - **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
    <img width="100%" alt="p3" src="https://github.com/user-attachments/assets/9cd38888-e08c-4738-9b36-7853220744d7" />
 - **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历生成最多 3 个具体薄弱点；每项可追溯到具体题目，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
    <img  width="100%" alt="image" src="https://github.com/user-attachments/assets/74a29e59-ef82-46aa-8b81-4f1eaa301606" />
 - **AI 对话**：创建带可选面试包、面试、复盘或薄弱点上下文的会话；保存历史消息，调用 AI 回复，并支持删除会话。
    <img  width="100%" alt="p2" src="https://github.com/user-attachments/assets/96ab3e2f-2509-449b-a48b-d69af37a2f54" />
-- **私有文件存储**：简历文件和录音通过服务端访问 Supabase 私有 Storage；浏览器不接触 Service Role Key。
+- **私有文件存储**：简历文件和 AI 模拟录音通过服务端访问 Supabase 私有 Storage；真实面试录音仅在服务端临时保存用于识别，完成后删除。
 
 ### 当前边界
 
 - AI 录音模拟固定为 10 道题、每题 5 分钟；单题录音不超过 10 MiB。
-- 真实面试录音导入支持 WebM、Ogg、MP3、MP4/M4A、WAV，单文件不超过 25 MiB。
+- 真实面试录音导入支持 WebM、Ogg、MP3、MP4/M4A、WAV，单文件不超过 800 MB；超过 5 MB 的音频会由服务器 FFmpeg 转码、切片后逐段识别，临时文件在处理后删除。服务器需安装 FFmpeg；录音不保存到 Supabase。
 - 简历上传支持 PDF、DOC、DOCX，单文件不超过 10 MiB；扫描件或受保护文件可能无法提取正文。
 - 薄弱点分析只在用户点击“开始 AI 分析 / 重新分析”时调用一次模型；当前面试、问题、最新复盘或关联简历变化后，旧快照会隐藏并提示重新分析。
 - 本项目仅覆盖本地开发启动，不包含生产部署配置。
@@ -41,15 +41,15 @@ AI 面试助手是面向求职准备的前后端分离应用，围绕简历、�
 | 前端 | Next.js 15.2.4、React 19.0.0、TypeScript 5.8.2 |
 | 后端 | Java 21、Spring Boot 3.4.3、Spring Security、Spring JDBC |
 | 数据库 | PostgreSQL / Supabase PostgreSQL；未配置数据库连接时默认使用 H2 内存数据库 |
-| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22、V23、V24 |
+| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 至 V31 |
 | 文件解析 | Apache PDFBox 3.0.8、Apache POI 5.5.1 |
 | 认证与存储 | Supabase Auth、Supabase 私有 Storage |
-| AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；OpenAI 兼容音频转写 API 或火山引擎音频转写 |
+| AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；腾讯云录音文件识别 API |
 | 测试 | JUnit 5、Spring Boot Test、Spring Security Test、H2 |
 
 最低环境：Node.js 20+、pnpm 9+、JDK 21+、Maven 3.9+、Python 3.10+、Git。
 
-需要一个 Supabase 项目用于 Auth；使用简历上传或录音功能时还需要私有 Storage bucket。后端默认使用 H2 内存数据库，因此最小本地启动不要求另外安装 PostgreSQL；重启后 H2 数据会丢失。需要持久化数据时配置 Supabase PostgreSQL。
+需要一个 Supabase 项目用于 Auth；使用简历或 AI 模拟录音功能时还需要私有 Storage bucket。真实面试录音导入不保存录音文件。后端默认使用 H2 内存数据库，因此最小本地启动不要求另外安装 PostgreSQL；重启后 H2 数据会丢失。需要持久化数据时配置 Supabase PostgreSQL。
 
 ## 3. 本地启动与运行指南
 
@@ -69,7 +69,7 @@ cd interview-agent-app
 3. 如果要使用文件上传或录音功能，创建以下私有 Storage bucket，保持 Public 关闭：
 
    - `resume-files`：简历原文件
-   - `ai-mock-audio`：AI 录音模拟和真实面试录音导入文件
+   - `ai-mock-audio`：AI 录音模拟文件
 
 ### 3.3 创建环境配置
 
@@ -106,18 +106,22 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
 | 变量 | 说明 |
 | --- | --- |
 | `APP_CORS_ALLOWED_ORIGIN` | 前端地址，默认 `http://localhost:3000` |
+| `FFMPEG_PATH` | FFmpeg 可执行文件路径，默认从 `PATH` 查找；处理大于 5 MB 的录音时需要 |
 | `SUPABASE_URL` | Supabase Project URL，必填 |
 | `SUPABASE_STORAGE_URL` | 通常为 `${SUPABASE_URL}/storage/v1` |
 | `SUPABASE_STORAGE_SERVICE_KEY` | 服务端访问私有 bucket 的 Service Role Key，不能提交到 Git |
 | `SUPABASE_RESUME_FILES_BUCKET` | 简历文件 bucket，默认 `resume-files` |
-| `SUPABASE_AI_MOCK_AUDIO_BUCKET` | AI 模拟和面试录音 bucket，默认 `ai-mock-audio` |
+| `SUPABASE_AI_MOCK_AUDIO_BUCKET` | AI 模拟录音 bucket（真实面试导入不使用），默认 `ai-mock-audio` |
 | `AI_REVIEW_API_URL` | OpenAI 兼容 Chat Completions 地址；AI 复盘、录音导入和薄弱点分析需要 |
 | `AI_REVIEW_API_KEY` | AI 模型服务端密钥 |
 | `AI_REVIEW_MODEL` | AI 模型名 |
-| `AI_TRANSCRIPTION_API_URL` | OpenAI 兼容音频转写地址，使用该方式时填写 |
-| `AI_TRANSCRIPTION_API_KEY` | 音频转写服务密钥 |
-| `AI_TRANSCRIPTION_MODEL` | 音频转写模型名 |
-| `VOLCENGINE_SPEECH_API_KEY` | 可选的火山引擎转写密钥，与 OpenAI 兼容转写二选一 |
+| `TENCENT_CLOUD_SECRET_ID` / `TENCENT_CLOUD_SECRET_KEY` | 腾讯云 ASR 服务端密钥 |
+| `TENCENT_CLOUD_REGION` | 默认 `ap-shanghai` |
+| `TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE` | 共享默认 `16k_zh`，保留 AI 语音模拟兼容性 |
+| `INTERVIEW_IMPORT_ASR_ENGINE` | 仅真实导入覆盖；空值沿用共享默认，可选 `16k_zh_en_2.0` / `16k_zh_en_meeting`，不同引擎费用不同 |
+| `INTERVIEW_IMPORT_ASR_HOTWORDS` | 可选 `JavaScript\|5,TypeScript\|5,Vue\|5,React\|5,Node.js\|5,Axios\|5,Base64\|5`；最多128项，每词30字符/10汉字，权重1–11；100仅16k_zh且可能强制同音替换 |
+| `INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS` | 导入单次 AI 超时，默认90秒；共享复盘/弱项仍60秒 |
+| `INTERVIEW_IMPORT_AI_BUDGET_SECONDS` | 导入分析总预算，默认900秒；超预算保留有效结果 |
 | `AGENT_SERVICE_URL` | Python Agent 地址，默认 `http://localhost:8090` |
 | `AGENT_INTERNAL_KEY` | Java 与 Python Agent 之间的共享密钥，必须与 `agent/.env.local` 相同 |
 
@@ -189,7 +193,7 @@ py -3.10 -m pip install -e ".[test]"
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22、V23、V24 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 至 V31 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
 
 ### 3.6 启动后端
 
@@ -209,6 +213,8 @@ http://localhost:8080/actuator/health
 ### 3.7 启动 Python Agent
 
 Agent 是独立进程，不嵌入 Java。先按上面的说明准备 `agent/.env.local`，其中 `AGENT_INTERNAL_KEY` 必须与 `server/.env.local` 相同：
+
+修改 `agent/src` 中的模拟契约或提示词后，需要重启此 Python 进程；只重启 Java 后端不会加载 Agent 的新代码。
 
 ```powershell
 cd agent
@@ -286,3 +292,20 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 `VOICE_PLAN` 已合并返回 10 题计划和首题；不增加 Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer 或第二套会话存储。AI 对话现支持 SSE 流式输出，刷新后重新进入会话会自动恢复未完成回复，旧的非流式接口仍保留。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
 
 正常新建语音会话只发起一次 `VOICE_PLAN` 模型请求，并在同一短事务内写入计划和首题；部署期间遗留的 `AI_FIRST`/历史 `AI_CREATE` 任务仍保留兼容处理。
+
+
+### 2026-10-01：真实面试录音导入当前基线
+
+- 原始录音最大800,000,000字节，不上传Supabase；大文件/WebM由FFmpeg流式PCM落盘，16kHz单声道16bit，WAV每段约120秒、含头<=5,000,000字节。优先在末尾10秒寻找200ms短静音，没有静音用2秒重叠及真实偏移。原始重叠仍保留，分析按时间/来源去重。正常、失败、超时、中断均清理临时文件。PCM只能避免进一步损失，无法恢复原录音丢失的信息。
+- 腾讯云真实导入SpeakerDiarization=1、ResTextFormat=2，不指定SpeakerNumber；保存FinalSentence/SpeakerId/StartMs/EndMs。局部声音编号为片段+SpeakerId，不能跨片段认人；语义角色INTERVIEWER/CANDIDATE/UNKNOWN与声音编号分开保存，证据不足待确认。
+- INTERVIEW_IMPORT_ASR_ENGINE空值兼容共享默认，可显式16k_zh_en_2.0/16k_zh_en_meeting；不同引擎费用不同，AI语音模拟共享引擎不变。INTERVIEW_IMPORT_ASR_HOTWORDS可选技术术语，格式“词|权重”，最多128词/30字符/10汉字，权重1–11，100仅16k_zh且会强制同音替换。不自动修改本地密钥。
+- 分析按发言约4500字符分块，携带未结束问题和相邻发言，用来源编号合并并引用原话。候选人反问、面试官讲解不能算候选人回答，错误回答仍是已回答。原始文本保留，手工编辑仍可用；模型不负责纠错或补写。
+- 问答中的ASR来源片段使用空格拼接，不按每句强制换行。读取已有导入时，仅在文本与原系统拼接结果完全一致且有有效来源编号时整理分隔符；原始转写、片段内部段落、手工编辑和已确认问答不批量改写，无需重新ASR或AI分析。
+- INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS=90、INTERVIEW_IMPORT_AI_BUDGET_SECONDS=900。瞬态/429/5xx最多3次，非法JSON/业务字段最多2次，鉴权不重试；length截断缩块。有效块保存，失败部分可重试，未全部完成不READY。旧任务仅transcript也能分析；真实声音分离须重新上传原音频。
+- PATCH /api/v1/interview-imports/{id}/roles 接收 {roles:[{turnId,role}]}，保存用户角色修正并清空旧分析。页面随后调用已有/analyze，只读保存文本，不请求ASR。JWT、跨用户404、目标校验、可编辑问答和确认幂等保留。
+- 待确认问答旁的“重新识别问答”调用 POST /api/v1/interview-imports/{id}/analyze?force=true，从保存的转写重新分析全部问答，保留角色修正；有未保存的手工编辑时先提示确认。默认 /analyze 仍只重试失败部分。强制重分析失败时保留已有有效结果，已确认任务不重新分析；如需重新进行语音转写，使用“重新导入”上传原录音。
+- V31只新增transcript_json和analysis_progress_json，不修改历史迁移。不新增队列、声纹服务或大型依赖。
+- 失败任务d67e613b-69f3-4e5a-8621-846c08459fd3仅证实转写完成、问答分析失败；旧异常合并且本地没有关联日志，不能判定超时或文件格式。新诊断分类HTTP_TIMEOUT/CONNECTION/AUTHENTICATION/HTTP_429/HTTP_5XX/PROVIDER_JSON/CONTENT_MISSING/INVALID_JSON/BUSINESS_FIELDS/TRUNCATED/BUDGET。日志仅记任务/阶段/片段/引擎或模型/长度/状态/耗时/请求ID，不保存音频、转写、模型全文、JWT或凭据。
+- 真实验收：用同一双人技术术语+噪声原录音、有效腾讯云及AI配置，对比前后错词/角色归属/遗漏并人工标注。FFmpeg和Mock通过不能证明识别准确率提高，旧任务文本不能代替原始录音。
+
+本轮验证：`mvn -B -ntp -s .mvn/settings.xml test` 执行118项，99项通过、15项失败、4项错误；导入/分段/ASR参数/模型错误分类/复盘/弱项相关36项全部通过且无跳过。失败集中在SimulationWorkflowTest、AiMockQuestionAgentTest、MockInterviewControllerTest，包含现有异步worker与即时断言、模拟mock契约问题，完整后端验收未通过。前端 `npm run lint`、`node --test app/interviews/page.test.cjs`（2项）、`npm run build` 通过。FFmpeg实际生成多段WAV并验证大小、排序、偏移及成功/失败/中断清理；未执行真实双人原录音和供应商效果对比。

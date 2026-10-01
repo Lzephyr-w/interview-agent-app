@@ -242,8 +242,8 @@ class SimulationWorkflowTest {
         tasks.fail(claimed,new SimulationException("MODEL_UNAVAILABLE"));
     }
 
-    @Test void bothFlowsBlockBusyFinishAllowFailedAndFinishIdempotently() throws Exception {
-        for(boolean voice:List.of(false,true)) {
+    @Test void textFlowBlocksBusyFinishAllowsFailedAndFinishesIdempotently() throws Exception {
+        for(boolean voice:List.of(false)) {
             String user="finish-"+voice;
             JsonNode started=create(user,voice,pack(user)); String id=started.path("id").asText();
             String path="/api/v1/"+(voice?"ai-mock-interviews/":"mock-interviews/")+id+"/finish";
@@ -258,6 +258,30 @@ class SimulationWorkflowTest {
             assertNull(tasks.latest(user,id));
             assertThrows(IllegalStateException.class,()->tasks.retry(user,task.id()));
         }
+    }
+
+    @Test void voiceCanFinishOrCancelWhileAiIsProcessing() throws Exception {
+        String user="voice-finish-processing",id=create(user,true,pack(user)).path("id").asText();
+        jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,confirmed_answer_text,state,sort_order) VALUES(:question,:id,'已答题','已确认回答','ANSWERED',0)")
+            .param("question",UUID.randomUUID().toString()).param("id",id).update();
+        String path="/api/v1/ai-mock-interviews/"+id+"/finish";
+        JsonNode saved=postJson(user,path,"",200);
+        assertEquals("已确认回答",jdbc.sql("SELECT answer_text FROM interview_questions WHERE interview_id=:id").param("id",saved.path("finalInterviewId").asText()).query(String.class).single());
+        assertEquals(saved.path("finalInterviewId"),postJson(user,path,"",200).path("finalInterviewId"));
+        assertNull(tasks.latest(user,id));
+
+        String processingId=create(user,true,pack(user)).path("id").asText();
+        var claimed=tasks.claim(); assertNotNull(claimed);
+        assertEquals(processingId,claimed.resourceId());
+        assertFalse(postJson(user,"/api/v1/ai-mock-interviews/"+processingId+"/finish","",200).path("finalInterviewId").asText().isBlank());
+        assertNull(tasks.latest(user,processingId));
+        assertThrows(IllegalStateException.class,()->tasks.execute(claimed,()->tasks.write(()->fail("cancelled task wrote after finish"))));
+
+        String cancelledId=create(user,true,pack(user)).path("id").asText();
+        mvc.perform(delete("/api/v1/ai-mock-interviews/"+cancelledId).with(jwt().jwt(t->t.subject(user))))
+            .andExpect(status().isNoContent());
+        assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id").param("id",cancelledId).query(Integer.class).single());
+        assertNull(tasks.latest(user,cancelledId));
     }
 
     @Test void staleWorkerCannotWriteQuestion() throws Exception {
@@ -317,7 +341,7 @@ class SimulationWorkflowTest {
         bytes[44]=(byte)0xff;
         bytes[45]=0x7f;
         when(storage.download(anyString())).thenReturn(bytes);
-        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"))).thenReturn("我先压测再核对监控。");
+        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"),org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn("我先压测再核对监控。");
         doThrow(new SimulationException("MODEL_TIMEOUT")).doReturn(json.createObjectNode().put("feedback","请补充压测证据。"))
             .when(agent).simulate(eq("VOICE_FEEDBACK"),anyMap());
         mvc.perform(multipart("/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/audio")
@@ -328,7 +352,7 @@ class SimulationWorkflowTest {
         assertNotNull(getSession(user,id,true).path("currentQuestion").path("id").asText(null));
         jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE resource_id=:id").param("id",id).update();
         worker.run();
-        verify(transcription,times(1)).transcribe(eq(user),any(byte[].class),eq("audio/wav"));
+        verify(transcription,times(1)).transcribe(eq(user),any(byte[].class),eq("audio/wav"),org.mockito.ArgumentMatchers.nullable(String.class));
         verify(storage,times(1)).upload(anyString(),eq("audio/wav"),any(byte[].class));
         assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE ai_mock_interview_id=:id AND status='READY'").param("id",id).query(Integer.class).single());
         assertEquals("我先压测再核对监控。",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",q).query(String.class).single());
@@ -392,7 +416,7 @@ class SimulationWorkflowTest {
         System.arraycopy("WAVE".getBytes(java.nio.charset.StandardCharsets.UTF_8),0,bytes,8,4);
         bytes[44]=(byte)0xff; bytes[45]=0x7f;
         when(storage.download(anyString())).thenReturn(bytes);
-        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"))).thenThrow(new IllegalStateException("no speech"));
+        when(transcription.transcribe(eq(user),any(byte[].class),eq("audio/wav"),org.mockito.ArgumentMatchers.nullable(String.class))).thenThrow(new IllegalStateException("no speech"));
         mvc.perform(multipart("/api/v1/ai-mock-interviews/"+id+"/questions/"+q+"/audio")
             .file(new org.springframework.mock.web.MockMultipartFile("file","answer.wav","audio/wav",bytes)).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
         worker.run();

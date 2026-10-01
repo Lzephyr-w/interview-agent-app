@@ -144,6 +144,13 @@ export default function MockInterviewsPage() {
     });
   }
 
+  function resetConfiguration() {
+    setForm(emptyForm);
+    setMainQuestionCount(4);
+    setSourceMode("STANDARD");
+    setCategoryIds([]);
+  }
+
   async function start(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
@@ -233,6 +240,7 @@ export default function MockInterviewsPage() {
         { method: "POST" },
       );
       setSession(finished);
+      resetConfiguration();
       setNotice("文本模拟已完成，已保存本场逐题复盘。");
     } catch (cause) {
       setError(message(cause, "保存失败，已提交内容仍保留，可重试。"));
@@ -251,6 +259,7 @@ export default function MockInterviewsPage() {
       setSession(undefined);
       setPendingSession(undefined);
       setDialog(null);
+      resetConfiguration();
       setNotice("未完成模拟已放弃。");
     } catch (cause) {
       setError(message(cause, "放弃失败，请稍后重试。"));
@@ -541,9 +550,9 @@ export default function MockInterviewsPage() {
                         </Link>
                       </>
                     )}
-                    <Link className="secondary-button" href="/mock-interviews">
+                    <button className="secondary-button" type="button" onClick={() => { resetConfiguration(); setSession(undefined); setNotice(""); }}>
                       再来一轮
-                    </Link>
+                    </button>
                   </div>
                 </div>
                 <div className="mock-history">
@@ -687,7 +696,8 @@ export default function MockInterviewsPage() {
                 ? "继续面试"
                 : "取消不保存"
         }
-        cancelLabel={dialog === "resume" ? "取消" : "再想想"}
+        cancelLabel={dialog === "resume" ? "放弃" : "再想想"}
+        buttonOnly={dialog === "resume"}
         confirmTone={dialog === "abandon" ? "danger" : "primary"}
         busy={saving}
         onConfirm={() => {

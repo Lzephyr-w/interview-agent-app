@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -229,7 +230,13 @@ public class InterviewService {
             .param("userId", userId).param("packageId", interview.interviewPackageId()).query(String.class).optional().orElse("待补充（关联简历文件尚未解析）");
         List<Map<String, String>> cards = jdbc.sql("SELECT c.project_name, c.project_description_and_responsibilities, c.project_highlights, c.technology_stack FROM interview_package_evidence_cards link JOIN project_evidence_cards c ON c.id = link.evidence_card_id WHERE link.interview_package_id = :packageId AND c.user_id = :userId")
             .param("packageId", interview.interviewPackageId()).param("userId", userId).query((rs, row) -> Map.of("项目名称", rs.getString("project_name"), "项目描述与职责", rs.getString("project_description_and_responsibilities"), "项目亮点", rs.getString("project_highlights"), "技术栈", rs.getString("technology_stack"))).list();
-        return "你是候选人面试复盘助手。只能依据当前用户授权且当前面试包关联的 JD、简历、证据卡和本场问答评价，绝不编造项目指标、经历、隐私信息或面试事实；资料不足时写“待补充”。不得输出能力评级、通过概率或招聘结论；readiness 仅表示资料准备完整度。固定弱项标签仅可为：" + String.join("、", WEAKNESS_TAGS) + "，最多3个。只返回 JSON：{readiness(准备不足|基本准备|准备充分),summary,weaknessTags:string[],questionReviews:[{questionId,evaluation,answerEvidence,missingEvidence,improvementAction,recommendedAnswerStructure,possibleFollowups:string[]}]}。questionReviews 必须恰好覆盖每个 questionId。\n面试=" + jsonValue(interview) + "\n简历=" + clip(resume, 12_000) + "\nJD=" + clip(jd, 12_000) + "\n证据卡=" + clip(jsonValue(cards.isEmpty() ? List.of(Map.of("资料", "待补充")) : cards), 12_000) + "\n问答=" + clip(jsonValue(questions), 30_000);
+        // ponytail: short request-local IDs avoid model transcription errors; persisted IDs stay unchanged.
+        List<Map<String, Object>> reviewQuestions = new ArrayList<>();
+        for (int index = 0; index < questions.size(); index++) {
+            InterviewQuestion question = questions.get(index);
+            reviewQuestions.add(Map.of("questionId", "Q" + (index + 1), "questionText", question.questionText(), "answerText", question.answerText(), "selfAssessment", question.selfAssessment(), "aiFeedback", question.aiFeedback()));
+        }
+        return "你是候选人面试复盘助手。只能依据当前用户授权且当前面试包关联的 JD、简历、证据卡和本场问答评价，绝不编造项目指标、经历、隐私信息或面试事实；资料不足时写“待补充”。不得输出能力评级、通过概率或招聘结论；readiness 仅表示资料准备完整度。固定弱项标签仅可为：" + String.join("、", WEAKNESS_TAGS) + "，最多3个。只返回 JSON：{readiness(准备不足|基本准备|准备充分),summary,weaknessTags:string[],questionReviews:[{questionId,evaluation,answerEvidence,missingEvidence,improvementAction,recommendedAnswerStructure,possibleFollowups:string[]}]}。questionReviews 必须恰好覆盖每个 questionId；questionId 必须原样使用输入中的 Q1、Q2 等短编号，不得使用 UUID、改写或重复编号。除两个字符串数组外，所有字段必须为非空字符串，缺少依据时写“待补充”。\n面试=" + jsonValue(interview) + "\n简历=" + clip(resume, 12_000) + "\nJD=" + clip(jd, 12_000) + "\n证据卡=" + clip(jsonValue(cards.isEmpty() ? List.of(Map.of("资料", "待补充")) : cards), 12_000) + "\n问答=" + clip(jsonValue(reviewQuestions), 30_000);
     }
 
     private ParsedReview parse(JsonNode root, List<InterviewQuestion> questions) {
@@ -238,9 +245,12 @@ public class InterviewService {
         List<String> tags = textArray(root.path("weaknessTags"), 3, 40); if (tags.size() > 3 || !WEAKNESS_TAGS.containsAll(tags)) throw invalidFormat();
         JsonNode items = root.path("questionReviews"); if (!items.isArray() || items.size() != questions.size()) throw invalidFormat();
         Set<String> ids = questions.stream().map(InterviewQuestion::id).collect(java.util.stream.Collectors.toSet());
+        Map<String, String> questionIds = new HashMap<>();
+        for (int index = 0; index < questions.size(); index++) questionIds.put("Q" + (index + 1), questions.get(index).id());
         List<ParsedQuestionReview> parsed = new ArrayList<>();
         for (JsonNode item : items) {
-            String id = text(item, "questionId"); if (!ids.remove(id)) throw invalidFormat();
+            String reference = text(item, "questionId");
+            String id = questionIds.getOrDefault(reference, reference); if (!ids.remove(id)) throw invalidFormat();
             parsed.add(new ParsedQuestionReview(id, text(item, "evaluation", 4_000), text(item, "answerEvidence", 4_000), text(item, "missingEvidence", 4_000), text(item, "improvementAction", 4_000), text(item, "recommendedAnswerStructure", 4_000), textArray(item.path("possibleFollowups"), 5, 800)));
         }
         if (!ids.isEmpty()) throw invalidFormat();

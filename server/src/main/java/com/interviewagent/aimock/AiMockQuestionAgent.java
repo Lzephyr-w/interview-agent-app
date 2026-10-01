@@ -24,7 +24,13 @@ class AiMockQuestionAgent {
     }
 
     PlanAndFirst planAndFirst(JsonNode materials) {
-        JsonNode result=model.simulate("VOICE_PLAN",Map.of("materials",materials,"history",List.of()));
+        return planAndFirst(materials, null);
+    }
+
+    PlanAndFirst planAndFirst(JsonNode materials, String knowledge) {
+        Map<String,Object> input = new HashMap<>(Map.of("materials",materials,"history",List.of()));
+        if (knowledge != null) input.put("knowledge", knowledge);
+        JsonNode result=model.simulate("VOICE_PLAN",input);
         try {
             SimulationContract.modelResult("VOICE_PLAN",result);
             List<PlanItem> plan=parsePlan(result,false,false);
@@ -50,7 +56,13 @@ class AiMockQuestionAgent {
     }
 
     QuestionDraft generate(JsonNode materials, PlanItem item, List<QuestionHistory> history, boolean strictProject) {
-        JsonNode result=model.simulate("VOICE_QUESTION",Map.of("materials",materials,"slot",item,"history",history));
+        return generate(materials, item, history, strictProject, null);
+    }
+
+    QuestionDraft generate(JsonNode materials, PlanItem item, List<QuestionHistory> history, boolean strictProject, String knowledge) {
+        Map<String,Object> input = new HashMap<>(Map.of("materials",materials,"slot",item,"history",history));
+        if (knowledge != null) input.put("knowledge", knowledge);
+        JsonNode result=model.simulate("VOICE_QUESTION",input);
         try {
             SimulationContract.modelResult("VOICE_QUESTION",result);
             QuestionDraft draft=parseQuestion(result);

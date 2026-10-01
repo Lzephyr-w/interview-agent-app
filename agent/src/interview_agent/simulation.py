@@ -108,7 +108,7 @@ def validate_request(request):
             expected.add("slot")
         if operation in {"VOICE_FEEDBACK", "TEXT_FEEDBACK", "TEXT_FOLLOW_UP"}:
             expected.update({"questionText", "answer"})
-        if operation.startswith("TEXT_") and "knowledge" in data:
+        if "knowledge" in data:
             expected.add("knowledge")
         fields(data, expected)
         if "knowledge" in expected:
@@ -222,7 +222,7 @@ def generate(request, model_factory):
         "依据JD岗位要求、轮次、简历、证据卡；禁止编造项目、指标、技术细节、隐私信息、能力评级、通过概率或招聘结论。"
         "生成的问题最多200字符且最多一个问号，反馈最多600字符且最多两句，元数据最多120字符。"
         + PROMPTS[request["operation"]]
-        + ("本次为知识库模拟。必须紧扣input.knowledge的内容出题、追问或反馈，不能回退通用题；引用中的参考答案不是当前用户的真实经历，不得当作个人事实。" if "knowledge" in request["input"] else "")},
+        + ("本次为知识库模拟。必须紧扣input.knowledge的内容出题、追问或反馈，不能回退通用题；引用中的参考答案不是当前用户的真实经历，不得当作个人事实。语音计划保留固定5道基础、4道真实项目、1道场景/行为；首题应依据标注的首题片段，其他题从知识主题安排不同能力点；项目名只能取真实经历锚点。" if "knowledge" in request["input"] else "")},
         {"role": "user", "content": json.dumps(request["input"], ensure_ascii=False)}]
     remaining = (request["deadlineAtEpochMs"] - time.time()*1000)/1000
     if remaining <= 0:

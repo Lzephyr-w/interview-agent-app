@@ -161,6 +161,26 @@ public class KnowledgeService {
         return best;
     }
 
+    public void requireDocuments(String user, List<String> documentIds) {
+        if (documentIds.isEmpty() || jdbc.sql("SELECT COUNT(*) FROM knowledge_documents WHERE user_id=:user AND id IN (:documents)")
+            .param("user", user).param("documents", documentIds).query(Integer.class).single() != documentIds.size())
+            throw new IllegalArgumentException("所选知识库文档已不可用，请重新选择类别开始模拟。");
+    }
+
+    public String overview(String user, List<String> documentIds) {
+        requireDocuments(user, documentIds);
+        var rows = jdbc.sql("SELECT d.original_filename,s.location,s.content FROM knowledge_segments s JOIN knowledge_documents d ON d.id=s.document_id WHERE d.user_id=:user AND d.id IN (:documents) ORDER BY d.id,s.position LIMIT 20")
+            .param("user", user).param("documents", documentIds)
+            .query((rs, row) -> rs.getString(1) + " · " + rs.getString(2) + "：" + rs.getString(3)).list();
+        StringBuilder result = new StringBuilder();
+        for (String row : rows) {
+            if (result.length() >= 4500) break;
+            result.append(row, 0, Math.min(row.length(), 300)).append('\n');
+        }
+        if (result.isEmpty()) throw new IllegalArgumentException("所选知识库缺少可用内容，请重新选择类别。");
+        return result.toString();
+    }
+
     private static Set<String> grams(String text) {
         String clean = text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
         Set<String> result = new HashSet<>();

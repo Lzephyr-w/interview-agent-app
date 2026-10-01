@@ -75,44 +75,74 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="auth-page">
+    <main className="auth-page auth-studio">
       <Toast
         error={error}
         notice={notice}
         onDismissError={() => setError("")}
         onDismissNotice={() => setNotice("")}
       />
-      <section className="auth-card">
-        <div className="topline">
-          <div className="brand">
+      <header className="auth-header">
+          <div className="brand" aria-label="智面 · AI 面试训练平台">
             <span className="brand-mark">
               <img src="/images/ai-assistant.png" alt="" />
             </span>
             <span>
-              面试助手<small>INTERVIEW ASSISTANT</small>
+              智面<small>AI 面试训练平台</small>
             </span>
           </div>
           <div className="auth-top-actions">
             <UserGuide showLibraryLink={false} />
             <ThemeToggle />
           </div>
-        </div>
+      </header>
+      <div className="auth-workspace">
+        <section className="auth-story" aria-labelledby="auth-story-title">
+          <div className="auth-story-heading">
+            <p className="auth-kicker"><span /> YOUR NEXT CHAPTER</p>
+            <h2 id="auth-story-title">让每一次练习，<br />成为下一次的<em>底气。</em></h2>
+            <p>从准备到上场，你的 AI 面试搭档始终在场。</p>
+          </div>
+          <div className="auth-orbit-scene" aria-hidden="true">
+            <div className="auth-orbit auth-orbit-outer" />
+            <div className="auth-orbit auth-orbit-inner" />
+            <div className="auth-orbit-core">
+              <img src="/images/ai-assistant-light.png" alt="" />
+              <span>YOUR AI COPILOT</span>
+            </div>
+            <div className="auth-float-card auth-question-card">
+              <span className="auth-card-caption">✦ MOCK INTERVIEW</span>
+              <strong>聊聊你最有挑战的项目？</strong>
+              <div className="auth-wave"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
+              <span className="auth-card-note">每一次表达，都更进一步</span>
+            </div>
+            <div className="auth-float-card auth-growth-card">
+              <span className="auth-growth-icon">↗</span>
+              <div><strong>看见自己的成长</strong><span className="auth-card-note">练习 · 复盘 · 突破</span></div>
+            </div>
+            <span className="auth-orbit-spark auth-spark-one">✦</span>
+            <span className="auth-orbit-spark auth-spark-two">+</span>
+          </div>
+          <div className="auth-story-footer"><span>01 / 准备</span><span>02 / 模拟</span><span>03 / 进阶</span></div>
+        </section>
+        <section className="auth-card" aria-labelledby="auth-title">
+        <div className="auth-form-mark" aria-hidden="true">↗</div>
         <p className="eyebrow">{registering ? "CREATE ACCOUNT" : "WELCOME BACK"}</p>
-        <h1>
+        <h1 id="auth-title">
           {registering ? (
             <>
-              注册后，<em>开始准备。</em>
+              开启你的<em>进阶之旅。</em>
             </>
           ) : (
             <>
-              登录后，<em>继续准备。</em>
+              好久不见，<em>继续向前。</em>
             </>
           )}
         </h1>
         <p className="intro">
           {registering
-            ? "使用邮箱创建 Supabase Auth 账号。"
-            : "使用你的 Supabase Auth 邮箱账号进入面试助手。"}
+            ? "创建账号，把每一次练习变成看得见的进步。"
+            : "登录智面，向下一个心动的机会再近一步。"}
         </p>
         <form
           className="auth-form"
@@ -125,6 +155,7 @@ export default function LoginPage() {
             <input
               name="email"
               type="email"
+              placeholder="输入你的邮箱地址"
               required
               autoComplete="email"
               aria-invalid={Boolean(fieldErrors.email)}
@@ -143,6 +174,7 @@ export default function LoginPage() {
               <input
                 id="password"
                 name="password"
+                placeholder={registering ? "设置你的登录密码" : "输入你的密码"}
                 type={showPassword ? "text" : "password"}
                 required
                 autoComplete={registering ? "new-password" : "current-password"}
@@ -177,6 +209,7 @@ export default function LoginPage() {
                 <input
                   id="confirm-password"
                   name="confirmPassword"
+                  placeholder="再次输入密码"
                   type={showConfirmPassword ? "text" : "password"}
                   required
                   autoComplete="new-password"
@@ -213,6 +246,7 @@ export default function LoginPage() {
           )}
           <button className="primary-button" disabled={loading}>
             {loading ? (registering ? "注册中…" : "登录中…") : registering ? "注册" : "登录"}
+            <span aria-hidden="true">↗</span>
           </button>
           <p className="auth-switch">
             {registering ? "已有账号？" : "还没有账号？"}
@@ -233,7 +267,10 @@ export default function LoginPage() {
             </button>
           </p>
         </form>
+        <p className="auth-form-footnote"><span aria-hidden="true">◈</span> 专注每一次练习，让机会有备而来</p>
       </section>
+      </div>
+      <footer className="auth-page-footer"><span>PREPARE WITH PURPOSE.</span><span>你的下一站，值得认真准备。</span></footer>
     </main>
   );
 }

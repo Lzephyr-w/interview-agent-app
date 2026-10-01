@@ -1,0 +1,109 @@
+/* ponytail: scope the studio skin to this room; reuse the existing scene and recording controls. */
+.ai-room.ai-room-studio {
+  height: 100svh;
+  min-height: 600px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 20px;
+  padding: 22px 28px 16px;
+  color: #ecf3ed;
+  background: #14231d;
+  color-scheme: dark;
+}
+.ai-room-studio .ai-room-topbar { gap: 16px; align-items: center; }
+.ai-room-studio .ai-room-header { min-height: 40px; border: 0; background: rgb(12 27 22 / 38%); backdrop-filter: blur(10px); border-radius: 12px; padding: 4px 12px; }
+.ai-room-studio .ai-room-brand { display: flex; align-items: center; gap: 8px; font-size: 18px; }
+.ai-room-brand img { width: 32px; height: 32px; object-fit: contain; }
+.ai-room-brand small { margin-left: 12px; padding-left: 14px; border-left: 1px solid #ffffff25; color: #bbcec5; font-size: 12px; font-weight: 400; }
+.ai-room-studio .ai-room-meta { color: #afc2b8; font-size: 12px; }
+.ai-room-studio .ai-room-exit,
+.ai-room-studio .ai-room-welcome-exit { flex-shrink: 0; width: 32px; height: 32px; border-color: #ffffff40; background: #14251cb3; }
+.ai-room-workspace { display: flex; align-items: flex-end; justify-content: center; min-height: 0; }
+.ai-room-interviewer { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, #10261c30, transparent 35%, #0b211b55 80%, #0b211bb3), url('/images/ai-interviewer-serious.webp') center / cover; }
+.ai-room-console { position: relative; z-index: 1; display: flex; width: min(720px, 100%); max-height: min(48svh, 440px); min-width: 0; min-height: 0; overflow-y: auto; border: 1px solid #e0f0df40; border-radius: 16px; background: linear-gradient(135deg, rgb(17 42 32 / 66%), rgb(20 37 28 / 70%)); backdrop-filter: blur(10px); box-shadow: 0 20px 60px #0003; }
+.ai-room-studio .ai-room-brief,
+.ai-room-studio .ai-room-stage { width: 100%; align-self: center; margin: auto 0; padding: 24px; background: none; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; }
+.ai-room-studio .ai-room-kicker { margin: 0 0 18px; color: #bbd99c; font-size: 10px; font-weight: 600; letter-spacing: .18em; }
+.ai-room-studio .ai-room-brief h1 { margin: 0 0 16px; font-family: inherit; font-size: clamp(25px, 2.3vw, 32px); line-height: 1.4; letter-spacing: -.045em; }
+.ai-room-studio .ai-room-brief h1 em { font-style: normal; color: #c6e3a7; }
+.ai-room-studio .ai-room-brief > p:not(.ai-room-kicker) { color: #b7c7bc; font-size: 13px; line-height: 1.8; }
+.ai-room-studio .ai-room-primary { min-height: 48px; border-radius: 11px; background: #c8e3ac; color: #1b3124; font-size: 14px; box-shadow: 0 6px 20px #06190b22; transition: background .2s, transform .2s; }
+.ai-room-studio .ai-room-primary:hover:not(:disabled) { background: #def0c7; transform: translateY(-1px); }
+.ai-room-studio .ai-room-start .ai-room-primary { width: 100%; margin-top: 0; }
+.ai-room-studio .ai-room-question { padding: 0; overflow: visible; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; }
+.ai-room-studio .ai-room-question::after { display: none; }
+.ai-room-progress { display: block; appearance: none; width: 100%; height: 3px; margin-bottom: 24px; border: 0; border-radius: 4px; background: #ffffff14; accent-color: #c8e3ac; }
+.ai-room-progress::-webkit-progress-bar { background: #ffffff14; border-radius: 4px; }
+.ai-room-progress::-webkit-progress-value { background: #c8e3ac; border-radius: 4px; }
+.ai-room-progress::-moz-progress-bar { background: #c8e3ac; border-radius: 4px; }
+.ai-room-studio .ai-room-question-top { padding-right: 44px; flex-wrap: wrap; justify-content: flex-start; gap: 8px; color: #b9d5a6; }
+.ai-room-studio .ai-room-question-top span { background: #c6e3a711; font-size: 11px; }
+.ai-room-studio .ai-room-question-top .ai-room-question-type { color: #dccdaf; background: #dccdaf14; }
+.ai-room-studio .ai-room-question-top .ai-room-timer { margin-left: auto; font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: .06em; color: #d6e9c4; }
+.ai-room-studio .ai-room-question h1 { margin: 24px 0; font-family: inherit; font-size: clamp(21px, 2vw, 29px); line-height: 1.65; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.ai-room-studio .ai-room-replay { top: 15px; right: 0; width: 30px; height: 30px; color: #c6e3a7; background: #c6e3a714; }
+.ai-room-studio .ai-room-source { color: #b5c9b8; line-height: 1.7; font-size: 12px; }
+.ai-room-studio .ai-room-listening, .ai-room-studio .ai-room-processing { padding-top: 20px; border-top: 1px solid #ffffff15; color: #b7cbb8; font-size: 13px; line-height: 1.8; font-weight: 400; }
+.ai-room-studio .ai-room-actions,
+.ai-room-studio .ai-room-actions:has(.ai-room-cancel) { position: static; width: auto; justify-content: center; gap: 18px; margin-top: 30px; }
+.ai-room-studio .ai-room-cancel { position: static; flex-shrink: 0; background: #ffffff14; }
+.ai-room-studio .ai-room-mic { width: 68px; height: 68px; background: #c8e3ac; color: #213a28; box-shadow: 0 0 0 8px #c8e3ac0c, 0 0 40px #c8e3ac15; }
+.ai-room-studio .ai-room-mic::after { inset: -4px; border-color: #c8e3ac44; }
+.ai-room-studio .ai-room-wave { height: 50px; margin-top: 26px; }
+.ai-room-studio .ai-room-wave i { background: #c8e3ac; }
+.ai-room-studio .ai-room-recording { font-size: 19px; font-variant-numeric: tabular-nums; }
+.ai-room-studio .ai-room-error,
+.ai-room-studio .ai-room-brief > p.ai-room-error { color: #ffb6af; font-size: 13px; line-height: 1.7; }
+.ai-room-studio .ai-room-result .ai-room-primary { margin-inline: 6px; }
+.ai-room-studio .ai-room-waiting { display: flex; flex-direction: column; align-items: center; padding-block: 28px 26px; }
+.ai-room-console:has(.ai-room-waiting) { border-color: #c8e3ac55; background: radial-gradient(circle at 50% 0%, #c8e3ac20, transparent 65%), linear-gradient(135deg, rgb(17 42 32 / 72%), rgb(20 37 28 / 76%)); }
+.ai-room-waiting-mark { display: flex; align-items: center; justify-content: center; gap: 4px; width: 58px; height: 58px; border: 1px solid #c8e3ac55; border-radius: 50%; background: #c8e3ac13; box-shadow: 0 0 0 8px #c8e3ac0a, 0 0 32px #c8e3ac1b; }
+.ai-room-waiting-mark i { width: 4px; height: 16px; border-radius: 5px; background: #c8e3ac; animation: ai-room-waiting-wave 1s ease-in-out infinite; }
+.ai-room-waiting-mark i:nth-child(2) { animation-delay: .15s; }
+.ai-room-waiting-mark i:nth-child(3) { animation-delay: .3s; }
+.ai-room-studio .ai-room-waiting h1 { margin: 20px 0 16px; font-size: clamp(20px, 2vw, 24px); font-weight: 700; letter-spacing: .01em; }
+.ai-room-waiting-track { width: min(210px, 60%); height: 3px; overflow: hidden; border-radius: 4px; background: #c8e3ac24; }
+.ai-room-waiting-track span { display: block; width: 42%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, transparent, #c8e3ac); animation: ai-room-waiting-slide 1.8s ease-in-out infinite alternate; }
+@keyframes ai-room-waiting-wave { 0%, 100% { height: 12px; opacity: .6; } 50% { height: 25px; opacity: 1; } }
+@keyframes ai-room-waiting-slide { to { transform: translateX(290%); } }
+.ai-room-studio .ai-room-error button { margin-left: 8px; color: inherit; background: transparent; border: 0; text-decoration: underline; }
+.ai-room-studio :focus-visible { outline: 2px solid #d4eeb7; outline-offset: 4px; }
+@media (max-height: 800px) and (min-width: 901px) {
+  .ai-room.ai-room-studio { gap: 12px; padding: 16px 22px 12px; }
+  .ai-room-studio .ai-room-brief, .ai-room-studio .ai-room-stage { padding: 24px 30px; }
+  .ai-room-studio .ai-room-kicker { margin-bottom: 12px; }
+  .ai-room-studio .ai-room-brief h1 { font-size: 30px; margin-bottom: 8px; }
+}
+.ai-room-studio .ai-room-stage, .ai-room-studio .ai-room-start { padding: 12px 18px; }
+.ai-room-studio .ai-room-start { text-align: center; }
+.ai-room-studio .ai-room-start h1 { margin: 0 0 8px; font-size: 20px; }
+.ai-room-start-details { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 12px; margin: 14px 0; padding: 12px; border: 1px solid #e0f0df20; border-radius: 10px; background: #ffffff05; }
+.ai-room-start-details > div { min-width: 0; }
+.ai-room-start-details > div + div { border-left: 1px solid #e0f0df20; padding-left: 12px; }
+.ai-room-start-details dt { color: #afc2b8; font-size: 11px; }
+.ai-room-start-details dd { margin: 5px 0 0; color: #ecf3ed; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-room-studio .ai-room-start > p { margin: 8px 0 12px; }
+.ai-room-studio .ai-room-start .ai-room-primary { display: flex; width: fit-content; min-height: 40px; margin: 0 auto; padding: 8px 18px; }
+.ai-room-studio .ai-room-stage .ai-room-kicker { margin-bottom: 8px; }
+.ai-room-studio .ai-room-progress { margin-bottom: 8px; }
+.ai-room-studio .ai-room-question h1 { margin: 8px 0; font-size: clamp(17px, 1.4vw, 20px); line-height: 1.4; }
+.ai-room-studio .ai-room-listening, .ai-room-studio .ai-room-processing { padding-top: 6px; }
+.ai-room-studio .ai-room-actions, .ai-room-studio .ai-room-actions:has(.ai-room-cancel) { margin-top: 8px; }
+.ai-room-studio .ai-room-wave { height: 22px; margin-top: 6px; }
+.ai-room-studio .ai-room-mic { width: 44px; height: 44px; }
+@media (max-width: 900px) {
+  .ai-room.ai-room-studio { min-height: 700px; padding: 12px; gap: 12px; }
+  .ai-room-workspace { align-items: flex-end; justify-content: center; }
+  .ai-room-console { width: min(420px, 100%); max-height: 62svh; }
+  .ai-room-console:has(.ai-room-stage) { max-height: 55svh; }
+  .ai-room-interviewer { background-position: 52% top; }
+  .ai-room-studio .ai-room-brief { padding: 20px; }
+  .ai-room-studio .ai-room-header { flex-wrap: wrap; gap: 4px; padding: 4px 10px; }
+  .ai-room-studio .ai-room-meta { flex-wrap: wrap; gap: 6px; font-size: 10px; }
+  .ai-room-studio .ai-room-meta span + span { padding-left: 6px; }
+  .ai-room-studio .ai-room-brand { font-size: 18px; }
+  .ai-room-brand small { font-size: 11px; }
+  .ai-room-studio .ai-room-question-top { flex-direction: row; align-items: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-room-studio *, .ai-room-studio *::after { animation: none !important; transition: none !important; }
+}

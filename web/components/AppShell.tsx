@@ -33,12 +33,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <Link className="sidebar-brand" href="/">
+        <Link className="sidebar-brand" href="/" aria-label="智面 · AI 面试训练平台">
           <span className="brand-mark">
             <img src="/images/ai-assistant.png" alt="" />
           </span>
           <span>
-            面试助手<small>INTERVIEW ASSISTANT</small>
+            智面<small>AI 面试训练平台</small>
           </span>
         </Link>
         <nav className="sidebar-nav" aria-label="主导航">
@@ -65,8 +65,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       >
         <header className="app-topbar">
           <div className="topbar-title">
-            <span className="topbar-kicker">INTERVIEW ASSISTANT</span>
-            <strong>{current?.label ?? "面试助手"}</strong>
+            <span className="topbar-kicker">智面 · AI 面试训练平台</span>
+            <strong>{current?.label ?? "智面"}</strong>
           </div>
           <div className="topbar-actions">
             <UserGuide />

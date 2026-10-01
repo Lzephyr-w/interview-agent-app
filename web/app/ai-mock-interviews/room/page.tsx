@@ -5,6 +5,7 @@ import Link from "next/link";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Toast from "@/components/Toast";
 import { api, ApiError } from "@/lib/api";
+import { toWav } from "@/lib/audio";
 
 type Package = {
   id: string;
@@ -39,6 +40,8 @@ type Question = {
   sortOrder: number;
   answerExpiresAt: string | null;
   audio: Audio | null;
+  sourceTitle: string | null;
+  sourceLocation: string | null;
 };
 type Session = {
   id: string;
@@ -51,13 +54,12 @@ type Session = {
   currentQuestion: Question | null;
   task: { id: string; taskType: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
-type NextPreview = { questionText: string; sortOrder: number };
+type NextPreview = { questionText: string; sortOrder: number; sourceTitle: string | null; sourceLocation: string | null };
 const QUESTION_LIMIT = 10;
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const AUDIO_CHUNK_BYTES = 1024 * 1024;
 const DIRECT_AUDIO_UPLOAD_BYTES = 4 * 1024 * 1024;
 const AUDIO_UPLOAD_CONCURRENCY = 3;
-const TRANSCRIPTION_SAMPLE_RATE = 16_000;
 const questionTypeLabel = {
   FUNDAMENTAL: "技术基础",
   PROJECT: "项目实践",
@@ -134,6 +136,16 @@ function Icon({ name }: { name: "mic" | "stop" | "sound" | "close" | "play" }) {
   );
 }
 
+function RoomLoading({ label }: { label: string }) {
+  return (
+    <section className="ai-room-brief ai-room-result ai-room-waiting" role="status">
+      <div className="ai-room-waiting-mark" aria-hidden="true"><i /><i /><i /></div>
+      <h1>{label}</h1>
+      <div className="ai-room-waiting-track" aria-hidden="true"><span /></div>
+    </section>
+  );
+}
+
 export default function AiMockInterviewRoomPage() {
   const [selected, setSelected] = useState<Package>();
   const [session, setSession] = useState<Session>();
@@ -161,6 +173,7 @@ export default function AiMockInterviewRoomPage() {
   const expiredQuestion = useRef("");
   const answerTiming = useRef<{ questionId: string; startedAt: number } | null>(null);
   const preparePromise = useRef<Promise<Session> | null>(null);
+  const setup = useRef<{ selection: string; body: { interviewPackageId: string; sourceMode: string; categoryIds: string[] } }>({ selection: "", body: { interviewPackageId: "", sourceMode: "STANDARD", categoryIds: [] } });
   const initialized = useRef(false);
   const roomOpenedAt = useRef(0);
   const startClickedAt = useRef(0);
@@ -196,12 +209,17 @@ export default function AiMockInterviewRoomPage() {
     if (initialized.current) return;
     initialized.current = true;
     roomOpenedAt.current = performance.now();
-    const packageId = new URLSearchParams(window.location.search).get(
+    const params = new URLSearchParams(window.location.search);
+    const packageId = params.get(
       "packageId",
     );
     if (!packageId) return;
-    const startedKey = `ai-mock-session:${packageId}`;
-    const preparedKey = `ai-mock-prepared:${packageId}`;
+    const sourceMode = params.get("sourceMode") === "KNOWLEDGE" ? "KNOWLEDGE" : "STANDARD";
+    const categoryIds = sourceMode === "KNOWLEDGE" ? (params.get("categoryIds") ?? "").split(",").filter(Boolean) : [];
+    const selection = sourceMode === "STANDARD" ? packageId : `${packageId}:KNOWLEDGE:${[...categoryIds].sort().join(",")}`;
+    setup.current = { selection, body: { interviewPackageId: packageId, sourceMode, categoryIds } };
+    const startedKey = `ai-mock-session:${selection}`;
+    const preparedKey = `ai-mock-prepared:${selection}`;
     void api<Package[]>("/api/v1/interview-packages")
       .then((items) => {
         const item=items.find((value) => value.id === packageId);
@@ -225,7 +243,7 @@ export default function AiMockInterviewRoomPage() {
             window.sessionStorage.removeItem(preparedKey);
           }
           const prepared=await api<Session>("/api/v1/ai-mock-interviews/prepare", {
-            method: "POST", body: JSON.stringify({ interviewPackageId: packageId }),
+            method: "POST", body: JSON.stringify(setup.current.body),
           });
           window.sessionStorage.setItem(preparedKey,prepared.id);
           setSession(prepared);
@@ -269,7 +287,7 @@ export default function AiMockInterviewRoomPage() {
   useEffect(() => {
     if (current?.sortOrder !== 0 || firstReadyLogged.current) return;
     firstReadyLogged.current=true;
-    const selectedAt=Number(window.sessionStorage.getItem(`ai-mock-selected-at:${selected?.id}`));
+    const selectedAt=Number(window.sessionStorage.getItem(`ai-mock-selected-at:${setup.current.selection}`));
     if (selectedAt > 0 && Date.now()-selectedAt <= 15*60_000) console.info("[ai-mock-timing]",JSON.stringify({
       stage:"first_question_ready_from_package_selection",sessionId:session?.id,
       elapsed_ms:Date.now()-selectedAt,
@@ -390,14 +408,14 @@ export default function AiMockInterviewRoomPage() {
     try {
       microphone.current = await navigator.mediaDevices.getUserMedia({ audio: true });
       const prepared=await (preparePromise.current ?? api<Session>("/api/v1/ai-mock-interviews/prepare", {
-        method:"POST",body:JSON.stringify({ interviewPackageId:selected.id }),
+        method:"POST",body:JSON.stringify(setup.current.body),
       }));
       if (session?.id !== prepared.id) setSession(prepared);
       setEntered(true);
       setStarting(true);
       const begun=await api<Session>(`/api/v1/ai-mock-interviews/${prepared.id}/begin`,{method:"POST"});
-      window.sessionStorage.setItem(`ai-mock-session:${selected.id}`,begun.id);
-      window.sessionStorage.removeItem(`ai-mock-prepared:${selected.id}`);
+      window.sessionStorage.setItem(`ai-mock-session:${setup.current.selection}`,begun.id);
+      window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
       setSession(begun);
       setEntered(true);
     } catch (caught) {
@@ -405,7 +423,7 @@ export default function AiMockInterviewRoomPage() {
       stopMicrophone();
       if (caught instanceof ApiError && (caught.status === 404 || caught.message.includes("模拟已结束或超时"))) {
         preparePromise.current = null;
-        window.sessionStorage.removeItem(`ai-mock-prepared:${selected.id}`);
+        window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
       }
       setError(
         caught instanceof DOMException
@@ -479,10 +497,8 @@ export default function AiMockInterviewRoomPage() {
             try {
               if (recorded.type.startsWith("audio/ogg")) await upload(recorded);
               else {
-                // ponytail: retain WAV fallback until the server can transcode WebM for the OGG/WAV-only transcription provider.
-                const { audio, silent } = await toWav(recorded);
-                if (silent) await skipAnswer();
-                else await upload(audio);
+                // ponytail: Tencent's recording-file API does not accept WebM containers.
+                await upload(await toWav(recorded));
               }
             } catch (caught) {
               setError(errorText(caught, "录音处理失败，请重新录音。"));
@@ -520,56 +536,6 @@ export default function AiMockInterviewRoomPage() {
     recorder.current?.stop();
     setRecording(false);
     setNotice("录音已取消，未提交。 ");
-  }
-  async function toWav(blob: Blob) {
-    const context = new AudioContext();
-    try {
-      const source = await context.decodeAudioData(await blob.arrayBuffer());
-      const frameCount = Math.ceil(source.duration * TRANSCRIPTION_SAMPLE_RATE);
-      const offline = new OfflineAudioContext(
-        1,
-        frameCount,
-        TRANSCRIPTION_SAMPLE_RATE,
-      );
-      const node = offline.createBufferSource();
-      node.buffer = source;
-      node.connect(offline.destination);
-      node.start();
-      const samples = (await offline.startRendering()).getChannelData(0);
-      const bytes = new ArrayBuffer(44 + samples.length * 2);
-      const view = new DataView(bytes);
-      const text = (offset: number, value: string) =>
-        [...value].forEach((item, index) =>
-          view.setUint8(offset + index, item.charCodeAt(0)),
-        );
-      text(0, "RIFF");
-      view.setUint32(4, 36 + samples.length * 2, true);
-      text(8, "WAVEfmt ");
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, 1, true);
-      view.setUint32(24, TRANSCRIPTION_SAMPLE_RATE, true);
-      view.setUint32(28, TRANSCRIPTION_SAMPLE_RATE * 2, true);
-      view.setUint16(32, 2, true);
-      view.setUint16(34, 16, true);
-      text(36, "data");
-      view.setUint32(40, samples.length * 2, true);
-      let energy = 0;
-      for (let index = 0; index < samples.length; index += 1) {
-        energy += samples[index] * samples[index];
-        view.setInt16(
-          44 + index * 2,
-          Math.max(-1, Math.min(1, samples[index])) * 0x7fff,
-          true,
-        );
-      }
-      return {
-        audio: new Blob([bytes], { type: "audio/wav" }),
-        silent: Math.sqrt(energy / samples.length) < 0.01,
-      };
-    } finally {
-      await context.close();
-    }
   }
   function speak() {
     if (!current || !window.speechSynthesis) return;
@@ -765,24 +731,6 @@ export default function AiMockInterviewRoomPage() {
       setBusy(false);
     }
   }
-  async function skipAnswer() {
-    if (!session || !current) return;
-    answerTiming.current = { questionId: current.id, startedAt: performance.now() };
-    setBusy(true);
-    try {
-      setSession(
-        await api<Session>(
-          `/api/v1/ai-mock-interviews/${session.id}/questions/${current.id}/skip-answer`,
-          { method: "POST" },
-        ),
-      );
-      setNotice("未检测到有效语音，本题已按空回答处理。 ");
-    } catch (caught) {
-      setError(errorText(caught, "提交空回答失败，请重试。"));
-    } finally {
-      setBusy(false);
-    }
-  }
   async function finish() {
     if (!session) return;
     setBusy(true);
@@ -794,7 +742,7 @@ export default function AiMockInterviewRoomPage() {
       setSession(updated);
       setFinishDialog(false);
       setExitDialog(false);
-      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${selected.id}`);
+      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${setup.current.selection}`);
       window.speechSynthesis?.cancel();
       stopMicrophone();
     } catch (caught) {
@@ -812,7 +760,7 @@ export default function AiMockInterviewRoomPage() {
       });
       window.speechSynthesis?.cancel();
       stopMicrophone();
-      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${selected.id}`);
+      if (selected) window.sessionStorage.removeItem(`ai-mock-session:${setup.current.selection}`);
       window.location.assign("/ai-mock-interviews");
     } catch (caught) {
       setError(errorText(caught, "取消失败，请重试。"));
@@ -826,7 +774,7 @@ export default function AiMockInterviewRoomPage() {
       const prepared=await preparePromise.current;
       if(prepared && !entered) await api(`/api/v1/ai-mock-interviews/${prepared.id}`,{method:"DELETE"});
     } catch { /* welcome exit still returns to the selection page */ }
-    if(selected) window.sessionStorage.removeItem(`ai-mock-prepared:${selected.id}`);
+    if(selected) window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
     window.location.assign("/ai-mock-interviews");
   }
 
@@ -835,7 +783,7 @@ export default function AiMockInterviewRoomPage() {
       ? ""
       : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
   return (
-    <main className="ai-room">
+    <main className="ai-room ai-room-studio">
       <Toast
         error={error}
         notice={notice}
@@ -869,18 +817,22 @@ export default function AiMockInterviewRoomPage() {
           )
         )}
         <header className="ai-room-header">
-          <Link href="/ai-mock-interviews" className="ai-room-brand">
-            面试练习室
-          </Link>
+          <div className="ai-room-brand">
+            <img src="/images/ai-assistant-light.png" alt="" />
+            <span>智面 <small>面试练习室</small></span>
+          </div>
           {selected && (
             <div className="ai-room-meta">
               <span>{selected.company}</span>
               <span>{selected.role}</span>
-              <span>{selected.interviewRound}</span>
+              <span>面试轮次 · {selected.interviewRound}</span>
             </div>
           )}
         </header>
       </div>
+      <div className="ai-room-workspace">
+        <div className="ai-room-interviewer" aria-hidden="true" />
+        <div className="ai-room-console">
       {!selected ? (
         <section className="ai-room-brief">
           <h1>未选择面试包</h1>
@@ -890,13 +842,13 @@ export default function AiMockInterviewRoomPage() {
         </section>
       ) : !entered ? (
         <section className="ai-room-brief ai-room-start">
-          <p className="ai-room-kicker">
-            {selected.company} · {selected.role}
-          </p>
           <h1>准备好开始了吗？</h1>
-          <p>
-            本轮共 {QUESTION_LIMIT} 道问题，每题限时 5 分钟。{current?.sortOrder === 0 ? "第一题已准备好，点击即可开始。" : "正在准备第一题，点击后开始面试。"}
-          </p>
+          <dl className="ai-room-start-details">
+            <div><dt>面试公司</dt><dd>{selected.company}</dd></div>
+            <div><dt>应聘岗位</dt><dd>{selected.role}</dd></div>
+            <div><dt>面试轮次</dt><dd>{selected.interviewRound}</dd></div>
+          </dl>
+          <p>本轮共 {QUESTION_LIMIT} 道问题，每题最多 5 分钟。开始时请允许麦克风访问。</p>
           <button
             className="ai-room-primary"
             disabled={busy}
@@ -907,11 +859,15 @@ export default function AiMockInterviewRoomPage() {
           </button>
         </section>
       ) : !session ? (
-        <section className="ai-room-brief ai-room-result" role="status"><h1>题目加载中…</h1></section>
+        <RoomLoading label="题目加载中…" />
       ) : session.status === "FINISHED" ? (
         <section className="ai-room-brief ai-room-result">
-          <p className="ai-room-kicker">INTERVIEW COMPLETE</p>
           <h1>本次模拟已保存</h1>
+          <dl className="ai-room-start-details">
+            <div><dt>面试公司</dt><dd>{session.company}</dd></div>
+            <div><dt>应聘岗位</dt><dd>{session.role}</dd></div>
+            <div><dt>面试轮次</dt><dd>{session.interviewRound}</dd></div>
+          </dl>
           {session.finalInterviewId && (
             <Link
               className="ai-room-primary"
@@ -932,6 +888,7 @@ export default function AiMockInterviewRoomPage() {
           <div className="ai-room-question">
             <div className="ai-room-question-top"><span>下一题预览 · {nextPreview.sortOrder + 1}/{session.totalQuestions}</span></div>
             <h1>{nextPreview.questionText}</h1>
+            {nextPreview.sourceTitle && <p className="ai-room-source">来源：{nextPreview.sourceTitle} · {nextPreview.sourceLocation}</p>}
             <p className="ai-room-processing">上一题录音正在提交，保存成功后即可开始回答。</p>
             {uploadPending && <p className="ai-room-processing">正在上传录音 {Math.round(uploadProgress * 100)}%…</p>}
           </div>
@@ -944,10 +901,9 @@ export default function AiMockInterviewRoomPage() {
           <button className="ai-room-primary" onClick={() => setFinishDialog(true)} disabled={busy}>结束并保存已答内容</button>
         </section>
       ) : blocksQuestion && session.task ? (
-        <section className="ai-room-brief ai-room-result" role="status">
-          <h1>题目加载中…</h1>
-          <img className="ai-room-loading" src="/images/loading-spinner.png" alt="" />
-        </section>
+        <RoomLoading label={["AI_AUDIO", "AI_FINALIZE_AUDIO"].includes(session.task.taskType) &&
+            (!current || current.sortOrder + 1 >= session.totalQuestions)
+            ? "面试结束中…" : "题目加载中…"} />
       ) : session.status === "TIME_EXPIRED" ? (
         <section className="ai-room-brief ai-room-result">
           <h1>本场模拟已超时</h1>
@@ -956,6 +912,7 @@ export default function AiMockInterviewRoomPage() {
       ) : current ? (
         <section className="ai-room-stage">
           <div className="ai-room-question">
+            <progress className="ai-room-progress" value={current.sortOrder + 1} max={session.totalQuestions} aria-label="当前题目进度" />
             <div className="ai-room-question-top">
               <span>
                 问题 {current.sortOrder + 1}/{session.totalQuestions}
@@ -963,7 +920,7 @@ export default function AiMockInterviewRoomPage() {
               <span className="ai-room-question-type">
                 {questionTypeLabel[current.questionType]}
               </span>
-              {time && <strong>{time}</strong>}
+              {time && <strong className="ai-room-timer" aria-label={`剩余作答时间 ${time}`}>{time}</strong>}
             </div>
             {!recording && !busy && (
               <button
@@ -977,6 +934,7 @@ export default function AiMockInterviewRoomPage() {
               </button>
             )}
             <h1>{current.questionText}</h1>
+            {current.sourceTitle && <p className="ai-room-source">来源：{current.sourceTitle} · {current.sourceLocation}</p>}
             {session.task?.taskType === "AI_AUDIO" && session.task.status === "FAILED" && (
               <p className="ai-room-error">上一题转写失败，录音已保留。<button type="button" onClick={() => void retryTask()} disabled={busy}>重试转写</button></p>
             )}
@@ -1027,7 +985,7 @@ export default function AiMockInterviewRoomPage() {
               </>
             ) : (
               <>
-                <p className="ai-room-listening">面试官正在提问</p>
+                <p className="ai-room-listening">听完问题后，点击麦克风开始回答</p>
                 {current.audio?.status === "FAILED" && (
                   <p className="ai-room-error">转写失败，请重新录音。</p>
                 )}
@@ -1061,6 +1019,11 @@ export default function AiMockInterviewRoomPage() {
             {QUESTION_LIMIT} / {QUESTION_LIMIT} COMPLETE
           </p>
           <h1>已完成本轮问题</h1>
+          <dl className="ai-room-start-details">
+            <div><dt>面试公司</dt><dd>{session.company}</dd></div>
+            <div><dt>应聘岗位</dt><dd>{session.role}</dd></div>
+            <div><dt>面试轮次</dt><dd>{session.interviewRound}</dd></div>
+          </dl>
           {session.task?.taskType === "AI_AUDIO" && session.task.status !== "FAILED" && (
             <p className="ai-room-processing">录音正在后台转写，完成后即可保存面试。</p>
           )}
@@ -1076,6 +1039,8 @@ export default function AiMockInterviewRoomPage() {
           </button>
         </section>
       )}
+        </div>
+      </div>
       <ConfirmDialog
         open={welcomeExitDialog}
         title="退出 AI 语音模拟？"
@@ -1088,7 +1053,7 @@ export default function AiMockInterviewRoomPage() {
       <ConfirmDialog
         open={finishDialog}
         title="结束 AI 模拟？"
-        description="按 Esc 或点击结束后，会保存本次模拟记录。"
+        description="结束后会保存已确认的回答；仍在处理的录音不会计入复盘。"
         confirmLabel="结束并保存"
         cancelLabel="继续练习"
         busy={busy}
@@ -1098,7 +1063,7 @@ export default function AiMockInterviewRoomPage() {
       <ConfirmDialog
         open={exitDialog}
         title="结束本次 AI 语音模拟？"
-        description="你可以继续练习、取消且不保存，或结束并保存当前记录。"
+        description="结束会保存已确认的回答；仍在处理的录音不会计入复盘。取消则不保存本次记录。"
         confirmLabel="结束并保存"
         cancelLabel="继续练习"
         alternativeLabel="取消不保存"

@@ -166,9 +166,9 @@ class AiMockQuestionAgentTest {
         when(model.simulate(anyString(),anyMap())).thenReturn(json.readTree("{\"plan\":[]}"));
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("user-a"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andExpect(jsonPath("$.task.status").value("PENDING")).andReturn();
-        worker.run();
         String taskId = json.readTree(created.getResponse().getContentAsString()).get("task").get("id").asText();
-        retryNow(taskId); retryNow(taskId);
+        awaitTask(taskId,1,"PENDING");
+        retryNow(taskId,2,"PENDING"); retryNow(taskId,3,"FAILED");
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-b"))))
@@ -189,12 +189,12 @@ class AiMockQuestionAgentTest {
         when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(invalid, json.readTree(validPlan()));
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andReturn();
-        worker.run();
         String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
         String taskId = json.readTree(mockMvc.perform(get("/api/v1/ai-mock-interviews/{id}", sessionId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).path("task").path("id").asText();
+        awaitTask(taskId,1,"PENDING");
         assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND question_plan IS NOT NULL").param("id", sessionId).query(Integer.class).single());
-        retryNow(taskId);
+        retryNow(taskId,2,"COMPLETED");
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("invalid-question-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("COMPLETED"));
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
@@ -323,23 +323,20 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
-    void largeDirectAudioTranscribesWhileStorageUploads() throws Exception {
+    void largeDirectAudioTranscribesFromStoredUrl() throws Exception {
         String user="parallel-transcription-user", packageId=packageFor(user), sessionId=UUID.randomUUID().toString(), questionId=UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at) VALUES(:id,:user,:package,'测试公司','前端','一面','RUNNING',CURRENT_TIMESTAMP + INTERVAL '50' MINUTE)")
             .param("id",sessionId).param("user",user).param("package",packageId).update();
         jdbc.sql("INSERT INTO ai_mock_interview_questions(id,ai_mock_interview_id,question_text,state,sort_order) VALUES(:id,:session,'请说明事件循环。','OPEN',0)")
             .param("id",questionId).param("session",sessionId).update();
         byte[] ogg=new byte[2*1024*1024]; System.arraycopy("OggS".getBytes(),0,ogg,0,4);
-        var transcribed=new java.util.concurrent.CountDownLatch(1);
-        when(transcription.transcribe(eq(user),org.mockito.ArgumentMatchers.eq(ogg),eq("audio/ogg"))).thenAnswer(call -> { transcribed.countDown(); return "预先转写的回答"; });
-        org.mockito.Mockito.doAnswer(call -> {
-            assertTrue(transcribed.await(5,java.util.concurrent.TimeUnit.SECONDS));
-            assertEquals("OPEN",jdbc.sql("SELECT state FROM ai_mock_interview_questions WHERE id=:id").param("id",questionId).query(String.class).single());
-            return null;
-        }).when(storage).upload(anyString(),eq("audio/ogg"),org.mockito.ArgumentMatchers.eq(ogg));
+        when(transcription.transcribe(eq(user),org.mockito.ArgumentMatchers.eq(ogg),eq("audio/ogg"),org.mockito.ArgumentMatchers.nullable(String.class))).thenReturn("转写后的回答");
+        org.mockito.Mockito.doReturn(ogg).when(storage).download(anyString());
         voice.audio(user,sessionId,questionId,new MockMultipartFile("file","answer.ogg","audio/ogg",ogg));
-        assertEquals("预先转写的回答",jdbc.sql("SELECT transcript FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single());
-        verify(storage,never()).download(anyString());
+        String assetId=jdbc.sql("SELECT id FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single();
+        voice.processAudio(user,sessionId,assetId);
+        assertEquals("转写后的回答",jdbc.sql("SELECT transcript FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single());
+        verify(storage).download(anyString());
     }
 
     @Test
@@ -386,7 +383,6 @@ class AiMockQuestionAgentTest {
         assertEquals(nextId,voice.startAnswer(user,sessionId,nextId).questionId());
         assertEquals(nextId,voice.audio(user,sessionId,firstId,file).currentQuestion().id());
         assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",firstId).query(String.class).single());
-        assertThrows(IllegalStateException.class,()->voice.finish(user,sessionId));
         String assetId=jdbc.sql("SELECT id FROM ai_mock_audio_assets WHERE question_id=:id").param("id",firstId).query(String.class).single();
         String taskId=jdbc.sql("SELECT id FROM ai_mock_tasks WHERE resource_id=:session AND task_type='AI_AUDIO'").param("session",sessionId).query(String.class).single();
         org.mockito.Mockito.when(storage.download(anyString())).thenThrow(new IllegalStateException("Storage unavailable"));
@@ -398,11 +394,21 @@ class AiMockQuestionAgentTest {
         assertEquals(nextId,voice.get(user,sessionId).currentQuestion().id());
         assertEquals("FAILED",jdbc.sql("SELECT status FROM ai_mock_audio_assets WHERE id=:id").param("id",assetId).query(String.class).single());
         org.mockito.Mockito.doReturn(wav).when(storage).download(anyString());
-        when(transcription.transcribe(eq(user),org.mockito.ArgumentMatchers.eq(wav),eq("audio/wav"))).thenReturn("第一题回答");
+        when(transcription.transcribe(eq(user),org.mockito.ArgumentMatchers.eq(wav),eq("audio/wav"),org.mockito.ArgumentMatchers.nullable(String.class)))
+            .thenThrow(new IllegalStateException("Tencent ASR unavailable")).thenReturn("第一题回答");
         tasks.retry(user,taskId);
         token=UUID.randomUUID().toString();
         jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=1,worker_token=:token,locked_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",taskId).param("token",token).update();
         var retry=new com.interviewagent.ai.AiMockTaskService.ClaimedTask(taskId,user,"AI_AUDIO",sessionId,assetId,token,0);
+        var failedRetry=retry;
+        var transcriptionFailure=assertThrows(IllegalStateException.class,()->tasks.execute(failedRetry,()->voice.processAudio(user,sessionId,assetId)));
+        tasks.fail(failedRetry,transcriptionFailure);
+        assertEquals("FAILED",jdbc.sql("SELECT status FROM ai_mock_audio_assets WHERE id=:id").param("id",assetId).query(String.class).single());
+        assertEquals("",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",firstId).query(String.class).single());
+        tasks.retry(user,taskId);
+        token=UUID.randomUUID().toString();
+        jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=1,worker_token=:token,locked_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",taskId).param("token",token).update();
+        retry=new com.interviewagent.ai.AiMockTaskService.ClaimedTask(taskId,user,"AI_AUDIO",sessionId,assetId,token,0);
         tasks.execute(retry,()->voice.processAudio(user,sessionId,assetId));
         tasks.complete(retry);
         assertEquals("第一题回答",jdbc.sql("SELECT confirmed_answer_text FROM ai_mock_interview_questions WHERE id=:id").param("id",firstId).query(String.class).single());
@@ -482,10 +488,6 @@ class AiMockQuestionAgentTest {
                 return chunks[partNo];
             } finally { active.decrementAndGet(); }
         }).when(storage).download(anyString());
-        var transcribed=new java.util.concurrent.CountDownLatch(1);
-        when(transcription.transcribe(eq(user),org.mockito.ArgumentMatchers.eq(audio),eq("audio/ogg"))).thenAnswer(call -> { transcribed.countDown(); return "分片录音已预先转写"; });
-        org.mockito.Mockito.doAnswer(call -> { assertTrue(transcribed.await(5,java.util.concurrent.TimeUnit.SECONDS)); return null; })
-            .when(storage).upload(org.mockito.ArgumentMatchers.contains("ai-mock/"),eq("audio/ogg"),org.mockito.ArgumentMatchers.eq(audio));
         tasks.retry(user,task.id());
         String retryToken=UUID.randomUUID().toString();
         jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=attempts+1,worker_token=:token,locked_at=CURRENT_TIMESTAMP WHERE id=:id")
@@ -496,7 +498,7 @@ class AiMockQuestionAgentTest {
         assertEquals(3,peak.get());
         assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(Integer.class).single());
         String saved=jdbc.sql("SELECT transcript FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single();
-        assertTrue(saved.isBlank() || saved.equals("分片录音已预先转写")); // ASR can finish just after Storage; AI_AUDIO handles the blank fallback.
+        assertTrue(saved.isBlank());
         assertEquals(1,voice.get(user,sessionId).currentQuestion().sortOrder());
         assertEquals("ANSWERED",jdbc.sql("SELECT state FROM ai_mock_interview_questions WHERE id=:id").param("id",questionId).query(String.class).single());
         assertEquals(1,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='AI_AUDIO'").param("id",sessionId).query(Integer.class).single());
@@ -565,6 +567,68 @@ class AiMockQuestionAgentTest {
         assertEquals(0,jdbc.sql("SELECT COUNT(*) FROM ai_mock_tasks WHERE resource_id=:id AND task_type='AI_NEXT'").param("id",sessionId).query(Integer.class).single());
     }
 
+    @Test
+    void knowledgeVoiceKeepsQuestionSourceThroughPreviewAndFeedback() throws Exception {
+        String user="knowledge-voice-user", packageId=packageFor(user);
+        String category=UUID.randomUUID().toString(), document=UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO knowledge_categories(id,user_id,name) VALUES(:id,:user,'前端基础')").param("id",category).param("user",user).update();
+        jdbc.sql("INSERT INTO knowledge_documents(id,user_id,category_id,original_filename,format,size_bytes,object_path,segment_count) VALUES(:id,:user,:category,'前端题库.md','md',100,'test/front.md',2)")
+            .param("id",document).param("user",user).param("category",category).update();
+        jdbc.sql("INSERT INTO knowledge_segments(id,document_id,position,kind,location,content) VALUES(:id,:document,0,'paragraph','事件循环','前端开发 浏览器事件循环和微任务调度')")
+            .param("id",UUID.randomUUID().toString()).param("document",document).update();
+        jdbc.sql("INSERT INTO knowledge_segments(id,document_id,position,kind,location,content) VALUES(:id,:document,1,'paragraph','渲染流程','浏览器渲染引擎的关键路径')")
+            .param("id",UUID.randomUUID().toString()).param("document",document).update();
+        String unselectedCategory=UUID.randomUUID().toString(), unselectedDocument=UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO knowledge_categories(id,user_id,name) VALUES(:id,:user,'未选择的类别')").param("id",unselectedCategory).param("user",user).update();
+        jdbc.sql("INSERT INTO knowledge_documents(id,user_id,category_id,original_filename,format,size_bytes,object_path,segment_count) VALUES(:id,:user,:category,'未选择.md','md',10,'test/unselected.md',1)")
+            .param("id",unselectedDocument).param("user",user).param("category",unselectedCategory).update();
+        jdbc.sql("INSERT INTO knowledge_segments(id,document_id,position,kind,location,content) VALUES(:id,:document,0,'paragraph','其他','前端开发 浏览器事件循环')")
+            .param("id",UUID.randomUUID().toString()).param("document",unselectedDocument).update();
+        String foreignCategory=UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO knowledge_categories(id,user_id,name) VALUES(:id,'another-user','私有资料')").param("id",foreignCategory).update();
+        mockMvc.perform(post("/api/v1/ai-mock-interviews/prepare").with(jwt().jwt(t->t.subject(user))).contentType("application/json")
+            .content(json.writeValueAsString(new AiMockInterviewApi.StartRequest(packageId,"KNOWLEDGE",List.of(foreignCategory)))))
+            .andExpect(status().isNotFound());
+
+        when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(json.readTree(validPlan()));
+        String session=json.readTree(mockMvc.perform(post("/api/v1/ai-mock-interviews/prepare").with(jwt().jwt(t->t.subject(user))).contentType("application/json")
+            .content(json.writeValueAsString(new AiMockInterviewApi.StartRequest(packageId,"KNOWLEDGE",List.of(category)))))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.sourceMode").value("KNOWLEDGE"))
+            .andReturn().getResponse().getContentAsString()).path("id").asText();
+        assertEquals(document,jdbc.sql("SELECT knowledge_document_ids FROM ai_mock_interviews WHERE id=:id").param("id",session).query(String.class).single());
+        runVoiceTask(user,session,"AI_PLAN",null);
+        verify(model).simulate(eq("VOICE_PLAN"),org.mockito.ArgumentMatchers.argThat(input->input.get("knowledge").toString().contains("前端题库.md") && !input.get("knowledge").toString().contains("未选择.md")));
+        voice.begin(user,session);
+        String firstId=voice.get(user,session).currentQuestion().id();
+        assertEquals("前端题库.md",voice.get(user,session).currentQuestion().sourceTitle());
+        String firstSource=jdbc.sql("SELECT knowledge_source FROM ai_mock_interview_questions WHERE id=:id").param("id",firstId).query(String.class).single();
+        assertTrue(firstSource.contains("事件循环"));
+
+        when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenReturn(json.readTree("{\"questionText\":\"浏览器渲染的关键路径是什么？\",\"type\":\"FUNDAMENTAL\",\"competency\":\"渲染流程\",\"projectName\":\"\",\"technology\":\"渲染引擎\"}"));
+        runVoiceTask(user,session,"AI_PREPARE_NEXT",firstId);
+        verify(model).simulate(eq("VOICE_QUESTION"),org.mockito.ArgumentMatchers.argThat(input->input.get("knowledge").toString().contains("渲染引擎")));
+        assertTrue(jdbc.sql("SELECT knowledge_source FROM ai_mock_prepared_questions WHERE ai_mock_interview_id=:id AND sort_order=1").param("id",session).query(String.class).single().contains("渲染流程"));
+        voice.startAnswer(user,session,firstId);
+        assertEquals("渲染流程",voice.nextPreview(user,session,firstId).orElseThrow().sourceLocation());
+        voice.confirm(user,session,firstId,new AiMockInterviewApi.ConfirmRequest(firstId,"微任务在当前任务之后执行。"));
+        assertEquals("渲染流程",voice.get(user,session).currentQuestion().sourceLocation());
+        when(model.simulate(eq("VOICE_FEEDBACK"),anyMap())).thenReturn(json.readTree("{\"feedback\":\"回答需要说明微任务队列的执行时机。\"}"));
+        runVoiceTask(user,session,"AI_FEEDBACK",firstId);
+        verify(model).simulate(eq("VOICE_FEEDBACK"),org.mockito.ArgumentMatchers.argThat(input->input.get("knowledge").toString().contains("事件循环") && !input.get("knowledge").toString().contains("渲染引擎")));
+        assertEquals("回答需要说明微任务队列的执行时机。",jdbc.sql("SELECT ai_feedback FROM ai_mock_interview_questions WHERE id=:id").param("id",firstId).query(String.class).single());
+    }
+
+    private void runVoiceTask(String user,String session,String type,String relatedId) {
+        String id=jdbc.sql("SELECT id FROM ai_mock_tasks WHERE resource_id=:session AND task_type=:type ORDER BY created_at DESC LIMIT 1")
+            .param("session",session).param("type",type).query(String.class).single();
+        String token=UUID.randomUUID().toString();
+        jdbc.sql("UPDATE ai_mock_tasks SET status='PROCESSING',attempts=1,worker_token=:token,locked_at=CURRENT_TIMESTAMP WHERE id=:id")
+            .param("token",token).param("id",id).update();
+        var task=new com.interviewagent.ai.AiMockTaskService.ClaimedTask(id,user,type,session,relatedId,token,0);
+        voice.processTask(task);
+        tasks.complete(task);
+    }
+
     private String packageFor(String user) {
         String id = UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO interview_packages(id,user_id,company,role,interview_round) VALUES(:id,:user,'测试公司','前端开发','技术一面')").param("id", id).param("user", user).update();
@@ -576,9 +640,21 @@ class AiMockQuestionAgentTest {
         return id;
     }
 
-    private void retryNow(String taskId) {
+    private void retryNow(String taskId,int attempts,String status) throws InterruptedException {
         jdbc.sql("UPDATE ai_mock_tasks SET available_at=CURRENT_TIMESTAMP WHERE id=:id AND status='PENDING'").param("id",taskId).update();
-        worker.run();
+        awaitTask(taskId,attempts,status);
+    }
+
+    private void awaitTask(String taskId,int attempts,String status) throws InterruptedException {
+        long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while(System.nanoTime()<deadline) {
+            int actual=jdbc.sql("SELECT attempts FROM ai_mock_tasks WHERE id=:id").param("id",taskId).query(Integer.class).single();
+            String current=jdbc.sql("SELECT status FROM ai_mock_tasks WHERE id=:id").param("id",taskId).query(String.class).single();
+            if(actual>=attempts && current.equals(status)) return;
+            if(current.equals("PENDING") && actual<attempts) worker.run();
+            Thread.sleep(20);
+        }
+        fail("任务未在预期时间进入 " + status + "，任务 ID：" + taskId);
     }
 
     private static String validPlan() {
