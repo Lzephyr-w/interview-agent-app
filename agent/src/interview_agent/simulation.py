@@ -9,7 +9,7 @@ import urllib.request
 from uuid import UUID
 
 VERSION = "simulation.v1"
-OPERATIONS = {"VOICE_PLAN", "VOICE_PLAN_ONLY", "VOICE_QUESTION", "VOICE_FEEDBACK", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP", "TEXT_FEEDBACK"}
+OPERATIONS = {"VOICE_PLAN", "VOICE_PLAN_ONLY", "VOICE_QUESTION", "VOICE_KNOWLEDGE_QUESTION", "VOICE_FEEDBACK", "TEXT_MAIN_QUESTION", "TEXT_FOLLOW_UP", "TEXT_FEEDBACK"}
 logger = logging.getLogger(__name__)
 MESSAGES = {
     "INVALID_REQUEST": "模拟请求格式无效，请重新开始。",
@@ -119,6 +119,19 @@ def validate_request(request):
             raise ValueError("deadline")
         operation, data = request["operation"], request["input"]
         expected = {"materials", "history"}
+        if operation == "VOICE_KNOWLEDGE_QUESTION":
+            expected.update({"knowledge", "target", "recentQuestions"})
+            target = data["target"]
+            fields(target, {"order", "type", "projectName", "angle"})
+            order = target["order"]
+            if type(order) is not int or not 1 <= order <= 10:
+                raise ValueError("order")
+            allowed = {"FUNDAMENTAL"} if order <= 5 else {"PROJECT"} if order <= 9 else {"SCENARIO", "BEHAVIORAL"}
+            if target["type"] not in allowed:
+                raise ValueError("target type")
+            string(target["projectName"], 120, target["type"] != "PROJECT")
+            plan_text(target["angle"])
+            history_items(data["recentQuestions"], 30)
         if operation == "VOICE_QUESTION":
             expected.add("slot")
         if operation in {"VOICE_FEEDBACK", "TEXT_FEEDBACK", "TEXT_FOLLOW_UP"}:
@@ -151,13 +164,7 @@ def validate_request(request):
                 string(card[name], 120 if name == "projectName" else 4000)
         if len(json.dumps(materials["cards"], ensure_ascii=False)) > 16000:
             raise ValueError("cards size")
-        if not isinstance(data["history"], list) or len(data["history"]) > 10:
-            raise ValueError("history")
-        for previous in data["history"]:
-            fields(previous, {"questionText", "type", "competency", "projectName", "technology"})
-            string(previous["questionText"], 800)
-            for name in ("type", "competency", "projectName", "technology"):
-                string(previous[name], 120, True)
+        history_items(data["history"], 10)
         if "slot" in data:
             slot(data["slot"])
         if "answer" in data:
@@ -165,6 +172,16 @@ def validate_request(request):
             string(data["answer"], 40000 if operation == "VOICE_FEEDBACK" else 8000, True)
     except (ValueError, TypeError, KeyError, AttributeError):
         raise SimulationError("INVALID_REQUEST") from None
+
+
+def history_items(items, maximum):
+    if not isinstance(items, list) or len(items) > maximum:
+        raise ValueError("history")
+    for previous in items:
+        fields(previous, {"questionText", "type", "competency", "projectName", "technology"})
+        string(previous["questionText"], 800)
+        for name in ("type", "competency", "projectName", "technology"):
+            string(previous[name], 120, True)
 
 
 def validate_result(operation, result, materials):
@@ -208,7 +225,7 @@ def validate_result(operation, result, materials):
         question_metadata(first)
         if not grounded_project(first["projectName"], materials):
             raise ValueError("firstQuestion projectName")
-    elif operation == "VOICE_QUESTION":
+    elif operation in {"VOICE_QUESTION", "VOICE_KNOWLEDGE_QUESTION"}:
         fields(result, {"questionText", "type", "competency", "projectName", "technology"})
         result = single_voice_question(result)
         question_text(result["questionText"])
@@ -270,6 +287,7 @@ PLAN_RULES = '固定10项：第1-5题FUNDAMENTAL（岗位核心技术或基础�
 
 
 PROMPTS = {
+    "VOICE_KNOWLEDGE_QUESTION": '只生成当前一道中文语音面试题，不生成整场计划。严格使用target.type、target.projectName以及target.angle的考察角度，结合knowledge选择一个具体且未考察的子能力，同时返回简短competency和technology。必须以knowledge为依据；PROJECT把知识技术角度用于所选真实项目，不得编造实现、指标或个人经历；其他题projectName为空。history是本场禁止重复的问题，recentQuestions是近期其他场次的问题，应优先更换具体考察目标和子能力，不能仅换措辞；来源有限时仍不得重复本场能力点。不连续使用同一技术点或问句开头。问题尽量一句120字以内，背景在前，仅末尾一个问号，不附追问、答案、作答清单。只返回 {"questionText":"一道问题","type":"FUNDAMENTAL","competency":"具体子能力","projectName":"","technology":"技术点"}。',
     "VOICE_PLAN": '一次返回计划和第一题。' + PLAN_RULES + 'firstQuestion必须严格匹配第1个slot的type、competency、projectName、technology，只考察一个主要目标。只返回 {"plan":[{"order":1,"type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":"","angle":"角度"},...共10项],"firstQuestion":{"questionText":"一道问题","type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":""}}。',
     "VOICE_QUESTION": '尽量用一句不超过120字、仅在末尾使用一个问号的问题；背景条件放在问句之前，不附带追问、回答示例或答案提示。按slot.angle指定的切入点提问，不能退回泛泛的概念介绍。严格执行slot，type、competency、projectName、technology必须与slot完全一致。只出一道中文问题，只考察一个主要目标，必须具体、可独立回答；不得串联多个场景、多个问号或多项作答任务。资料优先级：JD岗位职责与技能 > 面试轮次 > 简历真实经历 > 证据卡。PROJECT只能逐字引用input.materials.experienceAnchors中的真实项目或实习经历锚点，证据卡不是前置条件，不得创造或拼接项目名；资料不足时不要反复要求介绍项目，非PROJECT题应提出岗位相关、可独立回答的问题。不得与全部历史问题语义重复，不得换词重复能力点，不得连续使用同一项目、技术或问句开头。返回 {"questionText":"一道问题","type":"FUNDAMENTAL","competency":"能力点","projectName":"","technology":""}。',
     "TEXT_MAIN_QUESTION": '只生成一道新的主问题，只考察一个主要能力点，具体且可独立回答。不得重复历史题，也不得换词复问同一能力点。资料不足时生成岗位相关通用问题，不要把待补充本身作为问题答案。返回 {"questionText":"一道问题"}。',
@@ -342,7 +360,7 @@ def generate(request, model_factory):
         "依据JD岗位要求、轮次、简历、证据卡；禁止编造项目、指标、技术细节、隐私信息、能力评级、通过概率或招聘结论。"
         "生成的问题最多200字符且最多一个问号，反馈最多600字符且最多两句，元数据最多120字符。"
         + prompt
-        + ("本次为知识库模拟。必须紧扣input.knowledge的内容出题、追问或反馈，不能回退通用题；引用中的参考答案不是当前用户的真实经历，不得当作个人事实。语音计划保留固定5道基础、4道真实项目、1道场景/行为；首题应依据标注的首题片段，其他题从知识主题安排不同能力点；项目名只能取真实经历锚点。" if "knowledge" in request["input"] else "")},
+        + ("本次为知识库模拟，必须紧扣knowledge，不得回退通用题或把参考答案当个人经历。当前题型和项目由target确定，不生成其他题。" if operation == "VOICE_KNOWLEDGE_QUESTION" else "本次为知识库模拟。必须紧扣input.knowledge的内容出题、追问或反馈，不能回退通用题；引用中的参考答案不是当前用户的真实经历，不得当作个人事实。语音计划保留固定5道基础、4道真实项目、1道场景/行为；首题应依据标注的首题片段，其他题从知识主题安排不同能力点；项目名只能取真实经历锚点。" if "knowledge" in request["input"] else "")},
         {"role": "user", "content": json.dumps(request["input"], ensure_ascii=False)}]
     remaining = (request["deadlineAtEpochMs"] - time.time()*1000)/1000
     if remaining <= 0:

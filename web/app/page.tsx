@@ -219,6 +219,9 @@ export default function HomePage() {
     pendingReviewCount: 0,
     pendingTrainingTaskCount: 0,
   };
+  const trainingPlanItems = dashboard?.sprintItems.filter(
+    (item) => item.kind === "TRAINING_TASK" || item.kind === "MANUAL",
+  ) ?? [];
   return (
     <AppShell>
       <main className="app-page dashboard-page">
@@ -272,7 +275,7 @@ export default function HomePage() {
                   </div>
                   <span className="home-text-cta">进入文本训练</span>
                 </Link>
-                <Link className="home-materials" href="/library">
+                <Link className="home-materials" href="/library?tab=interview-packages">
                   <span className="home-material-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9H3Z" /><path d="M3 10h18" /></svg></span>
                   <div><strong>建立你的面试知识库</strong><p>整理简历与资料，为目标岗位创建面试包</p></div>
                   <span aria-hidden="true">↗</span>
@@ -283,7 +286,7 @@ export default function HomePage() {
             <section className="dashboard-section">
               <div className="dashboard-stats">
                 {[
-                  ["面试包", overview.interviewPackageCount, "/library", "M4 7h6l2 3h8v10H4ZM4 7V4h6l2 3"],
+                  ["面试包", overview.interviewPackageCount, "/library?tab=interview-packages", "M4 7h6l2 3h8v10H4ZM4 7V4h6l2 3"],
                   ["简历文件", overview.resumeFileCount, "/library", "M6 3h8l4 4v14H6ZM14 3v5h4M9 12h6M9 16h4"],
                   [
                     "待复盘真实面试",
@@ -294,7 +297,7 @@ export default function HomePage() {
                   [
                     "待完成训练任务",
                     overview.pendingTrainingTaskCount,
-                    "/weaknesses",
+                    "/weaknesses?tab=tasks",
                     "m4 7 2 2 4-4M13 7h7m-16 9 2 2 4-4m3 2h7",
                   ],
                 ].map(([label, value, href, icon]) => (
@@ -379,19 +382,19 @@ export default function HomePage() {
                   <p className="profile-label">NEXT / 下一阶段</p>
                   <h2>训练计划</h2>
                   <p className="muted">
-                    跟进待办与训练建议，也可以添加自己的准备计划。
+                    集中查看训练任务和个人准备计划。
                   </p>
                 </div>
               </div>
               {detailsLoading ? (
                 <p className="muted">正在加载冲刺清单…</p>
-              ) : dashboard.sprintItems.length === 0 ? (
+              ) : trainingPlanItems.length === 0 ? (
                 <p className="muted">
-                  暂无待办。上传简历、创建面试包、录入记录或开始 AI 文本模拟后，这里会出现下一步。
+                  暂无训练任务。完成面试复盘，或添加一项个人准备计划后，任务会显示在这里。
                 </p>
               ) : (
                 <ul className="sprint-list">
-                  {dashboard.sprintItems.map((item) => (
+                  {trainingPlanItems.map((item) => (
                     <li
                       className={
                         item.status === "DONE"
@@ -415,13 +418,8 @@ export default function HomePage() {
                         <strong>{item.title}</strong>
                         {item.description && <p>{item.description}</p>}
                       </div>
-                      <div className="item-actions">
-                        {item.targetPath && (
-                          <Link className="text-link" href={item.targetPath}>
-                            开始
-                          </Link>
-                        )}
-                        {item.editable && (
+                      {item.editable && (
+                        <div className="item-actions">
                           <button
                             className="secondary-button"
                             type="button"
@@ -438,8 +436,6 @@ export default function HomePage() {
                           >
                             编辑
                           </button>
-                        )}
-                        {item.editable && (
                           <button
                             className="danger-button"
                             type="button"
@@ -447,8 +443,8 @@ export default function HomePage() {
                           >
                             删除
                           </button>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -500,11 +496,16 @@ export default function HomePage() {
                       }
                     >
                       <option value="">不跳转</option>
-                      <option value="/library">资料库</option>
+                      <option value="/library?tab=interview-packages">面试包</option>
+                      <option value="/library?tab=resume-files">简历文件</option>
+                      <option value="/library?tab=job-descriptions">岗位 JD</option>
+                      <option value="/library?tab=evidence-cards">项目证据卡</option>
+                      <option value="/library?tab=knowledge">知识库</option>
                       <option value="/interviews/new">新建面试记录</option>
                       <option value="/interviews">面试记录</option>
                       <option value="/mock-interviews">AI 文本模拟</option>
-                      <option value="/weaknesses">薄弱点</option>
+                      <option value="/weaknesses">AI 薄弱点分析</option>
+                      <option value="/weaknesses?tab=tasks">训练任务</option>
                       <option value="/ai-conversations">AI 对话</option>
                     </select>
                   </label>

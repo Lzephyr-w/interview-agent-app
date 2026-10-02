@@ -580,7 +580,7 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
-    void knowledgeVoiceKeepsQuestionSourceThroughPreviewAndFeedback() throws Exception {
+    void legacyKnowledgeVoiceKeepsQuestionSourceThroughPreviewAndFeedback() throws Exception {
         String user="knowledge-voice-user", packageId=packageFor(user);
         String category=UUID.randomUUID().toString(), document=UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO knowledge_categories(id,user_id,name) VALUES(:id,:user,'前端基础')").param("id",category).param("user",user).update();
@@ -608,6 +608,8 @@ class AiMockQuestionAgentTest {
             .andExpect(status().isCreated()).andExpect(jsonPath("$.sourceMode").value("KNOWLEDGE"))
             .andReturn().getResponse().getContentAsString()).path("id").asText();
         assertEquals(document,jdbc.sql("SELECT knowledge_document_ids FROM ai_mock_interviews WHERE id=:id").param("id",session).query(String.class).single());
+        jdbc.sql("UPDATE ai_mock_interviews SET generation_version='SIMULATION_AGENT_V1' WHERE id=:id").param("id",session).update();
+        jdbc.sql("UPDATE ai_mock_tasks SET task_type='AI_PLAN' WHERE resource_id=:id AND task_type='AI_FIRST'").param("id",session).update();
         runVoiceTask(user,session,"AI_PLAN",null);
         verify(model).simulate(eq("VOICE_PLAN"),org.mockito.ArgumentMatchers.argThat(input->input.get("knowledge").toString().contains("前端题库.md") && !input.get("knowledge").toString().contains("未选择.md")));
         voice.begin(user,session);

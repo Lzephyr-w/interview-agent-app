@@ -81,7 +81,7 @@
 }
 .chat-new-button {
   display: flex;
-  width: 100%;
+  width: 95%;
   padding: 12px;
   align-items: center;
   justify-content: center;
@@ -253,7 +253,7 @@
 .chat-messages .chat-starters { margin-top: 22px; }
 .chat-new-form { padding: 14px 0; border-bottom: 1px solid var(--line); }
 .chat-create-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; padding: 24px; place-items: center; background: color-mix(in srgb, var(--ink) 34%, transparent); }
-.chat-new-form.chat-create-dialog { width: min(100%, 560px); max-height: calc(100vh - 48px); padding: 24px; overflow-y: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); }
+.chat-new-form.chat-create-dialog { width: min(100%, 620px); max-height: calc(100vh - 48px); padding: 24px; overflow-y: auto; background: var(--paper); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow); }
 .chat-create-dialog h2, .chat-create-dialog > p { margin: 0; }
 .chat-create-dialog h2 { font-family: inherit; font-size: 22px; }
 .chat-create-actions { justify-content: flex-end; }

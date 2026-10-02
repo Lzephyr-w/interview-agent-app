@@ -91,8 +91,17 @@ export default function WeaknessesPage() {
   useEffect(() => {
     if (initialLoadStarted.current) return;
     initialLoadStarted.current = true;
+    if (new URLSearchParams(window.location.search).get("tab") === "tasks") setActivePanel("tasks");
     void load();
   }, []);
+
+  useEffect(() => {
+    if (analysisLoading || !window.location.hash) return;
+    let tag = window.location.hash.slice(1);
+    try { tag = decodeURIComponent(tag); } catch { return; }
+    if (!analysis?.items.some((item) => item.tag === tag)) return;
+    document.getElementById(tag)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [analysis, analysisLoading]);
 
   async function analyze() {
     setError("");
@@ -216,11 +225,11 @@ export default function WeaknessesPage() {
         <>
             <section className="library-section weakness-workspace">
             <div className="interview-tabs" id="weakness-panel-tabs" role="tablist" aria-label="薄弱点页面内容">
-              <button className={`interview-tab${activePanel === "analysis" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "analysis"} onClick={() => setActivePanel("analysis")}>
+              <button className={`interview-tab${activePanel === "analysis" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "analysis"} onClick={() => { setActivePanel("analysis"); window.history.replaceState(null, "", "/weaknesses?tab=analysis"); }}>
                 <strong>AI 分析</strong>
                 <small>{analysisLoading ? "加载中" : `${analysis?.items.length ?? 0} 项`}</small>
               </button>
-              <button className={`interview-tab${activePanel === "tasks" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "tasks"} onClick={() => setActivePanel("tasks")}>
+              <button className={`interview-tab${activePanel === "tasks" ? " active" : ""}`} type="button" role="tab" aria-selected={activePanel === "tasks"} onClick={() => { setActivePanel("tasks"); window.history.replaceState(null, "", "/weaknesses?tab=tasks"); }}>
                 <strong>训练任务</strong>
                 <small>{tasksLoading ? "加载中" : `${tasks.length} 条`}</small>
               </button>
@@ -290,7 +299,7 @@ export default function WeaknessesPage() {
               {composerOpen ? (
                 <form className="library-form" onSubmit={saveTask}>
                   <label className="field">标题<input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
-                  <label className="field">关联弱项标签{draft.sourceQuestionId ? <input readOnly value={draft.weaknessTag} /> : <select required value={draft.weaknessTag} onChange={(event) => setDraft({ ...draft, weaknessTag: event.target.value })}><option value="">请选择弱项标签</option>{weaknessTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}</label>
+                  <label className="field">关联弱项标签{draft.sourceQuestionId ? <input readOnly value={draft.weaknessTag} /> : <select required value={draft.weaknessTag} onChange={(event) => setDraft({ ...draft, weaknessTag: event.target.value })}><option value="" hidden>请选择弱项标签</option>{weaknessTags.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select>}</label>
                   <label className="field">建议动作 / 练习内容<textarea required value={draft.action} onChange={(event) => setDraft({ ...draft, action: event.target.value })} /></label>
                   <label className="field">状态<select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as Task["status"] })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                   <p className="muted">来源：{draft.sourceQuestionId ? "已精确关联问题" : "未关联（可选）"}</p>

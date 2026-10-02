@@ -49,8 +49,11 @@ type Session = {
   role: string;
   interviewRound: string;
   status: string;
+  generationVersion: string;
+  prepared: boolean;
   finalInterviewId: string | null;
   totalQuestions: number;
+  completedQuestions: number;
   currentQuestion: Question | null;
   task: { id: string; taskType: string; status: "PENDING" | "PROCESSING" | "FAILED"; error: string } | null;
 };
@@ -173,6 +176,7 @@ export default function AiMockInterviewRoomPage() {
   const expiredQuestion = useRef("");
   const answerTiming = useRef<{ questionId: string; startedAt: number } | null>(null);
   const preparePromise = useRef<Promise<Session> | null>(null);
+  const leavingWelcome = useRef(false);
   const setup = useRef<{ selection: string; body: { interviewPackageId: string; sourceMode: string; categoryIds: string[] } }>({ selection: "", body: { interviewPackageId: "", sourceMode: "STANDARD", categoryIds: [] } });
   const initialized = useRef(false);
   const roomOpenedAt = useRef(0);
@@ -185,6 +189,7 @@ export default function AiMockInterviewRoomPage() {
   const startingRecording = useRef(false);
   const uploadActionPending = useRef(false);
   const current = session?.status === "RUNNING" ? session.currentQuestion : undefined;
+  const allQuestionsCompleted = Boolean(session && session.completedQuestions >= session.totalQuestions);
   const blocksQuestion = Boolean(
     session?.task &&
       session.task.taskType !== "AI_FEEDBACK" &&
@@ -222,50 +227,55 @@ export default function AiMockInterviewRoomPage() {
     const preparedKey = `ai-mock-prepared:${selection}`;
     void api<Package[]>("/api/v1/interview-packages")
       .then((items) => {
-        const item=items.find((value) => value.id === packageId);
-        if (!item) return;
-        const startedId=window.sessionStorage.getItem(startedKey);
-        const preparedId=window.sessionStorage.getItem(preparedKey);
-        preparePromise.current=(async () => {
-          if (startedId) {
-            try {
-              const existing=await api<Session>(`/api/v1/ai-mock-interviews/${startedId}`);
-              setEntered(true);
-              setSession(existing);
-              return existing;
-            } catch { window.sessionStorage.removeItem(startedKey); }
-          }
-          if (preparedId) {
-            try {
-              const existing=await api<Session>(`/api/v1/ai-mock-interviews/${preparedId}`);
-              if (existing.status === "RUNNING") { setSession(existing); return existing; }
-            } catch { /* expired prepared session is replaced below */ }
-            window.sessionStorage.removeItem(preparedKey);
-          }
-          const prepared=await api<Session>("/api/v1/ai-mock-interviews/prepare", {
-            method: "POST", body: JSON.stringify(setup.current.body),
-          });
-          window.sessionStorage.setItem(preparedKey,prepared.id);
-          setSession(prepared);
-          return prepared;
-        })();
-        setSelected(item);
-        void preparePromise.current.catch((caught: unknown) => {
-          preparePromise.current=null;
-          setError(errorText(caught,"准备第一题失败，请重试。"));
-        });
+        if (!leavingWelcome.current) setSelected(items.find((value) => value.id === packageId));
       })
-      .catch((caught: unknown) =>
-        setError(errorText(caught, "加载面试信息失败。")),
-      );
+      .catch((caught: unknown) => {
+        if (!leavingWelcome.current) setError(errorText(caught, "加载面试信息失败。"));
+      });
+    const startedId=window.sessionStorage.getItem(startedKey);
+    const preparedId=window.sessionStorage.getItem(preparedKey);
+    preparePromise.current=(async () => {
+      if (startedId) {
+        try {
+          const existing=await api<Session>(`/api/v1/ai-mock-interviews/${startedId}`);
+          if (!existing.prepared) {
+            if (!leavingWelcome.current) { setEntered(true); setSession(existing); }
+            return existing;
+          }
+          window.sessionStorage.removeItem(startedKey);
+        } catch { window.sessionStorage.removeItem(startedKey); }
+      }
+      if (preparedId) {
+        try {
+          const existing=await api<Session>(`/api/v1/ai-mock-interviews/${preparedId}`);
+          if (existing.status === "RUNNING" && existing.prepared && (sourceMode === "STANDARD" || existing.generationVersion === "KNOWLEDGE_INCREMENTAL_V1")) {
+            if (!leavingWelcome.current) setSession(existing);
+            return existing;
+          }
+          if (existing.prepared) await api(`/api/v1/ai-mock-interviews/${preparedId}`,{method:"DELETE"});
+        } catch { /* expired prepared session is replaced below */ }
+        window.sessionStorage.removeItem(preparedKey);
+      }
+      const prepared=await api<Session>("/api/v1/ai-mock-interviews/prepare", {
+        method: "POST", body: JSON.stringify(setup.current.body),
+      });
+      window.sessionStorage.setItem(preparedKey,prepared.id);
+      if (!leavingWelcome.current) setSession(prepared);
+      return prepared;
+    })();
+    void preparePromise.current.catch((caught: unknown) => {
+      preparePromise.current=null;
+      if (!leavingWelcome.current) setError(errorText(caught,"准备第一题失败，请重试。"));
+    });
   }, []);
   useEffect(() => {
-    if (!session?.task || session.task.status === "FAILED") return;
+    if (!session || session.task?.status === "FAILED" ||
+        (!session.task && !(entered && session.status === "RUNNING" && !current && !allQuestionsCompleted))) return;
     const timer = window.setInterval(() => {
       void api<Session>(`/api/v1/ai-mock-interviews/${session.id}`).then(setSession).catch(() => undefined);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [session?.id, session?.task?.id, session?.task?.status]);
+  }, [session?.id, session?.task?.id, session?.task?.status, session?.status, entered, current?.id, allQuestionsCompleted]);
   useEffect(() => () => window.speechSynthesis?.cancel(), [current?.id]);
   useEffect(() => {
     const timing = answerTiming.current;
@@ -635,12 +645,7 @@ export default function AiMockInterviewRoomPage() {
           ? updated.currentQuestion.audio.transcriptError
           : "";
       if (failed) setError(failed);
-      else
-        setNotice(
-          updated.currentQuestion
-            ? "录音已提交，正在后台处理。"
-            : "10 道题已完成，可以结束模拟。 ",
-        );
+      else setNotice("回答已提交，继续下一题。");
     } catch (caught) {
       setUploadPending(true);
       setError(caught instanceof SyntaxError
@@ -764,12 +769,13 @@ export default function AiMockInterviewRoomPage() {
     }
   }
   async function leaveWelcome() {
+    leavingWelcome.current = true;
     stopMicrophone();
     try {
       const prepared=await preparePromise.current;
       if(prepared && !entered) await api(`/api/v1/ai-mock-interviews/${prepared.id}`,{method:"DELETE"});
     } catch { /* welcome exit still returns to the selection page */ }
-    if(selected) window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
+    window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
     window.location.assign("/ai-mock-interviews");
   }
 
@@ -900,13 +906,15 @@ export default function AiMockInterviewRoomPage() {
         </section>
       ) : blocksQuestion && session.task ? (
         <RoomLoading label={["AI_AUDIO", "AI_FINALIZE_AUDIO"].includes(session.task.taskType) &&
-            (!current || current.sortOrder + 1 >= session.totalQuestions)
+            !current && allQuestionsCompleted
             ? "面试结束中…" : "题目加载中…"} />
       ) : session.status === "TIME_EXPIRED" ? (
         <section className="ai-room-brief ai-room-result">
           <h1>本场模拟已超时</h1>
           <button className="ai-room-primary" onClick={() => setFinishDialog(true)} disabled={busy}>结束并保存已答内容</button>
         </section>
+      ) : !current && !allQuestionsCompleted ? (
+        <RoomLoading label="题目加载中…" />
       ) : current ? (
         <section className="ai-room-stage">
           <div className="ai-room-question">

@@ -174,7 +174,12 @@ export default function LibraryPage() {
   }
 
   useEffect(() => {
-    void loadTab("resume-files");
+    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    const initialTab = tabs.some((tab) => tab.id === requestedTab)
+      ? requestedTab as Tab
+      : "resume-files";
+    setActiveTab(initialTab);
+    void loadTab(initialTab);
   }, []);
   async function save(
     path: string,
@@ -317,6 +322,7 @@ export default function LibraryPage() {
                   key={tab.id}
                   onClick={() => {
                     setActiveTab(tab.id);
+                    window.history.replaceState(null, "", `/library?tab=${tab.id}`);
                     void loadTab(tab.id);
                   }}
                 >
@@ -335,17 +341,23 @@ export default function LibraryPage() {
                       仅支持 PDF、DOC、DOCX，最大 10 MiB。文件仅对当前账户可见。
                     </p>
                     <form className="library-form" onSubmit={uploadResumeFile}>
-                    <label className="field">
-                      选择文件
-                      <input
-                        required
-                        type="file"
-                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        onChange={(event) =>
-                          setSelectedResumeFile(event.target.files?.[0] ?? null)
-                        }
-                      />
-                    </label>
+                    <div className="field">
+                      <span>选择文件</span>
+                      <label className="knowledge-file-picker">
+                        <span className="knowledge-file-symbol" aria-hidden="true">↥</span>
+                        <strong>{selectedResumeFile?.name ?? "点击选择文件"}</strong>
+                        <small>{selectedResumeFile ? `${Math.ceil(selectedResumeFile.size / 1024)} KB · 可重新选择` : "PDF 或 Word 文档"}</small>
+                        <input
+                          required
+                          type="file"
+                          aria-label="选择简历文件"
+                          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                          onChange={(event) =>
+                            setSelectedResumeFile(event.target.files?.[0] ?? null)
+                          }
+                        />
+                      </label>
+                    </div>
                     <div className="form-actions">
                       <button className="primary-button" disabled={uploading}>
                         {uploading ? "正在上传…" : "上传简历文件"}
@@ -641,7 +653,7 @@ export default function LibraryPage() {
                           })
                         }
                       >
-                        <option value="">请选择简历文件</option>
+                        <option value="" hidden>请选择简历文件</option>
                         {resumeFiles.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.originalFilename}
@@ -664,7 +676,7 @@ export default function LibraryPage() {
                           });
                         }}
                       >
-                        <option value="">请选择 JD</option>
+                        <option value="" hidden>请选择 JD</option>
                         {jobDescriptions.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.company} · {item.role}

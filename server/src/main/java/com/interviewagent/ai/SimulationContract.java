@@ -5,7 +5,7 @@ import java.util.*;
 
 /** Wire shape only. Session-specific business validation remains in the services. */
 public final class SimulationContract {
-    public static final Set<String> OPERATIONS = Set.of("VOICE_PLAN","VOICE_PLAN_ONLY","VOICE_QUESTION","VOICE_FEEDBACK","TEXT_MAIN_QUESTION","TEXT_FOLLOW_UP","TEXT_FEEDBACK");
+    public static final Set<String> OPERATIONS = Set.of("VOICE_PLAN","VOICE_PLAN_ONLY","VOICE_QUESTION","VOICE_KNOWLEDGE_QUESTION","VOICE_FEEDBACK","TEXT_MAIN_QUESTION","TEXT_FOLLOW_UP","TEXT_FEEDBACK");
     public static final Set<String> CODES = Set.of("INVALID_REQUEST","MODEL_TIMEOUT","MODEL_UNAVAILABLE","INVALID_MODEL_OUTPUT","UNAUTHORIZED","INTERNAL_ERROR");
     private static final int QUESTION_QUALITY_MAX = 200;
     private static final int PLAN_LABEL_MAX = 80;
@@ -25,7 +25,19 @@ public final class SimulationContract {
         try {
             if (!OPERATIONS.contains(operation)) throw invalid();
             boolean knowledge = data.has("knowledge");
-            if (operation.equals("VOICE_PLAN_ONLY") && data.has("focusCount")) {
+            if (operation.equals("VOICE_KNOWLEDGE_QUESTION")) {
+                fields(data,"materials","history","knowledge","target","recentQuestions");
+                JsonNode target=data.path("target");
+                fields(target,"order","type","projectName","angle");
+                if (!target.path("order").isIntegralNumber() || !target.path("order").canConvertToInt() || target.path("order").asInt()<1 || target.path("order").asInt()>10) throw invalid();
+                int order=target.path("order").asInt();
+                String type=text(target,"type",120,false);
+                if (!(order<=5?type.equals("FUNDAMENTAL"):order<=9?type.equals("PROJECT"):Set.of("SCENARIO","BEHAVIORAL").contains(type))) throw invalid();
+                text(target,"projectName",120,!type.equals("PROJECT"));
+                planText(text(target,"angle",80,false));
+                history(data.path("recentQuestions"),30);
+            }
+            else if (operation.equals("VOICE_PLAN_ONLY") && data.has("focusCount")) {
                 if (knowledge) fields(data,"materials","history","knowledge","focusCount");
                 else fields(data,"materials","history","focusCount");
                 if (!data.path("focusCount").isIntegralNumber() || !data.path("focusCount").canConvertToInt() || !Set.of(1,3).contains(data.path("focusCount").asInt())) throw invalid();
@@ -56,15 +68,18 @@ public final class SimulationContract {
                 if (!m.path("experienceAnchors").isArray() || m.path("experienceAnchors").size()>40) throw invalid();
                 for (JsonNode anchor:m.path("experienceAnchors")) if (!anchor.isTextual() || anchor.asText().isBlank() || anchor.asText().length()>120) throw invalid();
             }
-            if (!data.path("history").isArray() || data.path("history").size()>10) throw invalid();
-            for (JsonNode h:data.path("history")) {
+            history(data.path("history"),10);
+            if (data.has("slot")) slot(data.path("slot"));
+            if (data.has("answer")) { text(data,"questionText",800,false); text(data,"answer",operation.equals("VOICE_FEEDBACK")?40000:8000,true); }
+        } catch (RuntimeException error) { throw new SimulationException("INVALID_REQUEST"); }
+    }
+    private static void history(JsonNode items,int maximum) {
+            if (!items.isArray() || items.size()>maximum) throw invalid();
+            for (JsonNode h:items) {
                 fields(h,"questionText","type","competency","projectName","technology");
                 text(h,"questionText",800,false);
                 for (String f:List.of("type","competency","projectName","technology")) text(h,f,120,true);
             }
-            if (data.has("slot")) slot(data.path("slot"));
-            if (data.has("answer")) { text(data,"questionText",800,false); text(data,"answer",operation.equals("VOICE_FEEDBACK")?40000:8000,true); }
-        } catch (RuntimeException error) { throw new SimulationException("INVALID_REQUEST"); }
     }
     private static void metadata(JsonNode n) {
         if (!Set.of("FUNDAMENTAL","PROJECT","SCENARIO","BEHAVIORAL").contains(text(n,"type",120,false))) throw invalid();
@@ -95,7 +110,7 @@ public final class SimulationContract {
             fields(result.path("firstQuestion"),"questionText","type","competency","projectName","technology");
             question(text(result.path("firstQuestion"),"questionText",800,false));
             metadata(result.path("firstQuestion"));
-        } else if (operation.equals("VOICE_QUESTION")) {
+        } else if (Set.of("VOICE_QUESTION","VOICE_KNOWLEDGE_QUESTION").contains(operation)) {
             fields(result,"questionText","type","competency","projectName","technology");
             question(text(result,"questionText",800,false)); metadata(result);
         } else {

@@ -44,7 +44,8 @@ function Stop-PreviousDevTerminals {
         $killOutput = & "$env:SystemRoot\System32\taskkill.exe" /PID $terminal.ProcessId /T /F 2>&1
         $killExitCode = $LASTEXITCODE
         try { Wait-Process -Id $terminal.ProcessId -Timeout 10 -ErrorAction Stop } catch { }
-        if (Get-Process -Id $terminal.ProcessId -ErrorAction SilentlyContinue) {
+        $remainingProcess = Get-Process -Id $terminal.ProcessId -ErrorAction SilentlyContinue
+        if ($remainingProcess -and -not $remainingProcess.HasExited) {
             $reason = ($killOutput -join " ").Trim()
             throw "Could not stop previous project terminal PID $($terminal.ProcessId) (taskkill exit=$killExitCode): $reason. Refusing to start a second process that would share its log file."
         }

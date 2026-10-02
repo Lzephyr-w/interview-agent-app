@@ -16,5 +16,5 @@ public final class AiMockInterviewApi {
     public record Audio(String id, String status, String transcript, String transcriptError, String feedback, Long durationMs) {}
     public record Question(String id, String questionText, String questionType, String competency, String confirmedAnswerText, String state, int sortOrder, OffsetDateTime answerExpiresAt, Audio audio, String sourceTitle, String sourceLocation) {}
     public record NextPreview(String questionText, int sortOrder, String sourceTitle, String sourceLocation) {}
-    public record Session(String id, String company, String role, String interviewRound, String status, String sourceMode, OffsetDateTime startedAt, String finalInterviewId, int totalQuestions, Question currentQuestion, Task task) {}
+    public record Session(String id, String company, String role, String interviewRound, String status, String sourceMode, OffsetDateTime startedAt, String finalInterviewId, int totalQuestions, Question currentQuestion, Task task, String generationVersion, boolean prepared, int completedQuestions) {}
 }

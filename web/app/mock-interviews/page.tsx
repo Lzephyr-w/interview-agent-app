@@ -595,7 +595,7 @@ export default function MockInterviewsPage() {
                     value={form.packageId}
                     onChange={(event) => selectPackage(event.target.value)}
                   >
-                    <option value="">请选择面试包</option>
+                    <option value="" hidden>请选择面试包</option>
                     {packages.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.company} · {item.role} · {item.interviewRound}
@@ -705,9 +705,11 @@ export default function MockInterviewsPage() {
             setDialog(null);
             void finishConfirmed();
           } else if (dialog === "resume") {
+            firstQuestionAnnounced.current = true;
             setSession(pendingSession);
             setPendingSession(undefined);
             setDialog(null);
+            setNotice("已恢复上一次未完成的文本模拟。");
           } else {
             void abandonConfirmed();
           }

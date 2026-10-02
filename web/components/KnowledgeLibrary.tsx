@@ -113,7 +113,7 @@ export default function KnowledgeLibrary() {
         <form className="knowledge-upload-form" onSubmit={upload}>
           <label className="field">放入类别
             <select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="">请选择类别</option>
+              <option value="" hidden>请选择类别</option>
               {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>

@@ -8,6 +8,36 @@ import pytest
 from interview_agent.simulation import SimulationError, generate, validate_request
 
 
+def test_knowledge_voice_generates_one_question_with_separate_recent_history():
+    payload = request("VOICE_KNOWLEDGE_QUESTION")
+    payload["input"].update(knowledge="浏览器事件循环与微任务调度。",
+                            target=dict(order=1, type="FUNDAMENTAL", projectName="", angle="边界条件"),
+                            recentQuestions=[dict(questionText="事件循环是什么？", type="FUNDAMENTAL", competency="任务调度", projectName="", technology="浏览器")])
+    model = Model(json.dumps(dict(questionText="递归入队的微任务如何影响页面渲染？", type="FUNDAMENTAL", competency="微任务饥饿", projectName="", technology="微任务")))
+    result = generate(payload, lambda remaining: model)
+    assert "plan" not in result["result"]
+    assert result["result"]["competency"] == "微任务饥饿"
+    assert len(model.prompts) == 1
+    assert "recentQuestions" in model.prompts[0]
+    assert "target.angle" in model.prompts[0]
+    payload["input"]["recentQuestions"] *= 31
+    with pytest.raises(SimulationError) as failure:
+        validate_request(payload)
+    assert failure.value.code == "INVALID_REQUEST"
+
+
+def test_knowledge_voice_rejects_missing_source_or_wrong_type_distribution():
+    payload = request("VOICE_KNOWLEDGE_QUESTION")
+    payload["input"].update(knowledge="项目数据一致性。", target=dict(order=6, type="FUNDAMENTAL", projectName="", angle="机制"), recentQuestions=[])
+    with pytest.raises(SimulationError):
+        validate_request(payload)
+    payload["input"]["target"].update(type="PROJECT", projectName="甲项目")
+    validate_request(payload)
+    del payload["input"]["knowledge"]
+    with pytest.raises(SimulationError):
+        validate_request(payload)
+
+
 def request(operation="TEXT_MAIN_QUESTION", marker="甲"):
     data = {"materials": {"company": marker, "role": "开发", "round": "一面", "jd": marker,
                           "resume": marker + "项目", "cards": []}, "history": []}

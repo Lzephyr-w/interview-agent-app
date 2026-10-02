@@ -1651,7 +1651,8 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
 }
 .ai-room-start-form select {
   width: 100%;
-  padding: 13px 44px 13px 13px;
+  min-height: 40px;
+  padding: 8px 36px 8px 12px;
   color: #fff;
   background-color: rgb(255 255 255 / 10%);
   border: 1px solid rgb(151 210 255 / 50%);
@@ -2272,7 +2273,7 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   gap: 12px 22px;
   padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
 }
 .ai-mock-source legend {
   padding: 0 6px;

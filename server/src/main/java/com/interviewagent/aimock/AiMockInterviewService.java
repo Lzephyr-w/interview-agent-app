@@ -39,6 +39,7 @@ public class AiMockInterviewService {
     private static final Duration UPLOAD_GRACE = Duration.ofMinutes(15);
     private static final int MAX_TRANSCRIPT_CHARS = 40_000;
     private static final int LEGACY_QUESTION_LIMIT = 3;
+    private static final String KNOWLEDGE_VERSION = "KNOWLEDGE_INCREMENTAL_V1";
     private static final Logger log = LoggerFactory.getLogger(AiMockInterviewService.class);
     private final JdbcClient jdbc; private final InterviewService interviews; private final AiMockQuestionAgent questionAgent; private final AiAudioStorage storage;
     private final AudioTranscriptionService transcription;
@@ -76,8 +77,8 @@ public class AiMockInterviewService {
         var preparation=sourceMode.equals("STANDARD")?preparations.ensure(userId,packageId):null;
         String id = UUID.randomUUID().toString(); OffsetDateTime expires = OffsetDateTime.now().plusMinutes(prepared?15:50);
         // ponytail: the otherwise unused index marks a prepared session; begin resets its 50-minute timer.
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,current_question_index,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:index,:snapshot,'SIMULATION_AGENT_V1',:sourceMode,:documents,:preparation)").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("index",prepared?-1:0).param("snapshot",preparation==null?materials.capture(userId,packageId).toString():preparation.materialSnapshot()).param("sourceMode",sourceMode).param("documents",String.join(",",documentIds)).param("preparation",preparation==null?null:preparation.id()).update();
-        if (preparation==null) tasks.enqueue(userId, "AI_PLAN", id, null);
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,current_question_index,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:index,:snapshot,:version,:sourceMode,:documents,:preparation)").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("index",prepared?-1:0).param("snapshot",preparation==null?materials.capture(userId,packageId).toString():preparation.materialSnapshot()).param("version",sourceMode.equals("KNOWLEDGE")?KNOWLEDGE_VERSION:"SIMULATION_AGENT_V1").param("sourceMode",sourceMode).param("documents",String.join(",",documentIds)).param("preparation",preparation==null?null:preparation.id()).update();
+        if (preparation==null) tasks.enqueue(userId, sourceMode.equals("KNOWLEDGE")?"AI_FIRST":"AI_PLAN", id, null);
         return detail(userId,id);
     }
     @Transactional Session begin(String userId,String id) {
@@ -121,6 +122,7 @@ public class AiMockInterviewService {
 
     private void processPlan(String userId, String id) {
         SessionRow s=session(userId,id);
+        if (incremental(s)) { addQuestion(userId,id,0); return; }
         if (s.preparationId!=null && s.plan==null) { applyPreparation(userId,id,preparations.get(userId,s.preparationId)); return; }
         if (s.plan != null) {
             tasks.write(() -> { if (!hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null); });
@@ -139,14 +141,14 @@ public class AiMockInterviewService {
                 if (hasQuestion(id,0)) return;
                 int updated=jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND question_plan IS NULL")
                     .param("plan",questionAgent.serialize(planned.plan())).param("id",id).param("user",userId).update();
-                if (updated==1 && insertQuestion(id,0,planned.firstQuestion(),firstSource)) prepareNext(userId,id,0);
+                if (updated==1 && insertQuestion(id,0,planned.firstQuestion(),firstSource)) prepareNext(userId,id,0,questionLimit(s));
             });
         } finally { log.info("ai_mock_timing stage=plan_commit taskId={} sessionId={} elapsed_ms={}",org.slf4j.MDC.get("taskId"),id,(System.nanoTime()-commitStarted)/1_000_000); }
     }
 
     private void processFirst(String userId, String id) {
         SessionRow s=session(userId,id);
-        if (s.plan==null) processPlan(userId,id); else addQuestion(userId,id,0);
+        if (s.plan==null && !incremental(s)) processPlan(userId,id); else addQuestion(userId,id,0);
     }
 
     void processNext(String userId,String id,String questionId) {
@@ -348,7 +350,7 @@ public class AiMockInterviewService {
                 jdbc.sql("UPDATE ai_mock_audio_uploads SET completed_asset_id=:asset,updated_at=CURRENT_TIMESTAMP WHERE id=:id").param("id",uploadId).param("asset",asset).update();
                 if(reuseSinglePart) jdbc.sql("DELETE FROM ai_mock_audio_upload_parts WHERE upload_id=:upload").param("upload",uploadId).update();
                 tasks.enqueue(userId,"AI_AUDIO",id,asset);
-                acceptAudio(userId,id,q);
+                acceptAudio(userId,id,q,questionLimit(session(userId,id)));
                 assetStored[0]=true;
             });
             log.info("ai_mock_timing stage=audio_finalize_commit taskId={} sessionId={} elapsed_ms={}",org.slf4j.MDC.get("taskId"),id,(System.nanoTime()-commitStarted)/1_000_000);
@@ -413,7 +415,8 @@ public class AiMockInterviewService {
     }
     Session audio(String userId, String id, String questionId, MultipartFile file) {
         long preparationStarted=System.nanoTime();
-        if (!"RUNNING".equals(session(userId,id).status)) return detail(userId,id);
+        SessionRow interview=session(userId,id);
+        if (!"RUNNING".equals(interview.status)) return detail(userId,id);
         QuestionRow q = question(id,questionId);
         if(activeUpload(userId,id,questionId)!=null) throw new IllegalArgumentException("录音正在上传，请继续或放弃后重新录音。");
         if (Set.of("TRANSCRIBING", "ANSWERED").contains(q.state)) return detail(userId,id);
@@ -441,7 +444,7 @@ public class AiMockInterviewService {
                 if(jdbc.sql("UPDATE ai_mock_interview_questions SET state='TRANSCRIBING',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='OPEN'").param("id",questionId).update()==0) return;
                 jdbc.sql("INSERT INTO ai_mock_audio_assets(id,user_id,ai_mock_interview_id,question_id,original_filename,content_type,size_bytes,object_path,status,transcript) VALUES(:id,:user,:session,:question,:name,:type,:size,:path,'TRANSCRIBING','')").param("id",asset).param("user",userId).param("session",id).param("question",questionId).param("name",safeName(file.getOriginalFilename())).param("type",type).param("size",bytes.length).param("path",path).update();
                 tasks.enqueue(userId,"AI_AUDIO",id,asset);
-                acceptAudio(userId,id,current);
+                acceptAudio(userId,id,current,questionLimit(interview));
                 claimed[0]=true;
             });
             log.info("ai_mock_timing stage=audio_direct_commit sessionId={} questionId={} elapsed_ms={}",id,questionId,(System.nanoTime()-commitStarted)/1_000_000);
@@ -492,9 +495,9 @@ public class AiMockInterviewService {
         }
     }
 
-    private void acceptAudio(String userId,String id,QuestionRow q) {
+    private void acceptAudio(String userId,String id,QuestionRow q,int limit) {
         if(jdbc.sql("UPDATE ai_mock_interview_questions SET state='ANSWERED',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND state='TRANSCRIBING'")
-            .param("id",q.id).update()>0) advanceNext(userId,id,q,questionLimit(session(userId,id)));
+            .param("id",q.id).update()>0) advanceNext(userId,id,q,limit);
     }
 
     private void addQuestion(String userId,String id,int order) { addQuestion(userId,id,order,false); }
@@ -502,29 +505,31 @@ public class AiMockInterviewService {
     private void addQuestion(String userId,String id,int order,boolean prepared) {
         long setupStarted=System.nanoTime();
         SessionRow s=session(userId,id);
-        if(!"RUNNING".equals(s.status)||order>=questionLimit(s)||s.plan==null) return;
+        if(!"RUNNING".equals(s.status)||order>=questionLimit(s)||(s.plan==null && !incremental(s))) return;
         if(hasQuestion(id,order) || (prepared && hasPrepared(id,order))) return;
         boolean strictProject=!legacy(s);
         log.info("ai_mock_timing stage=question_setup taskId={} sessionId={} order={} elapsed_ms={}",org.slf4j.MDC.get("taskId"),id,order,(System.nanoTime()-setupStarted)/1_000_000);
         long contextStarted=System.nanoTime();
         tasks.check();
         JsonNode materials=snapshot(userId,s);
-        PlanItem slot=questionAgent.deserialize(s.plan,legacy(s)).get(order);
         List<QuestionHistory> questionHistory=history(userId,id);
-        KnowledgeService.Source source=knowledgeSource(userId,s,s.role+" "+materials.path("jd").asText()+" "+slot.competency()+" "+slot.technology()+" "+slot.angle());
+        PlanItem slot=incremental(s)?null:questionAgent.deserialize(s.plan,legacy(s)).get(order);
+        JsonNode context=incremental(s)?knowledgeContext(userId,s,order,materials,questionHistory):null;
+        KnowledgeService.Source source=context==null?knowledgeSource(userId,s,s.role+" "+materials.path("jd").asText()+" "+slot.competency()+" "+slot.technology()+" "+slot.angle()):source(context.path("source").toString());
         log.info("ai_mock_timing stage=question_context taskId={} sessionId={} order={} elapsed_ms={}",org.slf4j.MDC.get("taskId"),id,order,(System.nanoTime()-contextStarted)/1_000_000);
-        QuestionDraft draft=questionAgent.generate(materials,slot,questionHistory,strictProject,source==null?null:knowledgeText(source));
+        QuestionDraft draft=context==null?questionAgent.generate(materials,slot,questionHistory,strictProject,source==null?null:knowledgeText(source))
+            :questionAgent.generateKnowledge(materials,context.path("target"),questionHistory,context.path("recentQuestions"),context.path("avoidRecent").asBoolean(),knowledgeText(source));
         long commitStarted=System.nanoTime();
         try {
             tasks.write(() -> {
                 if(hasQuestion(id,order) || (prepared && hasPrepared(id,order))) return;
-                String error=qualityError(draft,slot,history(id));
+                String error=context==null?qualityError(draft,slot,history(id)):knowledgeQualityError(draft,context.path("target"),materials,history(id));
                 if (error!=null) { log.warn("AI VOICE_QUESTION rejected during commit reason={}", error); throw SimulationContract.retryableInvalid(); }
                 String previousState=prepared?jdbc.sql("SELECT state FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:session AND sort_order=:order")
                     .param("session",id).param("order",order-1).query(String.class).single():"ANSWERED";
                 boolean publish=Set.of("ANSWERED","SKIPPED").contains(previousState);
                 if(publish) {
-                    if(insertQuestion(id,order,draft,source)) prepareNext(userId,id,order);
+                    if(insertQuestion(id,order,draft,source)) prepareNext(userId,id,order,questionLimit(s));
                 } else savePrepared(id,order,draft,source);
                 if(prepared) log.info("ai_mock_timing stage=question_prepared taskId={} sessionId={} order={} published={}",org.slf4j.MDC.get("taskId"),id,order,publish);
             });
@@ -543,8 +548,8 @@ public class AiMockInterviewService {
             .param("session",id).param("order",order).param("text",draft.questionText()).param("type",draft.type()).param("competency",draft.competency()).param("project",draft.projectName()).param("technology",draft.technology()).param("source",sourceJson(source)).update();
     }
 
-    private void prepareNext(String userId,String id,int order) {
-        if(order+1<questionLimit(session(userId,id))) {
+    private void prepareNext(String userId,String id,int order,int limit) {
+        if(order+1<limit) {
             String questionId=jdbc.sql("SELECT id FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:session AND sort_order=:order")
                 .param("session",id).param("order",order).query(String.class).single();
             tasks.enqueue(userId,"AI_PREPARE_NEXT",id,questionId);
@@ -558,7 +563,7 @@ public class AiMockInterviewService {
         if(updated>0) {
             jdbc.sql("DELETE FROM ai_mock_prepared_questions WHERE ai_mock_interview_id=:session AND sort_order=:order").param("session",id).param("order",order).update();
             log.info("ai_mock_timing stage=question_prepared_release taskId={} sessionId={} order={}",org.slf4j.MDC.get("taskId"),id,order);
-            prepareNext(userId,id,order);
+            prepareNext(userId,id,order,limit);
         }
         return updated>0;
     }
@@ -571,6 +576,84 @@ public class AiMockInterviewService {
     private boolean hasQuestion(String id,int order) { return jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id AND sort_order=:order").param("id",id).param("order",order).query(Integer.class).single()>0; }
     private List<QuestionHistory> history(String user,String id) { session(user,id); return history(id); }
     private List<QuestionHistory> history(String id) { return questions(id).stream().map(q->new QuestionHistory(q.text,empty(q.type),empty(q.competency),empty(q.projectName),empty(q.technology))).toList(); }
+
+    private JsonNode knowledgeContext(String user,SessionRow s,int order,JsonNode materials,List<QuestionHistory> history) {
+        List<String> documents=documentIds(s);
+        knowledge.requireDocuments(user,documents);
+        String key=Integer.toString(order);
+        Random random=new Random(UUID.fromString(s.id).getMostSignificantBits() ^ UUID.fromString(s.id).getLeastSignificantBits() ^ order);
+        String type=order<5?"FUNDAMENTAL":order<9?"PROJECT":random.nextBoolean()?"SCENARIO":"BEHAVIORAL";
+        // ponytail: rank segments before the short package lock; only source reservation needs the lock.
+        long rankingStarted=System.nanoTime();
+        List<Map.Entry<KnowledgeService.Source,Integer>> ranked=readContexts(s.knowledgeContexts).has(key)?List.of()
+            :knowledge.rankedSources(user,documents,s.role+" "+materials.path("jd").asText()+" "+type);
+        if(!ranked.isEmpty()) log.info("ai_mock_timing stage=question_rank taskId={} sessionId={} order={} elapsed_ms={}",org.slf4j.MDC.get("taskId"),s.id,order,(System.nanoTime()-rankingStarted)/1_000_000);
+        JsonNode[] frozen={null};
+        tasks.write(() -> {
+            // ponytail: one short package lock makes concurrent sessions see each other's source reservations.
+            jdbc.sql("SELECT id FROM interview_packages WHERE id=:id AND user_id=:user FOR UPDATE").param("id",s.packageId).param("user",user).query(String.class).single();
+            var contexts=(com.fasterxml.jackson.databind.node.ObjectNode)readContexts(session(user,s.id).knowledgeContexts);
+            if (contexts.has(key)) { frozen[0]=contexts.path(key); return; }
+            var peers=jdbc.sql("SELECT v.id,v.knowledge_contexts FROM ai_mock_interviews v WHERE v.user_id=:user AND v.interview_package_id=:package AND v.source_mode='KNOWLEDGE' AND v.id<>:id AND EXISTS (SELECT 1 FROM knowledge_documents d WHERE d.user_id=:user AND d.id IN (:documents) AND (',' || v.knowledge_document_ids || ',') LIKE ('%,' || d.id || ',%')) ORDER BY v.created_at DESC,v.id DESC LIMIT 3")
+                .param("user",user).param("package",s.packageId).param("id",s.id).param("documents",documentIds(s))
+                .query((rs,row)->Map.entry(rs.getString(1),readContexts(rs.getString(2)))).list();
+            var recent=json.createArrayNode();
+            Map<String,Integer> uses=new HashMap<>();
+            Map<String,Integer> projectUses=new HashMap<>();
+            Set<String> recorded=new HashSet<>();
+            if (!peers.isEmpty()) {
+                var rows=jdbc.sql("SELECT ai_mock_interview_id,sort_order,question_text,question_type,competency,project_name,technology,knowledge_source FROM ai_mock_interview_questions WHERE ai_mock_interview_id IN (:ids) UNION ALL SELECT ai_mock_interview_id,sort_order,question_text,question_type,competency,project_name,technology,knowledge_source FROM ai_mock_prepared_questions WHERE ai_mock_interview_id IN (:ids)")
+                    .param("ids",peers.stream().map(Map.Entry::getKey).toList())
+                    .query((rs,row)->new RecentQuestion(rs.getString(1),rs.getInt(2),new QuestionHistory(rs.getString(3),empty(rs.getString(4)),empty(rs.getString(5)),empty(rs.getString(6)),empty(rs.getString(7))),source(rs.getString(8)))).list();
+                for (RecentQuestion row:rows) {
+                    if (!recorded.add(row.sessionId+":"+row.order)) continue;
+                    if (recent.size()<30) recent.add(json.valueToTree(row.question));
+                    if (row.source!=null) uses.merge(row.source.id(),row.order==0?2:1,Integer::sum);
+                    projectUses.merge(row.question.projectName(),1,Integer::sum);
+                }
+            }
+            for (var peer:peers) peer.getValue().fields().forEachRemaining(item -> {
+                if (!recorded.contains(peer.getKey()+":"+item.getKey())) uses.merge(item.getValue().path("source").path("id").asText(),item.getKey().equals("0")?2:1,Integer::sum);
+            });
+            Set<String> used=new HashSet<>();
+            contexts.elements().forEachRemaining(item->used.add(item.path("source").path("id").asText()));
+            String project="";
+            if (type.equals("PROJECT")) {
+                String previous=history.isEmpty()?"":history.getLast().projectName();
+                LinkedHashSet<String> anchors=new LinkedHashSet<>();
+                materials.path("cards").forEach(card->{ String name=card.path("projectName").asText(); if (!name.isBlank() && !name.equals("待补充")) anchors.add(name); });
+                // ponytail: resume-only projects must have an explicit experience heading; ambiguous headers require better materials.
+                if (anchors.isEmpty()) materials.path("experienceAnchors").forEach(anchor->{ String name=anchor.asText(); if (!name.equals(materials.path("company").asText()) && !name.equals(materials.path("role").asText()) && materials.path("resume").asText().contains(name) && name.matches(".*(项目|系统|平台|实习|公司).*")) anchors.add(name); });
+                var choices=anchors.stream().filter(name->!name.equals(previous)).toList();
+                if (choices.isEmpty()) throw new IllegalArgumentException("缺少可交替考察的真实项目或实习经历，请补充面试包资料。");
+                int least=choices.stream().mapToInt(name->projectUses.getOrDefault(name,0)).min().orElse(0);
+                var preferred=choices.stream().filter(name->projectUses.getOrDefault(name,0)==least).toList();
+                project=preferred.get(random.nextInt(preferred.size()));
+            }
+            String previousSource=order==0?"":contexts.path(Integer.toString(order-1)).path("source").path("id").asText();
+            KnowledgeService.Source source=knowledge.variedSource(ranked,used,previousSource,uses,random);
+            var angles=new ArrayList<>(List.of("机制与因果","边界条件","设计取舍","错误定位","验证方法"));
+            String previousAngle=order==0?"":contexts.path(Integer.toString(order-1)).path("target").path("angle").asText();
+            angles.remove(previousAngle);
+            Map<String,Integer> angleUses=new HashMap<>();
+            for (var peer:peers) peer.getValue().elements().forEachRemaining(item->{ if(item.path("source").path("id").asText().equals(source.id())) angleUses.merge(item.path("target").path("angle").asText(),1,Integer::sum); });
+            int leastAngle=angles.stream().mapToInt(angle->angleUses.getOrDefault(angle,0)).min().orElse(0);
+            var preferredAngles=angles.stream().filter(angle->angleUses.getOrDefault(angle,0)==leastAngle).toList();
+            var target=json.createObjectNode().put("order",order+1).put("type",type).put("projectName",project).put("angle",preferredAngles.get(random.nextInt(preferredAngles.size())));
+            var context=json.createObjectNode(); context.set("target",target); context.set("source",json.valueToTree(source)); context.set("recentQuestions",recent);
+            // Hard recent-history exclusion only for a fresh source; exhausted corpora retain the soft prompt preference.
+            context.put("avoidRecent",uses.getOrDefault(source.id(),0)==0 && !recent.isEmpty());
+            contexts.set(key,context);
+            jdbc.sql("UPDATE ai_mock_interviews SET knowledge_contexts=:contexts WHERE id=:id AND user_id=:user").param("contexts",contexts.toString()).param("id",s.id).param("user",user).update();
+            frozen[0]=context;
+        });
+        return frozen[0];
+    }
+    private JsonNode readContexts(String text) {
+        if (text==null) return json.createObjectNode();
+        try { JsonNode result=json.readTree(text); if (!result.isObject()) throw new IllegalArgumentException(); return result; }
+        catch(Exception error) { throw new IllegalStateException("知识库选题依据无效。",error); }
+    }
     private KnowledgeService.Source knowledgeSource(String user,SessionRow session,String query) {
         if (!session.sourceMode.equals("KNOWLEDGE")) return null;
         List<String> documents=documentIds(session);
@@ -609,6 +692,7 @@ public class AiMockInterviewService {
         return materials.read(s.snapshot,user,s.packageId);
     }
     private static boolean legacy(SessionRow s) { return "LEGACY".equals(s.generationVersion); }
+    private static boolean incremental(SessionRow s) { return KNOWLEDGE_VERSION.equals(s.generationVersion) && "KNOWLEDGE".equals(s.sourceMode); }
     private void lock(String user,String id) { jdbc.sql("SELECT id FROM ai_mock_interviews WHERE id=:id AND user_id=:user FOR UPDATE").param("id",id).param("user",user).query(String.class).optional().orElseThrow(AiMockInterviewService::notFound); }
     private void lockRunning(String user,String id) {
         lock(user,id);
@@ -643,11 +727,11 @@ public class AiMockInterviewService {
             && applyPreparation(user,id,preparations.get(user,s.preparationId))) s=session(user,id);
         List<QuestionRow> q=questions(id);
         var task=s.plan==null && s.preparationId!=null && "RUNNING".equals(s.status)?preparations.task(user,s.preparationId):tasks.latestVoice(user,id);
-        return new Session(s.id,s.company,s.role,s.round,s.status,s.sourceMode,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),task);
+        return new Session(s.id,s.company,s.role,s.round,s.status,s.sourceMode,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),task,s.generationVersion,s.currentIndex<0,(int)q.stream().filter(x->Set.of("ANSWERED","SKIPPED").contains(x.state)).count());
     }
     private Question apiQuestion(QuestionRow q,String user) { KnowledgeService.Source source=source(q.knowledgeSource); return new Question(q.id,q.text,legacyType(q),q.competency,q.answer,q.state,q.sortOrder,q.answerExpiresAt,latestAudio(user,q.id),source==null?null:source.title(),source==null?null:source.location()); }
     private Audio latestAudio(String user,String question) { return jdbc.sql("SELECT id,status,transcript,transcript_error,feedback,duration_ms FROM ai_mock_audio_assets WHERE user_id=:user AND question_id=:q ORDER BY created_at DESC LIMIT 1").param("user",user).param("q",question).query((rs,row)->new Audio(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),(Long)rs.getObject(6))).optional().orElse(null); }
-    private SessionRow session(String user,String id) { tasks.expireVoice(user,id); return jdbc.sql("SELECT id,interview_package_id,company,role,interview_round,status,started_at,expires_at,final_interview_id,question_plan,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",user).query((rs,row)->new SessionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getObject(8,OffsetDateTime.class),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13),rs.getString(14),rs.getString(15))).optional().orElseThrow(AiMockInterviewService::notFound); }
+    private SessionRow session(String user,String id) { tasks.expireVoice(user,id); return jdbc.sql("SELECT id,interview_package_id,company,role,interview_round,status,started_at,expires_at,final_interview_id,question_plan,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id,knowledge_contexts,current_question_index FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",user).query((rs,row)->new SessionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getObject(8,OffsetDateTime.class),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13),rs.getString(14),rs.getString(15),rs.getString(16),rs.getInt(17))).optional().orElseThrow(AiMockInterviewService::notFound); }
     private QuestionRow question(String user,String session,String id) { session(user,session); return question(session,id); }
     private QuestionRow question(String session,String id) { return questions(session).stream().filter(q->q.id.equals(id)).findFirst().orElseThrow(AiMockInterviewService::notFound); }
     private QuestionRow lockedQuestion(String user,String session,String id) { return jdbc.sql("SELECT id,question_text,confirmed_answer_text,state,sort_order,answer_started_at,answer_expires_at,question_type,competency,project_name,technology,ai_feedback,knowledge_source FROM ai_mock_interview_questions WHERE id=:question AND ai_mock_interview_id=:session AND EXISTS (SELECT 1 FROM ai_mock_interviews WHERE id=:session AND user_id=:user AND status='RUNNING' AND expires_at>CURRENT_TIMESTAMP) FOR UPDATE").param("question",id).param("session",session).param("user",user).query((rs,row)->new QuestionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getInt(5),rs.getObject(6,OffsetDateTime.class),rs.getObject(7,OffsetDateTime.class),rs.getString(8),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13))).optional().orElseThrow(AiMockInterviewService::notFound); }
@@ -669,10 +753,11 @@ public class AiMockInterviewService {
     private static Range range(String value) { var matcher=java.util.regex.Pattern.compile("bytes (\\d+)-(\\d+)/(\\d+)").matcher(value==null?"":value); if(!matcher.matches()) throw new IllegalArgumentException("录音分片范围无效。"); return new Range(Long.parseLong(matcher.group(1)),Long.parseLong(matcher.group(2)),Long.parseLong(matcher.group(3))); }
     private static String sha(String value) { if(value==null||!value.matches("[0-9a-fA-F]{64}")) throw new IllegalArgumentException("录音摘要无效。"); return value.toLowerCase(Locale.ROOT); }
     private static String sha(byte[] bytes) { try { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); } catch(Exception error) { throw new IllegalStateException("无法校验录音完整性。",error); } }
-    private int questionLimit(SessionRow session) { if (!legacy(session)) { if(session.plan!=null) questionAgent.deserialize(session.plan,false); return QUESTION_LIMIT; } return session.plan==null?LEGACY_QUESTION_LIMIT:questionAgent.deserialize(session.plan,true).size(); }
+    private int questionLimit(SessionRow session) { if (!legacy(session)) { if(session.plan!=null && !incremental(session)) questionAgent.deserialize(session.plan,false); return QUESTION_LIMIT; } return session.plan==null?LEGACY_QUESTION_LIMIT:questionAgent.deserialize(session.plan,true).size(); }
     private static String legacyType(QuestionRow q) { return q.type!=null?q.type:q.sortOrder==0?"FUNDAMENTAL":q.sortOrder==1?"PROJECT":"SCENARIO"; }
     private static String audioType(byte[] b) { if(b.length>12&&b[0]=='R'&&b[1]=='I'&&b[2]=='F'&&b[3]=='F'&&b[8]=='W'&&b[9]=='A'&&b[10]=='V'&&b[11]=='E')return "audio/wav"; if(b.length>4&&b[0]=='O'&&b[1]=='g'&&b[2]=='g'&&b[3]=='S')return "audio/ogg"; if(b.length>4&&b[0]==0x1a&&b[1]==0x45&&b[2]==(byte)0xdf&&b[3]==(byte)0xa3)return "audio/webm"; if(b.length>12&&b[4]=='f'&&b[5]=='t'&&b[6]=='y'&&b[7]=='p')return "audio/mp4"; return null; }
     static String validateAudio(byte[] bytes) { if(bytes.length==0)throw new IllegalArgumentException("录音为空，请重新录音。"); if(bytes.length>MAX_AUDIO_BYTES)throw new IllegalArgumentException("录音超过 10 MiB，请缩短回答后重新录音。"); String type=audioType(bytes); if(type==null)throw new IllegalArgumentException("仅支持 WebM、Ogg、MP4 或 WAV 音频。"); return type; }
     private static String extension(String t){return t.endsWith("wav")?".wav":t.endsWith("ogg")?".ogg":t.endsWith("mp4")?".mp4":".webm";} private static String feedback(String text,Long duration){return "已确认文本 "+text.length()+" 字；当前转写结果不含词级时间戳，无法可靠计算语速、停顿或重复词。";} private static String safeName(String n){return n==null||n.isBlank()?"answer":n.replaceAll("[^\\p{L}\\p{N}._-]","_");} private static String required(String v,String l){if(v==null||v.trim().isBlank())throw new IllegalArgumentException(l+"不能为空。");return v.trim();} private static String limited(String value,String label,int maximum){if(value.length()>maximum)throw new IllegalArgumentException(label+"过长，请控制在 "+maximum+" 个字符以内。");return value;} private static NoSuchElementException notFound(){return new NoSuchElementException("资源不存在或无权访问。");}
-    private record PackageInfo(String id,String company,String role,String round){} private record SessionRow(String id,String packageId,String company,String role,String round,String status,OffsetDateTime startedAt,OffsetDateTime expiresAt,String finalId,String plan,String snapshot,String generationVersion,String sourceMode,String documentIds,String preparationId){} private record QuestionRow(String id,String text,String answer,String state,int sortOrder,OffsetDateTime answerStartedAt,OffsetDateTime answerExpiresAt,String type,String competency,String projectName,String technology,String feedback,String knowledgeSource){} private record AudioRow(String id,String questionId,String path,String type,String status,String transcript){} private record UploadRow(String id,String userId,String sessionId,String questionId,String contentType,long totalBytes,int totalParts,String sha256,String status,OffsetDateTime expiresAt,String completedAssetId){} private record PartRow(int partNo,int sizeBytes,String sha256,String path){} private record Range(long start,long end,long total){}
+    private record RecentQuestion(String sessionId,int order,QuestionHistory question,KnowledgeService.Source source){}
+    private record PackageInfo(String id,String company,String role,String round){} private record SessionRow(String id,String packageId,String company,String role,String round,String status,OffsetDateTime startedAt,OffsetDateTime expiresAt,String finalId,String plan,String snapshot,String generationVersion,String sourceMode,String documentIds,String preparationId,String knowledgeContexts,int currentIndex){} private record QuestionRow(String id,String text,String answer,String state,int sortOrder,OffsetDateTime answerStartedAt,OffsetDateTime answerExpiresAt,String type,String competency,String projectName,String technology,String feedback,String knowledgeSource){} private record AudioRow(String id,String questionId,String path,String type,String status,String transcript){} private record UploadRow(String id,String userId,String sessionId,String questionId,String contentType,long totalBytes,int totalParts,String sha256,String status,OffsetDateTime expiresAt,String completedAssetId){} private record PartRow(int partNo,int sizeBytes,String sha256,String path){} private record Range(long start,long end,long total){}
 }

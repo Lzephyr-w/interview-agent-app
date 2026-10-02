@@ -144,6 +144,32 @@ class AiMockQuestionAgent {
         return parsePlan(root,legacy,true);
     }
 
+    QuestionDraft generateKnowledge(JsonNode materials, JsonNode target, List<QuestionHistory> history, JsonNode recent, boolean avoidRecent, String knowledge) {
+        JsonNode result=model.simulate("VOICE_KNOWLEDGE_QUESTION",Map.of("materials",materials,"target",target,"history",history,"recentQuestions",recent,"knowledge",knowledge));
+        try {
+            SimulationContract.modelResult("VOICE_KNOWLEDGE_QUESTION",result);
+            QuestionDraft draft=parseQuestion(result);
+            String error=knowledgeQualityError(draft,target,materials,history);
+            if (error!=null) throw invalidQuestion(error);
+            if (avoidRecent && recentError(draft,recent)!=null) throw invalidQuestion("重复近期考察目标");
+            return draft;
+        } catch (RuntimeException error) { throw SimulationContract.retryableInvalid(); }
+    }
+
+    static String knowledgeQualityError(QuestionDraft draft, JsonNode target, JsonNode materials, List<QuestionHistory> history) {
+        if (!draft.type.equals(target.path("type").asText())) return "题型未按规则";
+        if (!draft.projectName.equals(target.path("projectName").asText())) return "项目未按冻结依据";
+        if (draft.type.equals("PROJECT") && draft.projectName.isBlank()) return "缺少真实项目";
+        if (!draft.projectName.isBlank() && !grounded(draft.projectName,materials)) return "项目未关联真实资料";
+        return historyError(draft,history);
+    }
+
+    static String recentError(QuestionDraft draft,JsonNode recent) {
+        for (JsonNode previous:recent)
+            if (same(draft.competency,previous.path("competency").asText()) || same(draft.questionText,previous.path("questionText").asText()) || similarity(normalize(draft.questionText),normalize(previous.path("questionText").asText()))>=0.65) return "重复近期考察目标";
+        return null;
+    }
+
     private List<PlanItem> parsePlan(JsonNode root, boolean legacy, boolean checkAdjacency) {
         JsonNode items = legacy && root.isArray() ? root : root.path("plan");
         if (legacy && items.isTextual()) {
@@ -226,6 +252,10 @@ class AiMockQuestionAgent {
         if (!normalize(candidate.competency).equals(normalize(plan.competency))) return "考察能力点未按计划";
         if (!normalize(candidate.projectName).equals(normalize(plan.projectName))) return "项目名未按计划或可能为虚构";
         if (!normalize(candidate.technology).equals(normalize(plan.technology))) return "技术点未按计划";
+        return historyError(candidate,history);
+    }
+
+    private static String historyError(QuestionDraft candidate,List<QuestionHistory> history) {
         String normalized = normalize(candidate.questionText);
         if (history.stream().anyMatch(old -> normalize(old.questionText).equals(normalized) || similarity(normalize(old.questionText), normalized) >= 0.65)) return "问题与本场历史问题重复";
         if (history.stream().anyMatch(old -> same(old.competency, candidate.competency))) return "考察能力点重复";

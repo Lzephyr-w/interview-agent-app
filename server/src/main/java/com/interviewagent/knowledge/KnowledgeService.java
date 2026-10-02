@@ -9,6 +9,10 @@ import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.Random;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -132,33 +136,59 @@ public class KnowledgeService {
         if (categoryIds == null || categoryIds.isEmpty() || categoryIds.size() > 10) throw new IllegalArgumentException("请选择 1–10 个知识库类别。");
         List<String> unique = categoryIds.stream().distinct().toList();
         if (unique.size() != categoryIds.size()) throw new IllegalArgumentException("知识库类别不能重复。");
-        for (String id : unique) category(user, id);
-        for (String id : unique) if (jdbc.sql("SELECT COUNT(*) FROM knowledge_documents WHERE user_id=:user AND category_id=:id")
-            .param("user",user).param("id",id).query(Integer.class).single()==0)
-            throw new IllegalArgumentException("所选类别中有空类别，请先上传文档。");
-        List<String> ids = jdbc.sql("SELECT id FROM knowledge_documents WHERE user_id=:user AND category_id IN (:categories) ORDER BY id")
-            .param("user", user).param("categories", unique).query(String.class).list();
+        var rows = jdbc.sql("SELECT c.id,d.id FROM knowledge_categories c LEFT JOIN knowledge_documents d ON d.category_id=c.id AND d.user_id=:user WHERE c.user_id=:user AND c.id IN (:categories) ORDER BY d.id")
+            .param("user",user).param("categories",unique).query((rs,row)->Map.entry(rs.getString(1),rs.getString(2)==null?"":rs.getString(2))).list();
+        Set<String> present=new HashSet<>(), nonempty=new HashSet<>();
+        List<String> ids=new ArrayList<>();
+        for(var row:rows) {
+            present.add(row.getKey());
+            if(!row.getValue().isEmpty()) { nonempty.add(row.getKey()); ids.add(row.getValue()); }
+        }
+        if(present.size()!=unique.size()) throw notFound();
+        if(nonempty.size()!=unique.size()) throw new IllegalArgumentException("所选类别中有空类别，请先上传文档。");
         if (ids.size() > 20) throw new IllegalArgumentException("一次最多选择 20 份知识库文档，请精简类别。");
         return ids;
     }
 
     public Source retrieve(String user, List<String> documentIds, String query, Set<String> used) {
+        return ranked(user, documentIds, query, used).getFirst().getKey();
+    }
+
+    public Source variedSource(List<Map.Entry<Source,Integer>> ranked, Set<String> used, String previousSource, Map<String,Integer> recentUses, Random random) {
+        var unused=ranked.stream().filter(item->!used.contains(item.getKey().id())).toList();
+        if (!unused.isEmpty()) ranked=unused;
+        int best=ranked.getFirst().getValue();
+        // ponytail: at most eight similarly relevant candidates; index retrieval if corpus size warrants it.
+        var candidates=ranked.stream().filter(item->item.getValue()>=Math.max(0,best-2)).limit(8).map(Map.Entry::getKey).toList();
+        var different=candidates.stream().filter(item->!item.id().equals(previousSource)).toList();
+        if (!different.isEmpty()) candidates=different;
+        int least=candidates.stream().mapToInt(item->recentUses.getOrDefault(item.id(),0)).min().orElse(0);
+        var choices=candidates.stream().filter(item->recentUses.getOrDefault(item.id(),0)==least).toList();
+        return choices.get(random.nextInt(choices.size()));
+    }
+
+    public List<Map.Entry<Source,Integer>> rankedSources(String user, List<String> documentIds, String query) {
+        return ranked(user,documentIds,query,Set.of());
+    }
+
+    private List<Map.Entry<Source,Integer>> ranked(String user, List<String> documentIds, String query, Set<String> used) {
         if (documentIds == null || documentIds.isEmpty()) throw new IllegalArgumentException("所选知识库缺少相关内容，请重新选择类别。");
         // ponytail: scan selected segments in memory; add an index only when real corpus size makes this slow.
         var candidates = jdbc.sql("SELECT s.id,d.id,d.original_filename,s.location,s.content,s.reference_answer,s.reminder FROM knowledge_segments s JOIN knowledge_documents d ON d.id=s.document_id WHERE d.user_id=:user AND d.id IN (:documents) ORDER BY d.id,s.position")
             .param("user", user).param("documents", documentIds)
             .query((rs, row) -> new Source(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7))).list();
         Set<String> terms = grams(query);
-        Source best = null; int bestScore = -1;
+        List<Map.Entry<Source,Integer>> ranked=new ArrayList<>();
         for (Source source : candidates) {
             if (used.contains(source.id())) continue;
             Set<String> match = grams(source.title() + source.text());
             match.retainAll(terms);
             int score = match.size() + (source.location().matches("^[SA][级級].*") ? 2 : 0);
-            if (score > bestScore) { best = source; bestScore = score; }
+            ranked.add(Map.entry(source,score));
         }
-        if (best == null) throw new IllegalArgumentException("所选知识库缺少更多可用题目或段落，请重新选择类别。");
-        return best;
+        if (ranked.isEmpty()) throw new IllegalArgumentException("所选知识库缺少更多可用题目或段落，请重新选择类别。");
+        ranked.sort(Map.Entry.comparingByValue(Comparator.reverseOrder()));
+        return ranked;
     }
 
     public void requireDocuments(String user, List<String> documentIds) {

@@ -68,7 +68,7 @@ export default function AiMockInterviewsPage() {
             <em>专注表达，逐题练习。</em>
           </h1>
           <p className="intro">
-            选择面试包和出题方式，系统会准备第一题；点击开始后进入正式面试。
+            选择面试包和出题方式，进入面试室后开始本轮练习。
           </p>
         </section>
         <Toast
@@ -91,7 +91,7 @@ export default function AiMockInterviewsPage() {
               value={packageId}
               onChange={(event) => setPackageId(event.target.value)}
             >
-              <option value="">请选择面试包</option>
+              <option value="" hidden>请选择面试包</option>
               {packages.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.company} · {item.role} · {item.interviewRound}
@@ -144,7 +144,7 @@ export default function AiMockInterviewsPage() {
               disabled={!packageId || entering || (sourceMode === "KNOWLEDGE" && categoryIds.length === 0)}
               onClick={async () => {
                 setEntering(true);
-                await prepareSelected(packageId, sourceMode, categoryIds);
+                if (sourceMode === "STANDARD") await prepareSelected(packageId, sourceMode, []);
                 const query = new URLSearchParams({ packageId, sourceMode, categoryIds: categoryIds.join(",") });
                 router.push(`/ai-mock-interviews/room?${query}`);
               }}

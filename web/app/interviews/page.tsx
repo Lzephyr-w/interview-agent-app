@@ -692,7 +692,7 @@ export default function InterviewsPage() {
                     });
                   }}
                 >
-                  <option value="">请选择面试包</option>
+                  <option value="" hidden>请选择面试包</option>
                   {packages.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.company} · {item.role} · {item.interviewRound}

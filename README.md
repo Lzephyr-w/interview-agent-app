@@ -8,22 +8,33 @@
 
 - **账户与权限**：使用 Supabase Auth 邮箱/密码登录；前端携带 JWT，后端校验 JWT 并按当前用户隔离数据。
 - **首页仪表盘**：展示资料、面试包、待复盘、训练任务等概览，汇总近期活动和薄弱点，并支持维护冲刺清单。
-<img
-  width="100%"
-  alt="p1"
-  src="https://github.com/user-attachments/assets/9a0ff783-77cd-4baa-9205-36b79a26ef7c"
-/>
+  <img width="2560" height="1185" alt="首页" src="https://github.com/user-attachments/assets/fe442dd4-cdb7-4ac1-9786-09c1b4f5c5a6" />
+
 - **资料库**：上传、预览、下载和删除 PDF、DOC、DOCX 简历文件；服务端提取简历文本。支持管理岗位 JD、项目证据卡和面试包，并将资料组合到一次面试中。项目证据卡统一记录项目名称、技术栈、项目描述与职责、项目亮点；未填写内容显示“待补充”。
 - **真实面试记录**：创建、编辑和删除面试；维护问题、回答和自评；支持粘贴转写文本按空行分段；支持上传录音、语音转写、AI 识别问答后检查并加入面试记录。
+  <img width="2560" height="1184" alt="image" src="https://github.com/user-attachments/assets/7e963210-2eb8-4bf5-8221-b36b5ba54166" />
+
 - **AI 复盘**：根据面试问题、回答和关联资料生成复盘报告、准备度、逐题建议和薄弱点标签；支持查看和删除历史复盘。
+  <img width="2560" height="1181" alt="image" src="https://github.com/user-attachments/assets/a0142222-e27c-4305-aa2c-f1495e67cd24" />
+
 - **AI 文本模拟**：开始时可选择 1–10 道主问题（旧请求默认 4 道）；每道已回答的主问题可能有 1–2 道追问，追问不计入主问题数量。支持跳过、逐题 AI 反馈，并在完成后保存为正式面试记录。
+  <img width="2560" height="1185" alt="文本模拟" src="https://github.com/user-attachments/assets/d5dc0809-f1b8-43ad-b83b-6ccc83cb109d" />
+
 - **知识库模拟**：在资料库按类别导入 MD、XLSX、DOC、DOCX；文本与语音模拟都可选择一个或多个类别，逐题检索文档片段并显示来源。仍需面试包提供岗位与真实经历背景。
+<<<<<<< HEAD
 - **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；常规模拟在创建或更新面试包后异步准备十题计划，每个槽位提供三个切入点，每场随机选取并调整同题型顺序，开始后单独生成首题；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
    <img width="100%" alt="p3" src="https://github.com/user-attachments/assets/9cd38888-e08c-4738-9b36-7853220744d7" />
+=======
+- **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
+  <img width="2560" height="1186" alt="语音模拟面试" src="https://github.com/user-attachments/assets/06712822-436c-40d7-bfb5-08fc738cedb0" />
+
+>>>>>>> caf1b93977c840bc528f00f6029cdacd88be3ce1
 - **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历生成最多 3 个具体薄弱点；每项可追溯到具体题目，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
-   <img  width="100%" alt="image" src="https://github.com/user-attachments/assets/74a29e59-ef82-46aa-8b81-4f1eaa301606" />
+   <img width="2560" height="1184" alt="薄弱点" src="https://github.com/user-attachments/assets/27707cb0-7505-4e8b-ada8-5d17aa13ee2f" />
+
 - **AI 对话**：创建带可选面试包、面试、复盘或薄弱点上下文的会话；保存历史消息，调用 AI 回复，并支持删除会话。
-   <img  width="100%" alt="p2" src="https://github.com/user-attachments/assets/96ab3e2f-2509-449b-a48b-d69af37a2f54" />
+   <img width="2560" height="1184" alt="ai对话3" src="https://github.com/user-attachments/assets/a2d670cb-8f68-447e-84e8-6ca2902b97a3" />
+
 - **私有文件存储**：简历文件和 AI 模拟录音通过服务端访问 Supabase 私有 Storage；真实面试录音仅在服务端临时保存用于识别，完成后删除。
 
 ### 当前边界

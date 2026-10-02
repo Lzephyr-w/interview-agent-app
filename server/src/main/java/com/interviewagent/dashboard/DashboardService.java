@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 class DashboardService {
-    private static final Set<String> TARGET_PATHS = Set.of("/library", "/interviews", "/interviews/new", "/mock-interviews", "/weaknesses", "/ai-conversations");
+    private static final Set<String> TARGET_PATHS = Set.of("/library", "/library?tab=interview-packages", "/library?tab=resume-files", "/library?tab=job-descriptions", "/library?tab=evidence-cards", "/library?tab=knowledge", "/interviews", "/interviews/new", "/mock-interviews", "/weaknesses", "/weaknesses?tab=tasks", "/ai-conversations");
     private final JdbcClient jdbc;
     private final WeaknessService weaknessService;
 
