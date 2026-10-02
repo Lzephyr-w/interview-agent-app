@@ -48,13 +48,24 @@ public class AiMockInterviewService {
     private final KnowledgeService knowledge;
     private final ObjectMapper json;
     private final TransactionTemplate transaction;
-    AiMockInterviewService(JdbcClient jdbc, InterviewService interviews, AiMockQuestionAgent questionAgent, AiAudioStorage storage, AudioTranscriptionService transcription, AiMockTaskService tasks, SimulationMaterials materials, AgentPythonClient agent, KnowledgeService knowledge, ObjectMapper json, PlatformTransactionManager manager) { this.jdbc = jdbc; this.interviews = interviews; this.questionAgent = questionAgent; this.storage = storage; this.transcription = transcription; this.tasks = tasks; this.materials=materials; this.agent=agent; this.knowledge=knowledge; this.json=json; this.transaction=new TransactionTemplate(manager); }
+    private final TransactionTemplate creation;
+    private final InterviewPackagePreparationService preparations;
+    AiMockInterviewService(JdbcClient jdbc, InterviewService interviews, AiMockQuestionAgent questionAgent, AiAudioStorage storage, AudioTranscriptionService transcription, AiMockTaskService tasks, SimulationMaterials materials, AgentPythonClient agent, KnowledgeService knowledge, ObjectMapper json, PlatformTransactionManager manager, InterviewPackagePreparationService preparations) { this.jdbc = jdbc; this.interviews = interviews; this.questionAgent = questionAgent; this.storage = storage; this.transcription = transcription; this.tasks = tasks; this.materials=materials; this.agent=agent; this.knowledge=knowledge; this.json=json; this.transaction=new TransactionTemplate(manager); this.creation=new TransactionTemplate(manager); this.creation.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ); this.preparations=preparations; }
 
-    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ) Session create(String userId, StartRequest request) {
-        return create(userId,request,false);
+    Session create(String userId, StartRequest request) {
+        return createFrozen(userId,request,false);
     }
-    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ) Session prepare(String userId, StartRequest request) {
-        return create(userId,request,true);
+    Session prepare(String userId, StartRequest request) {
+        return createFrozen(userId,request,true);
+    }
+    private Session createFrozen(String userId, StartRequest request, boolean prepared) {
+        // A concurrent creator may be invisible to this repeatable-read snapshot; retry the whole short transaction.
+        for (int attempt=0;;attempt++) {
+            try { return creation.execute(status->create(userId,request,prepared)); }
+            catch (org.springframework.dao.DuplicateKeyException | org.springframework.dao.CannotSerializeTransactionException error) {
+                if (attempt>=2) throw error;
+            }
+        }
     }
     private Session create(String userId, StartRequest request,boolean prepared) {
         String packageId = required(request.interviewPackageId(), "面试包");
@@ -62,10 +73,12 @@ public class AiMockInterviewService {
         String sourceMode = request.sourceMode()==null || request.sourceMode().isBlank() ? "STANDARD" : request.sourceMode();
         if (!Set.of("STANDARD","KNOWLEDGE").contains(sourceMode)) throw new IllegalArgumentException("模拟资料模式无效。");
         List<String> documentIds = sourceMode.equals("KNOWLEDGE") ? knowledge.selectedDocuments(userId,request.categoryIds()) : List.of();
+        var preparation=sourceMode.equals("STANDARD")?preparations.ensure(userId,packageId):null;
         String id = UUID.randomUUID().toString(); OffsetDateTime expires = OffsetDateTime.now().plusMinutes(prepared?15:50);
         // ponytail: the otherwise unused index marks a prepared session; begin resets its 50-minute timer.
-        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,current_question_index,material_snapshot,generation_version,source_mode,knowledge_document_ids) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:index,:snapshot,'SIMULATION_AGENT_V1',:sourceMode,:documents)").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("index",prepared?-1:0).param("snapshot",materials.capture(userId,packageId).toString()).param("sourceMode",sourceMode).param("documents",String.join(",",documentIds)).update();
-        tasks.enqueue(userId, "AI_PLAN", id, null); return detail(userId,id);
+        jdbc.sql("INSERT INTO ai_mock_interviews(id,user_id,interview_package_id,company,role,interview_round,status,expires_at,current_question_index,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id) VALUES(:id,:user,:package,:company,:role,:round,'RUNNING',:expires,:index,:snapshot,'SIMULATION_AGENT_V1',:sourceMode,:documents,:preparation)").param("id",id).param("user",userId).param("package",packageId).param("company",p.company).param("role",p.role).param("round",p.round).param("expires",expires).param("index",prepared?-1:0).param("snapshot",preparation==null?materials.capture(userId,packageId).toString():preparation.materialSnapshot()).param("sourceMode",sourceMode).param("documents",String.join(",",documentIds)).param("preparation",preparation==null?null:preparation.id()).update();
+        if (preparation==null) tasks.enqueue(userId, "AI_PLAN", id, null);
+        return detail(userId,id);
     }
     @Transactional Session begin(String userId,String id) {
         lock(userId,id);
@@ -73,6 +86,7 @@ public class AiMockInterviewService {
         if(!"RUNNING".equals(s.status) || !s.expiresAt.isAfter(OffsetDateTime.now())) throw new IllegalStateException("模拟已结束或超时，无法开始。");
         jdbc.sql("UPDATE ai_mock_interviews SET current_question_index=0,started_at=CURRENT_TIMESTAMP,expires_at=CURRENT_TIMESTAMP + INTERVAL '50' MINUTE,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND current_question_index=-1")
             .param("id",id).param("user",userId).update();
+        if (s.preparationId!=null && s.plan!=null && !hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null);
         return detail(userId,id);
     }
     Session active(String userId) { return jdbc.sql("SELECT id FROM ai_mock_interviews WHERE user_id=:user AND status IN ('RUNNING','TIME_EXPIRED') AND current_question_index>=0 ORDER BY updated_at DESC LIMIT 1").param("user",userId).query(String.class).optional().map(id -> detail(userId,id)).orElseThrow(AiMockInterviewService::notFound); }
@@ -107,6 +121,7 @@ public class AiMockInterviewService {
 
     private void processPlan(String userId, String id) {
         SessionRow s=session(userId,id);
+        if (s.preparationId!=null && s.plan==null) { applyPreparation(userId,id,preparations.get(userId,s.preparationId)); return; }
         if (s.plan != null) {
             tasks.write(() -> { if (!hasQuestion(id,0)) tasks.enqueue(userId,"AI_FIRST",id,null); });
             return;
@@ -600,10 +615,39 @@ public class AiMockInterviewService {
         SessionRow s=session(user,id);
         if (!"RUNNING".equals(s.status)) throw new IllegalStateException("模拟已结束或超时，无法继续处理。");
     }
-    private Session detail(String user,String id) { SessionRow s=session(user,id); List<QuestionRow> q=questions(id); return new Session(s.id,s.company,s.role,s.round,s.status,s.sourceMode,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),tasks.latestVoice(user,id)); }
+    public void publishPreparation(String user,String preparationId) {
+        var preparation=preparations.get(user,preparationId);
+        for (String id:jdbc.sql("SELECT id FROM ai_mock_interviews WHERE user_id=:user AND preparation_id=:preparation AND status='RUNNING' AND question_plan IS NULL AND expires_at>CURRENT_TIMESTAMP")
+            .param("user",user).param("preparation",preparationId).query(String.class).list()) applyPreparation(user,id,preparation);
+    }
+
+    private boolean applyPreparation(String user,String id,InterviewPackagePreparationService.Preparation preparation) {
+        if (preparation.generatedResult()==null) return false;
+        long started=System.nanoTime();
+        List<PlanItem> planned=preparations.planned(preparation,id);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (jdbc.sql("SELECT id FROM ai_mock_interviews WHERE id=:id AND user_id=:user AND preparation_id=:preparation AND material_snapshot=:snapshot AND question_plan IS NULL AND status='RUNNING' AND expires_at>CURRENT_TIMESTAMP FOR UPDATE")
+                .param("id",id).param("user",user).param("preparation",preparation.id()).param("snapshot",preparation.materialSnapshot()).query(String.class).optional().isEmpty()) return false;
+            jdbc.sql("UPDATE ai_mock_interviews SET question_plan=:plan,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user")
+                .param("plan",questionAgent.serialize(planned)).param("id",id).param("user",user).update();
+            int index=jdbc.sql("SELECT current_question_index FROM ai_mock_interviews WHERE id=:id").param("id",id).query(Integer.class).single();
+            if (index>=0) tasks.enqueue(user,"AI_FIRST",id,null);
+            log.info("ai_mock_timing stage=package_plan_applied sessionId={} preparationId={} elapsed_ms={}",id,preparation.id(),(System.nanoTime()-started)/1_000_000);
+            return true;
+        }));
+    }
+
+    private Session detail(String user,String id) {
+        SessionRow s=session(user,id);
+        if (s.plan==null && s.preparationId!=null && "RUNNING".equals(s.status)
+            && applyPreparation(user,id,preparations.get(user,s.preparationId))) s=session(user,id);
+        List<QuestionRow> q=questions(id);
+        var task=s.plan==null && s.preparationId!=null && "RUNNING".equals(s.status)?preparations.task(user,s.preparationId):tasks.latestVoice(user,id);
+        return new Session(s.id,s.company,s.role,s.round,s.status,s.sourceMode,s.startedAt,s.finalId,questionLimit(s),q.stream().filter(x->Set.of("OPEN","TRANSCRIBING","READY_TO_CONFIRM").contains(x.state)).findFirst().map(x->apiQuestion(x,user)).orElse(null),task);
+    }
     private Question apiQuestion(QuestionRow q,String user) { KnowledgeService.Source source=source(q.knowledgeSource); return new Question(q.id,q.text,legacyType(q),q.competency,q.answer,q.state,q.sortOrder,q.answerExpiresAt,latestAudio(user,q.id),source==null?null:source.title(),source==null?null:source.location()); }
     private Audio latestAudio(String user,String question) { return jdbc.sql("SELECT id,status,transcript,transcript_error,feedback,duration_ms FROM ai_mock_audio_assets WHERE user_id=:user AND question_id=:q ORDER BY created_at DESC LIMIT 1").param("user",user).param("q",question).query((rs,row)->new Audio(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),(Long)rs.getObject(6))).optional().orElse(null); }
-    private SessionRow session(String user,String id) { tasks.expireVoice(user,id); return jdbc.sql("SELECT id,interview_package_id,company,role,interview_round,status,started_at,expires_at,final_interview_id,question_plan,material_snapshot,generation_version,source_mode,knowledge_document_ids FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",user).query((rs,row)->new SessionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getObject(8,OffsetDateTime.class),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13),rs.getString(14))).optional().orElseThrow(AiMockInterviewService::notFound); }
+    private SessionRow session(String user,String id) { tasks.expireVoice(user,id); return jdbc.sql("SELECT id,interview_package_id,company,role,interview_round,status,started_at,expires_at,final_interview_id,question_plan,material_snapshot,generation_version,source_mode,knowledge_document_ids,preparation_id FROM ai_mock_interviews WHERE id=:id AND user_id=:user").param("id",id).param("user",user).query((rs,row)->new SessionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getObject(7,OffsetDateTime.class),rs.getObject(8,OffsetDateTime.class),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13),rs.getString(14),rs.getString(15))).optional().orElseThrow(AiMockInterviewService::notFound); }
     private QuestionRow question(String user,String session,String id) { session(user,session); return question(session,id); }
     private QuestionRow question(String session,String id) { return questions(session).stream().filter(q->q.id.equals(id)).findFirst().orElseThrow(AiMockInterviewService::notFound); }
     private QuestionRow lockedQuestion(String user,String session,String id) { return jdbc.sql("SELECT id,question_text,confirmed_answer_text,state,sort_order,answer_started_at,answer_expires_at,question_type,competency,project_name,technology,ai_feedback,knowledge_source FROM ai_mock_interview_questions WHERE id=:question AND ai_mock_interview_id=:session AND EXISTS (SELECT 1 FROM ai_mock_interviews WHERE id=:session AND user_id=:user AND status='RUNNING' AND expires_at>CURRENT_TIMESTAMP) FOR UPDATE").param("question",id).param("session",session).param("user",user).query((rs,row)->new QuestionRow(rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getInt(5),rs.getObject(6,OffsetDateTime.class),rs.getObject(7,OffsetDateTime.class),rs.getString(8),rs.getString(9),rs.getString(10),rs.getString(11),rs.getString(12),rs.getString(13))).optional().orElseThrow(AiMockInterviewService::notFound); }
@@ -630,5 +674,5 @@ public class AiMockInterviewService {
     private static String audioType(byte[] b) { if(b.length>12&&b[0]=='R'&&b[1]=='I'&&b[2]=='F'&&b[3]=='F'&&b[8]=='W'&&b[9]=='A'&&b[10]=='V'&&b[11]=='E')return "audio/wav"; if(b.length>4&&b[0]=='O'&&b[1]=='g'&&b[2]=='g'&&b[3]=='S')return "audio/ogg"; if(b.length>4&&b[0]==0x1a&&b[1]==0x45&&b[2]==(byte)0xdf&&b[3]==(byte)0xa3)return "audio/webm"; if(b.length>12&&b[4]=='f'&&b[5]=='t'&&b[6]=='y'&&b[7]=='p')return "audio/mp4"; return null; }
     static String validateAudio(byte[] bytes) { if(bytes.length==0)throw new IllegalArgumentException("录音为空，请重新录音。"); if(bytes.length>MAX_AUDIO_BYTES)throw new IllegalArgumentException("录音超过 10 MiB，请缩短回答后重新录音。"); String type=audioType(bytes); if(type==null)throw new IllegalArgumentException("仅支持 WebM、Ogg、MP4 或 WAV 音频。"); return type; }
     private static String extension(String t){return t.endsWith("wav")?".wav":t.endsWith("ogg")?".ogg":t.endsWith("mp4")?".mp4":".webm";} private static String feedback(String text,Long duration){return "已确认文本 "+text.length()+" 字；当前转写结果不含词级时间戳，无法可靠计算语速、停顿或重复词。";} private static String safeName(String n){return n==null||n.isBlank()?"answer":n.replaceAll("[^\\p{L}\\p{N}._-]","_");} private static String required(String v,String l){if(v==null||v.trim().isBlank())throw new IllegalArgumentException(l+"不能为空。");return v.trim();} private static String limited(String value,String label,int maximum){if(value.length()>maximum)throw new IllegalArgumentException(label+"过长，请控制在 "+maximum+" 个字符以内。");return value;} private static NoSuchElementException notFound(){return new NoSuchElementException("资源不存在或无权访问。");}
-    private record PackageInfo(String id,String company,String role,String round){} private record SessionRow(String id,String packageId,String company,String role,String round,String status,OffsetDateTime startedAt,OffsetDateTime expiresAt,String finalId,String plan,String snapshot,String generationVersion,String sourceMode,String documentIds){} private record QuestionRow(String id,String text,String answer,String state,int sortOrder,OffsetDateTime answerStartedAt,OffsetDateTime answerExpiresAt,String type,String competency,String projectName,String technology,String feedback,String knowledgeSource){} private record AudioRow(String id,String questionId,String path,String type,String status,String transcript){} private record UploadRow(String id,String userId,String sessionId,String questionId,String contentType,long totalBytes,int totalParts,String sha256,String status,OffsetDateTime expiresAt,String completedAssetId){} private record PartRow(int partNo,int sizeBytes,String sha256,String path){} private record Range(long start,long end,long total){}
+    private record PackageInfo(String id,String company,String role,String round){} private record SessionRow(String id,String packageId,String company,String role,String round,String status,OffsetDateTime startedAt,OffsetDateTime expiresAt,String finalId,String plan,String snapshot,String generationVersion,String sourceMode,String documentIds,String preparationId){} private record QuestionRow(String id,String text,String answer,String state,int sortOrder,OffsetDateTime answerStartedAt,OffsetDateTime answerExpiresAt,String type,String competency,String projectName,String technology,String feedback,String knowledgeSource){} private record AudioRow(String id,String questionId,String path,String type,String status,String transcript){} private record UploadRow(String id,String userId,String sessionId,String questionId,String contentType,long totalBytes,int totalParts,String sha256,String status,OffsetDateTime expiresAt,String completedAssetId){} private record PartRow(int partNo,int sizeBytes,String sha256,String path){} private record Range(long start,long end,long total){}
 }

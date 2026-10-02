@@ -1,6 +1,7 @@
 package com.interviewagent.ai;
 
 import static com.interviewagent.ai.AiTaskApi.Task;
+import static com.interviewagent.aimock.InterviewPackagePreparationService.TASK_TYPE;
 
 import java.sql.ResultSet;
 import java.time.OffsetDateTime;
@@ -35,9 +36,15 @@ public class AiMockTaskService {
         if (jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE id=:id AND user_id=:user AND status<>'RUNNING'").param("id",id).param("user",user).query(Integer.class).single()>0) cancelForResource(user,id);
     }
 
-    private String table(ClaimedTask task) { return task.taskType().startsWith("AI_")?"ai_mock_interviews":"mock_interviews"; }
+    private String table(ClaimedTask task) { return TASK_TYPE.equals(task.taskType())?"ai_mock_package_preparations":task.taskType().startsWith("AI_")?"ai_mock_interviews":"mock_interviews"; }
 
     private void running(ClaimedTask task,boolean lock) {
+        if (TASK_TYPE.equals(task.taskType())) {
+            if (jdbc.sql("SELECT id FROM ai_mock_package_preparations WHERE id=:id AND user_id=:user"+(lock?" FOR UPDATE":""))
+                .param("id",task.resourceId()).param("user",task.userId()).query(String.class).optional().isPresent()) return;
+            if (!lock) cancelForResource(task.userId(),task.resourceId());
+            throw new IllegalStateException("面试包准备资料已失效。");
+        }
         String state=jdbc.sql("SELECT status FROM "+table(task)+" WHERE id=:id AND user_id=:user"+(lock?" FOR UPDATE":""))
             .param("id",task.resourceId()).param("user",task.userId()).query(String.class).optional().orElse("");
         if (!state.equals("RUNNING")) {
@@ -53,7 +60,8 @@ public class AiMockTaskService {
         if (task==null) throw new IllegalStateException("后台任务租约已失效。");
         String resourceTable=table(task);
         String expires=task.taskType().startsWith("AI_")?" AND expires_at>CURRENT_TIMESTAMP":"";
-        if (jdbc.sql("UPDATE ai_mock_tasks SET locked_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND resource_id=:resource AND task_type=:type AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND EXISTS (SELECT 1 FROM "+resourceTable+" WHERE id=:resource AND user_id=:user AND status='RUNNING'"+expires+")")
+        String state=TASK_TYPE.equals(task.taskType())?"":" AND status='RUNNING'";
+        if (jdbc.sql("UPDATE ai_mock_tasks SET locked_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND resource_id=:resource AND task_type=:type AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND EXISTS (SELECT 1 FROM "+resourceTable+" WHERE id=:resource AND user_id=:user"+state+expires+")")
             .param("id",task.id()).param("user",task.userId()).param("resource",task.resourceId()).param("type",task.taskType()).param("token",task.workerToken()).update()==1) return;
         if (task.taskType().startsWith("AI_")) expireVoice(task.userId(),task.resourceId());
         running(task,false);
@@ -109,7 +117,7 @@ public class AiMockTaskService {
     @Transactional
     public ClaimedTask claim() {
         expireStale();
-        String id = jdbc.sql("SELECT candidate.id FROM ai_mock_tasks candidate WHERE ((candidate.status='PENDING' AND candidate.available_at<=CURRENT_TIMESTAMP) OR (candidate.status='PROCESSING' AND candidate.locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND candidate.attempts < candidate.max_attempts AND NOT EXISTS (SELECT 1 FROM ai_mock_tasks active WHERE active.resource_id=candidate.resource_id AND active.status='PROCESSING' AND active.locked_at>=CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND NOT ((candidate.task_type='AI_PREPARE_NEXT' AND active.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')) OR (active.task_type='AI_PREPARE_NEXT' AND candidate.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')))) ORDER BY CASE WHEN candidate.task_type IN ('AI_NEXT','MOCK_NEXT','AI_FINALIZE_AUDIO','AI_AUDIO') THEN 0 WHEN candidate.task_type='AI_PREPARE_NEXT' THEN 2 ELSE 1 END,candidate.available_at,candidate.created_at LIMIT 1")
+        String id = jdbc.sql("SELECT candidate.id FROM ai_mock_tasks candidate WHERE ((candidate.status='PENDING' AND candidate.available_at<=CURRENT_TIMESTAMP) OR (candidate.status='PROCESSING' AND candidate.locked_at < CURRENT_TIMESTAMP - INTERVAL '2' MINUTE)) AND candidate.attempts < candidate.max_attempts AND NOT EXISTS (SELECT 1 FROM ai_mock_tasks active WHERE active.resource_id=candidate.resource_id AND active.status='PROCESSING' AND active.locked_at>=CURRENT_TIMESTAMP - INTERVAL '2' MINUTE AND NOT ((candidate.task_type='AI_PREPARE_NEXT' AND active.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')) OR (active.task_type='AI_PREPARE_NEXT' AND candidate.task_type IN ('AI_FINALIZE_AUDIO','AI_AUDIO','AI_FEEDBACK')))) ORDER BY CASE WHEN candidate.task_type IN ('AI_NEXT','MOCK_NEXT','AI_FINALIZE_AUDIO','AI_AUDIO') THEN 0 WHEN candidate.task_type='AI_PREPARE_NEXT' THEN 2 WHEN candidate.task_type='PACKAGE_VOICE_PLAN' THEN 3 ELSE 1 END,candidate.available_at,candidate.created_at LIMIT 1")
             .query(String.class).list().stream().findFirst().orElse(null);
         if (id == null) return null;
         String token = UUID.randomUUID().toString();
@@ -118,7 +126,7 @@ public class AiMockTaskService {
         if (updated == 0) return null;
         ClaimedTask task=jdbc.sql("SELECT id,user_id,task_type,resource_id,related_id,worker_token,available_at FROM ai_mock_tasks WHERE id=:id AND worker_token=:token")
             .param("id", id).param("token", token).query((rs, row) -> new ClaimedTask(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),Math.max(0,System.currentTimeMillis()-rs.getObject(7,OffsetDateTime.class).toInstant().toEpochMilli()))).single();
-        if(task.taskType().startsWith("AI_")) org.slf4j.LoggerFactory.getLogger(AiMockTaskService.class).info("ai_mock_timing stage=queue taskId={} sessionId={} taskType={} queue_wait_ms={}",task.id(),task.resourceId(),task.taskType(),task.queueWaitMs());
+        if(task.taskType().startsWith("AI_") || TASK_TYPE.equals(task.taskType())) org.slf4j.LoggerFactory.getLogger(AiMockTaskService.class).info("ai_mock_timing stage=queue taskId={} sessionId={} taskType={} queue_wait_ms={}",task.id(),task.resourceId(),task.taskType(),task.queueWaitMs());
         return task;
     }
 
@@ -133,7 +141,7 @@ public class AiMockTaskService {
         String error = stableError(exception);
         boolean retryable=exception instanceof SimulationException e && e.retryable();
         int attempts=jdbc.sql("SELECT attempts FROM ai_mock_tasks WHERE id=:id").param("id",task.id()).query(Integer.class).optional().orElse(0);
-        long retryDelaySeconds = retryable && Set.of("AI_NEXT","AI_PREPARE_NEXT").contains(task.taskType())
+        long retryDelaySeconds = retryable && Set.of("AI_FIRST","AI_NEXT","AI_PREPARE_NEXT").contains(task.taskType())
             && exception instanceof SimulationException e
             && e.code().equals("INVALID_MODEL_OUTPUT") ? 0 : attempts<=1 ? 5 : 15;
         jdbc.sql("UPDATE ai_mock_tasks SET status=CASE WHEN :retry AND attempts<max_attempts THEN 'PENDING' ELSE 'FAILED' END,error=:error,available_at=:available,locked_at=NULL,worker_token=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND worker_token=:token AND status='PROCESSING' AND locked_at>CURRENT_TIMESTAMP - INTERVAL '2' MINUTE")
@@ -161,7 +169,8 @@ public class AiMockTaskService {
     }
 
     private static Task api(ResultSet rs) throws java.sql.SQLException {
-        return new Task(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getInt(5), rs.getInt(6), rs.getString(7), rs.getObject(8, OffsetDateTime.class), rs.getObject(9, OffsetDateTime.class));
+        String status=rs.getString(4);
+        return new Task(rs.getString(1), rs.getString(2), rs.getString(3), status, rs.getInt(5), rs.getInt(6), "FAILED".equals(status)?rs.getString(7):"", rs.getObject(8, OffsetDateTime.class), rs.getObject(9, OffsetDateTime.class));
     }
 
     public static String stableError(RuntimeException exception) {

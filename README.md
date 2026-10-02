@@ -18,7 +18,7 @@
 - **AI 复盘**：根据面试问题、回答和关联资料生成复盘报告、准备度、逐题建议和薄弱点标签；支持查看和删除历史复盘。
 - **AI 文本模拟**：开始时可选择 1–10 道主问题（旧请求默认 4 道）；每道已回答的主问题可能有 1–2 道追问，追问不计入主问题数量。支持跳过、逐题 AI 反馈，并在完成后保存为正式面试记录。
 - **知识库模拟**：在资料库按类别导入 MD、XLSX、DOC、DOCX；文本与语音模拟都可选择一个或多个类别，逐题检索文档片段并显示来源。仍需面试包提供岗位与真实经历背景。
-- **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
+- **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；常规模拟在创建或更新面试包后异步准备十题计划，每个槽位提供三个切入点，每场随机选取并调整同题型顺序，开始后单独生成首题；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
    <img width="100%" alt="p3" src="https://github.com/user-attachments/assets/9cd38888-e08c-4738-9b36-7853220744d7" />
 - **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历生成最多 3 个具体薄弱点；每项可追溯到具体题目，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
    <img  width="100%" alt="image" src="https://github.com/user-attachments/assets/74a29e59-ef82-46aa-8b81-4f1eaa301606" />
@@ -41,7 +41,7 @@
 | 前端 | Next.js 15.2.4、React 19.0.0、TypeScript 5.8.2 |
 | 后端 | Java 21、Spring Boot 3.4.3、Spring Security、Spring JDBC |
 | 数据库 | PostgreSQL / Supabase PostgreSQL；未配置数据库连接时默认使用 H2 内存数据库 |
-| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 至 V31 |
+| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 至 V32 |
 | 文件解析 | Apache PDFBox 3.0.8、Apache POI 5.5.1 |
 | 认证与存储 | Supabase Auth、Supabase 私有 Storage |
 | AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；腾讯云录音文件识别 API |
@@ -193,7 +193,7 @@ py -3.10 -m pip install -e ".[test]"
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 至 V31 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 至 V32 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
 
 ### 3.6 启动后端
 
@@ -271,7 +271,8 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 
 | operation | input（均含 materials、history） | result |
 | --- | --- | --- |
-| VOICE_PLAN | 冻结资料 | plan：严格 10 项，每项 order/type/competency/projectName/technology/angle |
+| VOICE_PLAN | 冻结资料 | plan：严格 10 项，每项 order/type/competency/projectName/technology/angle；firstQuestion：首题正文和匹配第一个槽位的元数据 |
+| VOICE_PLAN_ONLY | 冻结资料，可选 focusCount=1或3 | plan：严格 10 项，沿用六个槽位字段，并增加 alternatives：0–2 个仅含 competency/angle 的候选；不返回题目正文或 firstQuestion |
 | VOICE_QUESTION | 加 slot | questionText/type/competency/projectName/technology |
 | VOICE_FEEDBACK | 加 questionText、answer | feedback |
 | TEXT_MAIN_QUESTION | 历史题目 | questionText |
@@ -282,16 +283,19 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 
 - Java 是唯一业务事实来源：JWT 归属校验、资料授权和裁剪、会话/任务/时限、事务、幂等、题数顺序和最终校验。wire 上问题最多 800 字符，业务质量上问题正文最多 200 字符且最多一个问号；反馈最多两句，题目元数据最多 120 字符，计划字段不得承载问题；非法结果不落库。新会话的 PROJECT 槽位和题目必须引用冻结快照中的真实项目。文本模拟由用户选 1–10 道主问题；已回答的主问题有首道追问，首道追问标记“不确定”时可能追加第二道，追问不计入主问题数量。语音固定前 5 题基础、随后 4 题项目、最后 1 题场景或行为。
 - V24 在两个会话表增加 `material_snapshot`，创建事务内冻结公司、岗位、轮次、JD（8,000 字符）、已解析简历（12,000 字符）和证据卡四字段。最多 30 张证据卡，按固定预算分摊裁剪描述/亮点/技术栈并保留项目名；超限明确报错。后续修改资料不改变本场出题或反馈的输入。
+- V32 增加 `ai_mock_package_preparations` 与语音会话的 `preparation_id`。创建或更新面试包仅在保存事务内入队 `PACKAGE_VOICE_PLAN`，后台调用 `VOICE_PLAN_ONLY`；结果按实际裁剪资料的 SHA-256 指纹和规则版本复用。每个槽位有默认能力点/角度和零至两个有效候选，沿用真实项目与技术点；每场选取一个切入点，随机排列第 1–5 题和第 6–9 题，保留分布、去重和相邻字段限制，然后冻结选定计划。`/prepare` 不生成首题，`begin` 激活五十分钟计时后入队 `AI_FIRST`，使用 `VOICE_QUESTION` 生成本场首题；直接创建正式会话也会入队首题。准备中多个会话共用计划任务，完成后只为已开始会话入队首题。轮询与重试不重新抽选。JD 或证据卡独立修改后在下次准备入口核对指纹，旧包自动补充；预备会话仍十五分钟过期。规则版本已提升至 `voice-plan-only-v3`，旧缓存不会供新会话复用，已存在会话保持冻结资料和计划。知识库与文本模拟沿用原流程。
 - V24 给语音会话增加 `generation_version`：历史默认 LEGACY，新建显式写 SIMULATION_AGENT_V1。只有 LEGACY 能读取旧 3 题/无计划数据；新会话始终返回 10 题并拒绝 3 项计划。无快照的历史会话继续按原授权关联查询，不回填伪快照。
 - Python 的小型无状态 simulation 模块负责固定 Prompt、simulation 专用 JSON mode 和 Markdown 围栏/说明容错解析；每个请求只调用模型一次。不复用通用聊天 AgentRuntime，不调用 Java 工具、不连接数据库，不存储会话。
+- 十题计划稳定性修订：完整展示十槽 JSON 示例，首次请求三个切入点，后续任务尝试使用 `focusCount=1` 只请求基础十题。计划数组、十个独立 JSON 对象、数字字符串顺序、题型大小写及缺失空技术字段可规范化；不足十题、截断或歧义 JSON、重复默认能力点、虚构项目继续拒绝。候选缺失/重复/非法只剔除候选，不拖垮有效基础计划；Java 可重新排列相同题型槽位以满足相邻限制，选项数量为零时仍随机排列并冻结。规则版本为 `voice-plan-only-v3`。2026-10-02 故障的三次日志分别为 Extra data、fields、plan；本次 Python 59 项、相关 Java 24 项通过，同份 PostgreSQL 冻结资料的新提示词真实模型请求返回有效十题。尚未重启运行服务，不代表已恢复原失败任务或达到零失败率。
+- 语音出题若返回多个普通问句，会先保留带前置背景的第一个完整问句，再执行原有严格校验；含引号、代码、首问超长或括号不完整时不截断，仍由后台重试。日志只记录修复原因，不记录正文。首题格式/质量失败与下一题相同，最多三次立即重新排队；服务不可用/超时保留退避。任务 API 仅在最终 FAILED 时返回错误，PENDING/PROCESSING 不暴露上次失败；重试耗尽提示“本次内容未能生成，请重试”，错误代码保留用于诊断。
 - 每次模拟 HTTP 请求预算 70 秒，Python 按统一 deadline 取消模型等待，并关闭模型 SDK 自动重试；JSON 或结构非法返回可重试错误，由现有 ai_mock_tasks 完成新的完整尝试。MODEL_TIMEOUT、MODEL_UNAVAILABLE 和 Java 业务质量拒绝均最多自动尝试 3 次，间隔 5 秒、15 秒；V24 的 available_at 防止忙轮询。手动重试复用同一任务/资源并重置尝试次数。通用聊天的 90 秒策略不变。
 - 短事务在写入前锁定会话并核验任务令牌和两分钟租约；长模型调用不占数据库事务。会话过期统一转换 TIME_EXPIRED 并取消无意义任务，过期或旧 worker 的结果不可写入。处理中禁止结束保存；FAILED 可重试或结束保存已答内容；重复 finish 返回同一记录。
 - V24 另增加语音题目的 ai_feedback，用于确认文本的逐题反馈；录音反馈同时保留在原音频记录中，重试复用已保存转写。无词级时间戳，不推断语速、停顿或情绪。
 - 日志只记录关联 ID、操作、结果码、错误类别和耗时，不记录资料/回答/模型原文。AI 复盘、录音导入和薄弱点分析仍使用 ReviewModelClient；通用对话仍使用 /v1/agent/reply。
 
-`VOICE_PLAN` 已合并返回 10 题计划和首题；不增加 Redis、消息队列、向量库、多 Agent、LangGraph Checkpointer 或第二套会话存储。AI 对话现支持 SSE 流式输出，刷新后重新进入会话会自动恢复未完成回复，旧的非流式接口仍保留。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
+常规模拟使用 `VOICE_PLAN_ONLY` 只预生成计划；知识库及历史会话沿用 `VOICE_PLAN` 合并返回计划和首题。没有新增依赖或题库服务。AI 对话现支持 SSE 流式输出，刷新后重新进入会话会自动恢复未完成回复，旧的非流式接口仍保留。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
 
-正常新建语音会话只发起一次 `VOICE_PLAN` 模型请求，并在同一短事务内写入计划和首题；部署期间遗留的 `AI_FIRST`/历史 `AI_CREATE` 任务仍保留兼容处理。
+常规模拟命中计划缓存时不再规划，但启动后仍需一次首题模型请求；候选随机化增加多样性，不保证跨场题目完全不重复，也不承诺首题即时返回。需同时重启 Java 后端和 Python Agent 才能使用新增操作；部署期间遗留的 `AI_FIRST`/历史 `AI_CREATE` 与旧计划结果仍保留兼容处理。
 
 
 ### 2026-10-01：真实面试录音导入当前基线

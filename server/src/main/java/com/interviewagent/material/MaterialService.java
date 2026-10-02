@@ -1,6 +1,7 @@
 package com.interviewagent.material;
 
 import static com.interviewagent.material.MaterialRequests.*;
+import com.interviewagent.aimock.InterviewPackagePreparationService;
 
 import java.util.List;
 import java.util.Map;
@@ -14,8 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class MaterialService {
     private final JdbcClient jdbc;
     private final ResumeFileService resumeFiles;
+    private final InterviewPackagePreparationService preparations;
 
-    public MaterialService(JdbcClient jdbc, ResumeFileService resumeFiles) { this.jdbc = jdbc; this.resumeFiles = resumeFiles; }
+    public MaterialService(JdbcClient jdbc, ResumeFileService resumeFiles, InterviewPackagePreparationService preparations) { this.jdbc = jdbc; this.resumeFiles = resumeFiles; this.preparations=preparations; }
 
     public List<Resume> resumes(String userId) {
         return jdbc.sql("SELECT id, title, content FROM resumes WHERE user_id = :userId ORDER BY updated_at DESC")
@@ -122,6 +124,7 @@ public class MaterialService {
         jdbc.sql("INSERT INTO interview_packages (id, user_id, company, role, interview_round, resume_file_id, job_description_id) VALUES (:id, :userId, :company, :role, :interviewRound, :resumeFileId, :jobDescriptionId)")
             .param("id", id).param("userId", userId).param("company", result.company()).param("role", result.role()).param("interviewRound", result.interviewRound()).param("resumeFileId", result.resumeFileId()).param("jobDescriptionId", result.jobDescriptionId()).update();
         replaceEvidenceCards(id, result.evidenceCardIds());
+        preparations.queue(userId,id);
         return result;
     }
 
@@ -131,10 +134,12 @@ public class MaterialService {
         if (jdbc.sql("UPDATE interview_packages SET company = :company, role = :role, interview_round = :interviewRound, resume_file_id = :resumeFileId, job_description_id = :jobDescriptionId, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND user_id = :userId")
             .param("id", id).param("userId", userId).param("company", result.company()).param("role", result.role()).param("interviewRound", result.interviewRound()).param("resumeFileId", result.resumeFileId()).param("jobDescriptionId", result.jobDescriptionId()).update() == 0) throw notFound();
         replaceEvidenceCards(id, result.evidenceCardIds());
+        preparations.queue(userId,id);
         return result;
     }
 
-    public void deleteInterviewPackage(String userId, String id) { delete("interview_packages", userId, id); }
+    @Transactional
+    public void deleteInterviewPackage(String userId, String id) { preparations.deleteTasks(userId,id); delete("interview_packages", userId, id); }
 
     private InterviewPackage packageFromRequest(String id, String userId, InterviewPackageRequest request) {
         String resumeFileId = required(request.resumeFileId(), "简历文件", 200); String jobDescriptionId = required(request.jobDescriptionId(), "JD", 200);

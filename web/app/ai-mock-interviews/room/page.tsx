@@ -298,21 +298,21 @@ export default function AiMockInterviewRoomPage() {
     }));
   }, [current?.id,session?.id,selected?.id]);
   useEffect(() => {
-    if (!entered || !startClickedAt.current || current?.sortOrder !== 0 || firstShownLogged.current) return;
+    if (!entered || starting || !startClickedAt.current || current?.sortOrder !== 0 || firstShownLogged.current) return;
     firstShownLogged.current=true;
     console.info("[ai-mock-timing]",JSON.stringify({
       stage:"first_question_visible_after_start",sessionId:session?.id,
       elapsed_ms:Math.round(performance.now()-startClickedAt.current),
     }));
-  }, [entered,current?.id,session?.id]);
+  }, [entered,starting,current?.id,session?.id]);
   useEffect(() => {
     if (current && spokenQuestion.current !== current.id) {
-      if (!entered) return;
+      if (!entered || starting) return;
       spokenQuestion.current = current.id;
       speak();
       if (current.sortOrder === 0) setNotice("面试已开始，第一题正在朗读。");
     }
-  }, [current?.id]);
+  }, [current?.id,entered,starting]);
   useEffect(() => {
     setCountdownDeadline(null);
     setRemaining(null);
@@ -401,18 +401,13 @@ export default function AiMockInterviewRoomPage() {
     }
     startingInterview.current = true;
     setBusy(true);
-    if (session?.currentQuestion?.sortOrder === 0) {
-      setEntered(true);
-      setStarting(true);
-    }
+    setStarting(true);
     try {
       microphone.current = await navigator.mediaDevices.getUserMedia({ audio: true });
       const prepared=await (preparePromise.current ?? api<Session>("/api/v1/ai-mock-interviews/prepare", {
         method:"POST",body:JSON.stringify(setup.current.body),
       }));
       if (session?.id !== prepared.id) setSession(prepared);
-      setEntered(true);
-      setStarting(true);
       const begun=await api<Session>(`/api/v1/ai-mock-interviews/${prepared.id}/begin`,{method:"POST"});
       window.sessionStorage.setItem(`ai-mock-session:${setup.current.selection}`,begun.id);
       window.sessionStorage.removeItem(`ai-mock-prepared:${setup.current.selection}`);
@@ -538,7 +533,7 @@ export default function AiMockInterviewRoomPage() {
     setNotice("录音已取消，未提交。 ");
   }
   function speak() {
-    if (!current || !window.speechSynthesis) return;
+    if (!entered || starting || !current || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(current.questionText);
     utterance.lang = "zh-CN";
@@ -798,6 +793,7 @@ export default function AiMockInterviewRoomPage() {
             aria-label="退出模拟"
             title="退出模拟"
             onClick={() => setWelcomeExitDialog(true)}
+            disabled={busy}
           >
             <Icon name="close" />
           </button>
@@ -840,6 +836,8 @@ export default function AiMockInterviewRoomPage() {
             返回选择
           </Link>
         </section>
+      ) : starting ? (
+        <RoomLoading label="正在启动面试…" />
       ) : !entered ? (
         <section className="ai-room-brief ai-room-start">
           <h1>准备好开始了吗？</h1>
@@ -940,7 +938,7 @@ export default function AiMockInterviewRoomPage() {
             )}
             {preparingRecording || busy || blocksQuestion ? (
               <p className="ai-room-processing">
-                {starting ? "正在启动面试…" : preparingRecording ? "正在准备回答…" : uploadPending ? `正在上传录音 ${Math.round(uploadProgress * 100)}%…` : "正在提交回答并准备下一题…"}
+                {preparingRecording ? "正在准备回答…" : uploadPending ? `正在上传录音 ${Math.round(uploadProgress * 100)}%…` : "正在提交回答并准备下一题…"}
               </p>
             ) : recording ? (
               <>

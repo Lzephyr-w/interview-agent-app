@@ -170,7 +170,7 @@ class AiMockQuestionAgentTest {
         awaitTask(taskId,1,"PENDING");
         retryNow(taskId,2,"PENDING"); retryNow(taskId,3,"FAILED");
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("无效")));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("FAILED")).andExpect(jsonPath("$.error").value(org.hamcrest.Matchers.containsString("未能生成")));
         mockMvc.perform(get("/api/v1/ai-mock-tasks/{id}", taskId).with(jwt().jwt(token -> token.subject("user-b"))))
             .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/ai-mock-tasks/{id}/retry", taskId).with(jwt().jwt(token -> token.subject("user-a"))))
@@ -182,11 +182,21 @@ class AiMockQuestionAgentTest {
     }
 
     @Test
-    void invalidQuestionJsonCreatesNeitherSessionNorQuestion() throws Exception {
+    void invalidPlanAlternativesDoNotPublishUntilRetry() throws Exception {
         String packageId = packageFor("invalid-question-user");
-        var invalid=json.readTree(validPlan());
-        ((com.fasterxml.jackson.databind.node.ObjectNode)invalid.path("firstQuestion")).put("competency","错误能力");
-        when(model.simulate(eq("VOICE_PLAN"),anyMap())).thenReturn(invalid, json.readTree(validPlan()));
+        var valid=(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(validPlan());
+        valid.remove("firstQuestion");
+        for (var item:valid.path("plan")) {
+            var options=((com.fasterxml.jackson.databind.node.ObjectNode)item).putArray("alternatives");
+            for (int option=1;option<=2;option++) options.addObject().put("competency",item.path("competency").asText()+"切入"+option).put("angle",item.path("angle").asText()+"切入"+option);
+        }
+        var invalid=valid.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode)invalid.path("plan").get(0).path("alternatives").get(0)).put("competency",valid.path("plan").get(0).path("competency").asText());
+        when(model.simulate(eq("VOICE_PLAN_ONLY"),anyMap())).thenReturn(invalid,valid);
+        when(model.simulate(eq("VOICE_QUESTION"),anyMap())).thenAnswer(call->{
+            var slot=(com.fasterxml.jackson.databind.node.ObjectNode)json.valueToTree(call.getArgument(1)).path("slot").deepCopy();
+            slot.remove(List.of("order","angle")); return slot.put("questionText","浏览器如何调度微任务？");
+        });
         MvcResult created = mockMvc.perform(post("/api/v1/ai-mock-interviews").with(jwt().jwt(token -> token.subject("invalid-question-user"))).contentType("application/json").content("{\"interviewPackageId\":\"" + packageId + "\"}"))
             .andExpect(status().isCreated()).andReturn();
         String sessionId = json.readTree(created.getResponse().getContentAsString()).get("id").asText();
@@ -199,6 +209,8 @@ class AiMockQuestionAgentTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("COMPLETED"));
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user'").query(Integer.class).single());
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interviews WHERE user_id='invalid-question-user' AND question_plan IS NOT NULL").query(Integer.class).single());
+        String firstTask=jdbc.sql("SELECT id FROM ai_mock_tasks WHERE resource_id=:id AND task_type='AI_FIRST'").param("id",sessionId).query(String.class).single();
+        awaitTask(firstTask,1,"COMPLETED");
         assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM ai_mock_interview_questions WHERE ai_mock_interview_id=:id").param("id", sessionId).query(Integer.class).single());
     }
 

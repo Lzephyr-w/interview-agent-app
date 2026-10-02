@@ -23,6 +23,68 @@ class AiMockQuestionAgent {
         return planAndFirst(materials).plan();
     }
 
+    JsonNode planOnly(JsonNode materials) {
+        return planOnly(materials,3);
+    }
+
+    JsonNode planOnly(JsonNode materials, int focusCount) {
+        JsonNode result=model.simulate("VOICE_PLAN_ONLY",Map.of("materials",materials,"history",List.of(),"focusCount",focusCount));
+        SimulationContract.modelResult("VOICE_PLAN_ONLY",result);
+        List<PlanItem> base=parsePlan(result,false,false);
+        if (adjacentError(base)!=null) {
+            List<PlanItem> reordered=reorderPlanSlots(base);
+            if (reordered!=null) {
+                var repaired=result.deepCopy();
+                var array=((com.fasterxml.jackson.databind.node.ObjectNode)repaired).putArray("plan");
+                for (PlanItem item:reordered) {
+                    int original=0;
+                    while (!base.get(original).competency.equals(item.competency)) original++;
+                    var node=((com.fasterxml.jackson.databind.node.ObjectNode)result.path("plan").get(original)).deepCopy();
+                    node.put("order",item.order); array.add(node);
+                }
+                result=repaired;
+                log.info("ai_mock_timing stage=plan_only_slots_reordered");
+            }
+        }
+        validatePlanOnly(result,materials);
+        return result;
+    }
+
+    void validatePlanOnly(JsonNode result, JsonNode materials) {
+        try {
+            SimulationContract.modelResult("VOICE_PLAN_ONLY",result);
+            List<PlanItem> plan=parsePlan(result,false);
+            if (plan.stream().anyMatch(item -> !item.projectName.isBlank() && !grounded(item.projectName,materials))) throw invalidPlan("project_name_not_grounded");
+            Set<String> competencies=new HashSet<>();
+            for (JsonNode item:result.path("plan")) {
+                if (!competencies.add(normalize(item.path("competency").asText()))) throw invalidPlan("duplicate_competency");
+                for (JsonNode option:item.path("alternatives"))
+                    if (!competencies.add(normalize(option.path("competency").asText()))) throw invalidPlan("duplicate_alternative_competency");
+            }
+        } catch (RuntimeException error) { throw SimulationContract.retryableInvalid(); }
+    }
+
+    List<PlanItem> selectPlan(JsonNode result, JsonNode materials, Random random) {
+        validatePlanOnly(result,materials);
+        // ponytail: bounded shuffling of ten slots; retain the validated base order if constraints prevent a shuffle.
+        for (int attempt=0;attempt<48;attempt++) {
+            List<PlanItem> selected=new ArrayList<>();
+            for (JsonNode item:result.path("plan")) {
+                int choice=random.nextInt(item.path("alternatives").size()+1);
+                JsonNode focus=choice==0?item:item.path("alternatives").get(choice-1);
+                selected.add(new PlanItem(item.path("order").asInt(),item.path("type").asText(),focus.path("competency").asText(),item.path("projectName").asText(),item.path("technology").asText(),focus.path("angle").asText()));
+            }
+            Collections.shuffle(selected.subList(0,5),random);
+            Collections.shuffle(selected.subList(5,9),random);
+            for (int i=0;i<selected.size();i++) {
+                PlanItem item=selected.get(i);
+                selected.set(i,new PlanItem(i+1,item.type,item.competency,item.projectName,item.technology,item.angle));
+            }
+            if (adjacentError(selected)==null) return List.copyOf(selected);
+        }
+        return parsePlan(result,false);
+    }
+
     PlanAndFirst planAndFirst(JsonNode materials) {
         return planAndFirst(materials, null);
     }
@@ -31,6 +93,10 @@ class AiMockQuestionAgent {
         Map<String,Object> input = new HashMap<>(Map.of("materials",materials,"history",List.of()));
         if (knowledge != null) input.put("knowledge", knowledge);
         JsonNode result=model.simulate("VOICE_PLAN",input);
+        return validatePlanAndFirst(result,materials);
+    }
+
+    PlanAndFirst validatePlanAndFirst(JsonNode result, JsonNode materials) {
         try {
             SimulationContract.modelResult("VOICE_PLAN",result);
             List<PlanItem> plan=parsePlan(result,false,false);

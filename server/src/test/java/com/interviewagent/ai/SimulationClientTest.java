@@ -50,6 +50,19 @@ class SimulationClientTest {
             () -> client.simulate("TEXT_MAIN_QUESTION",input,System.currentTimeMillis()-1)).code());
     }
 
+    @Test void planFocusCountIsBoundedAndDoesNotBypassMaterialValidation() {
+        var data=json.valueToTree(input);
+        for (int count:new int[]{1,3}) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode)data).put("focusCount",count);
+            assertDoesNotThrow(()->SimulationContract.input("VOICE_PLAN_ONLY",data));
+        }
+        ((com.fasterxml.jackson.databind.node.ObjectNode)data).put("focusCount",4294967297L);
+        assertThrows(SimulationException.class,()->SimulationContract.input("VOICE_PLAN_ONLY",data));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)data).put("focusCount",1);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)data.path("materials")).put("resume",true);
+        assertThrows(SimulationException.class,()->SimulationContract.input("VOICE_PLAN_ONLY",data));
+    }
+
     @Test void httpTimeoutHonorsRemainingBudget() throws Exception {
         HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/v1/agent/simulations",exchange->{

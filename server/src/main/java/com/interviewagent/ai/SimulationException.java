@@ -19,7 +19,7 @@ public class SimulationException extends ReviewFailedException {
             case "MODEL_TIMEOUT" -> "AI 模拟处理超时，请稍后重试。";
             case "MODEL_UNAVAILABLE" -> "AI 模拟服务暂时不可用，请稍后重试。";
             case "UNAUTHORIZED" -> "模拟服务认证失败，请联系管理员。";
-            case "INVALID_MODEL_OUTPUT" -> "AI 模拟返回格式或内容无效，请重试。";
+            case "INVALID_MODEL_OUTPUT" -> "本次内容未能生成，请重试。";
             default -> "AI 模拟处理失败，请稍后重试。";
         };
     }

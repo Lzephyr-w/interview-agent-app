@@ -5,7 +5,7 @@ import java.util.*;
 
 /** Wire shape only. Session-specific business validation remains in the services. */
 public final class SimulationContract {
-    public static final Set<String> OPERATIONS = Set.of("VOICE_PLAN","VOICE_QUESTION","VOICE_FEEDBACK","TEXT_MAIN_QUESTION","TEXT_FOLLOW_UP","TEXT_FEEDBACK");
+    public static final Set<String> OPERATIONS = Set.of("VOICE_PLAN","VOICE_PLAN_ONLY","VOICE_QUESTION","VOICE_FEEDBACK","TEXT_MAIN_QUESTION","TEXT_FOLLOW_UP","TEXT_FEEDBACK");
     public static final Set<String> CODES = Set.of("INVALID_REQUEST","MODEL_TIMEOUT","MODEL_UNAVAILABLE","INVALID_MODEL_OUTPUT","UNAUTHORIZED","INTERNAL_ERROR");
     private static final int QUESTION_QUALITY_MAX = 200;
     private static final int PLAN_LABEL_MAX = 80;
@@ -25,7 +25,12 @@ public final class SimulationContract {
         try {
             if (!OPERATIONS.contains(operation)) throw invalid();
             boolean knowledge = data.has("knowledge");
-            if (operation.equals("VOICE_QUESTION")) {
+            if (operation.equals("VOICE_PLAN_ONLY") && data.has("focusCount")) {
+                if (knowledge) fields(data,"materials","history","knowledge","focusCount");
+                else fields(data,"materials","history","focusCount");
+                if (!data.path("focusCount").isIntegralNumber() || !data.path("focusCount").canConvertToInt() || !Set.of(1,3).contains(data.path("focusCount").asInt())) throw invalid();
+            }
+            else if (operation.equals("VOICE_QUESTION")) {
                 if (knowledge) fields(data,"materials","history","slot","knowledge");
                 else fields(data,"materials","history","slot");
             }
@@ -71,7 +76,19 @@ public final class SimulationContract {
         metadata(n); planText(text(n,"competency",120,false)); planText(text(n,"technology",120,true)); planText(text(n,"angle",200,false));
     }
     public static void result(String operation, JsonNode result) {
-        if (operation.equals("VOICE_PLAN")) {
+        if (operation.equals("VOICE_PLAN_ONLY")) {
+            fields(result,"plan");
+            if (!result.path("plan").isArray() || result.path("plan").size()!=10) throw invalid();
+            for (JsonNode item:result.path("plan")) {
+                fields(item,"order","type","competency","projectName","technology","angle","alternatives");
+                var base=((com.fasterxml.jackson.databind.node.ObjectNode)item).deepCopy(); base.remove("alternatives"); slot(base);
+                if (!item.path("alternatives").isArray() || item.path("alternatives").size()>2) throw invalid();
+                for (JsonNode option:item.path("alternatives")) {
+                    fields(option,"competency","angle");
+                    planText(text(option,"competency",80,false)); planText(text(option,"angle",80,false));
+                }
+            }
+        } else if (operation.equals("VOICE_PLAN")) {
             fields(result,"plan","firstQuestion");
             if (!result.path("plan").isArray() || result.path("plan").size()!=10) throw invalid();
             result.path("plan").forEach(SimulationContract::slot);
