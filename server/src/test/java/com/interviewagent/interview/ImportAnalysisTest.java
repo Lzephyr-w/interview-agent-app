@@ -12,6 +12,42 @@ import static org.mockito.ArgumentMatchers.*;
 class ImportAnalysisTest {
     final ObjectMapper json=new ObjectMapper();
     ImportTurn turn(int id,int segment,int speaker,String text,String role) { return new ImportTurn(id,segment,speaker,(long)id*1000,(long)(id+1)*1000,text,role,false); }
+    @Test void inferredRolesDoNotMoveCachedBlocksOrContextBoundaries() throws Exception {
+        var first=turn(0,0,0,"问题？","UNKNOWN");
+        var empty=turn(1,0,1,"","UNKNOWN");
+        var answer=turn(1,0,1,"答".repeat(ImportAnalysis.BLOCK_CHARS-ImportAnalysis.line(empty).length()-ImportAnalysis.line(first).length()),"UNKNOWN");
+        var original=List.of(first,answer,turn(2,0,1,"继续回答。","UNKNOWN"));
+        var classified=original.stream().map(t->new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),t.id()==0?"INTERVIEWER":"CANDIDATE",true)).toList();
+        assertEquals(ImportAnalysis.blocks(original),ImportAnalysis.blocks(classified));
+        var cached=json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}");
+        assertDoesNotThrow(()->ImportAnalysis.parse(cached,ImportAnalysis.blocks(classified).getFirst(),new ArrayList<>(classified)));
+        var tail=turn(2,0,1,"尾句。","UNKNOWN");
+        var context=List.of(turn(0,0,0,"开头。","UNKNOWN"),turn(1,0,1,"答".repeat(1500-ImportAnalysis.line(turn(1,0,1,"","UNKNOWN")).length()-ImportAnalysis.line(tail).length()),"UNKNOWN"),tail);
+        var classifiedContext=context.stream().map(t->new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),"INTERVIEWER",true)).toList();
+        var block=new ImportAnalysis.Block(List.of(),List.of(0,1,2));
+        assertEquals(ImportAnalysis.context(List.of(),block,context),ImportAnalysis.context(List.of(),block,classifiedContext));
+    }
+    @Test void roleValidationReportsTheBadFieldAndRetriesWithFeedback() throws Exception {
+        var turns=List.of(turn(0,0,0,"问题？","UNKNOWN"),turn(1,0,1,"回答。","UNKNOWN"));
+        var block=new ImportAnalysis.Block(List.of(),List.of(0,1));
+        var model=mock(ReviewModelClient.class);
+        var invalid=json.readTree("{\"roles\":[{\"turnId\":99,\"role\":\"INTERVIEWER\"}],\"questions\":[]}");
+        var valid=json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}");
+        when(model.importJson(anyString(),anyInt())).thenReturn(invalid).thenReturn(valid);
+        assertEquals(valid,ImportAnalysis.request(model,json,block,turns,1,System.nanoTime()+10_000_000_000L,0));
+        var prompts=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(model,times(2)).importJson(prompts.capture(),anyInt());
+        assertTrue(prompts.getAllValues().getLast().contains("上次返回未通过校验"));
+        assertTrue(prompts.getAllValues().getLast().contains("99"));
+        assertEquals("UNKNOWN",turns.getFirst().role());
+        reset(model); when(model.importJson(anyString(),anyInt())).thenReturn(invalid);
+        assertThrows(IllegalArgumentException.class,()->ImportAnalysis.request(model,json,block,turns,1,System.nanoTime()+10_000_000_000L,0));
+        verify(model,times(2)).importJson(anyString(),anyInt());
+        for(String role:List.of("{\"turnId\":\"0\",\"role\":\"INTERVIEWER\"}","{\"turnId\":4294967296,\"role\":\"INTERVIEWER\"}","{\"turnId\":0,\"role\":\"interviewer\"}")) {
+            var response=json.readTree("{\"roles\":["+role+"],\"questions\":[]}");
+            assertThrows(IllegalArgumentException.class,()->ImportAnalysis.parse(response,block,new ArrayList<>(turns)));
+        }
+    }
     @Test void continuesQuestionBySourceAndSeparatesCandidateQuestionsAndInterviewerExplanation() throws Exception {
         List<ImportTurn> turns=new ArrayList<>(List.of(turn(0,0,0,"如何缓存？","INTERVIEWER"),turn(1,0,1,"先查本地。","CANDIDATE"),
             turn(2,1,0,"再查远端。","CANDIDATE"),turn(3,1,0,"团队有多少人？","CANDIDATE"),turn(4,1,1,"我们有五个人。","INTERVIEWER")));
@@ -47,9 +83,11 @@ class ImportAnalysisTest {
     }
     @Test void transientRetriesAreBoundedAndAuthNeverRetries() throws Exception {
         var model=mock(ReviewModelClient.class); var block=new ImportAnalysis.Block(List.of(),List.of(0)); var turns=List.of(turn(0,0,0,"问题？","UNKNOWN"));
-        when(model.importJson(anyString(),anyInt())).thenThrow(new ReviewFailedException("HTTP_429","busy",null));
-        assertThrows(ReviewFailedException.class,()->ImportAnalysis.request(model,json,block,turns,1,System.nanoTime()+10_000_000_000L,0));
-        verify(model,times(3)).importJson(anyString(),anyInt()); reset(model);
+        for(String code:List.of("HTTP_408","HTTP_429")) {
+            when(model.importJson(anyString(),anyInt())).thenThrow(new ReviewFailedException(code,"busy",null));
+            assertThrows(ReviewFailedException.class,()->ImportAnalysis.request(model,json,block,turns,1,System.nanoTime()+10_000_000_000L,0));
+            verify(model,times(3)).importJson(anyString(),anyInt()); reset(model);
+        }
         when(model.importJson(anyString(),anyInt())).thenThrow(new ReviewFailedException("AUTHENTICATION","auth",null));
         assertThrows(ReviewFailedException.class,()->ImportAnalysis.request(model,json,block,turns,1,System.nanoTime()+10_000_000_000L,0));
         verify(model,times(1)).importJson(anyString(),anyInt());

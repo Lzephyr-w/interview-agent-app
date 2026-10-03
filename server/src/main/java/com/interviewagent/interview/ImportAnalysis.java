@@ -15,16 +15,19 @@ final class ImportAnalysis {
     static String line(ImportTurn t) {
         return "[turn="+t.id()+" segment="+t.segmentIndex()+" speaker="+t.segmentIndex()+":"+t.speakerId()+" ms="+t.startMs()+"-"+t.endMs()+" role="+t.role()+" corrected="+t.roleCorrected()+"] "+t.text().replace('\n',' ');
     }
+    // ponytail: count the original UNKNOWN/false metadata so saved block indices survive role changes.
+    static int stableLength(ImportTurn t) { return line(t).length()-t.role().length()+"UNKNOWN".length()+(t.roleCorrected()?1:0); }
     static List<Block> blocks(List<ImportTurn> turns) {
         List<Block> result = new ArrayList<>(); List<Integer> added = new ArrayList<>(); int size = 0;
         for (ImportTurn t : turns) {
             // ponytail: small transcript scan; use an interval index if import sizes grow beyond the 72k text limit.
             if (turns.stream().anyMatch(other -> other.id()!=t.id() && duplicate(other,t)
                 && (other.text().length()>t.text().length() || other.text().length()==t.text().length() && other.id()<t.id()))) continue;
-            if (!added.isEmpty() && size + line(t).length() > BLOCK_CHARS) {
+            int length=stableLength(t);
+            if (!added.isEmpty() && size + length > BLOCK_CHARS) {
                 result.add(new Block(List.of(), List.copyOf(added))); added.clear(); size=0;
             }
-            added.add(t.id()); size += line(t).length();
+            added.add(t.id()); size += length;
         }
         if (!added.isEmpty()) result.add(new Block(List.of(),List.copyOf(added)));
         return result;
@@ -42,14 +45,14 @@ final class ImportAnalysis {
         if (!questions.isEmpty()) { var q=questions.getLast(); ids.addAll(q.questionTurnIds()); }
         int chars=0;
         for(int i=previous.added().size()-1;i>=0;i--) {
-            int id=previous.added().get(i); int length=line(turns.get(id)).length();
+            int id=previous.added().get(i); int length=stableLength(turns.get(id));
             if(chars+length>1500 && chars>0) break;
             ids.add(id); chars+=length;
         }
         return List.copyOf(ids);
     }
     static String prompt(Block block, List<ImportTurn> turns) {
-        return "仅根据原话提取面试官提问和候选人实际回答。候选人反问、面试官讲解、寒暄不可当作候选人回答。错误回答也是回答。不要补写、纠错或猜测经历。speaker是片段局部编号，禁止跨片段声纹匹配，禁止0/1固定映射角色。根据语义及相邻上下文逐发言判断INTERVIEWER/CANDIDATE/UNKNOWN，证据不足UNKNOWN；corrected=true须服从用户。只返回严格JSON：{roles:[{turnId:number,role:string}],questions:[{questionTurnIds:[number],answerTurnIds:[number]}]}。所有编号必须来自输入。问题来源是面试官或待确认；回答来源必须是明确候选人。纯上下文题不要输出，尚未结束的问题有本块新回答则用原问题来源续接。不得将下一题回答挂到上一题。\n只供上下文：\n"
+        return "仅根据原话提取面试官提问和候选人实际回答。候选人反问、面试官讲解、寒暄不可当作候选人回答。错误回答也是回答。不要补写、纠错或猜测经历。speaker是片段局部编号，禁止跨片段声纹匹配，禁止0/1固定映射角色。根据语义及相邻上下文逐发言判断INTERVIEWER/CANDIDATE/UNKNOWN，证据不足UNKNOWN；corrected=true须服从用户。只返回严格JSON：{roles:[{turnId:number,role:string}],questions:[{questionTurnIds:[number],answerTurnIds:[number]}]}。role只能使用大写INTERVIEWER、CANDIDATE或UNKNOWN。所有编号必须使用输入行首turn的整数值，不得使用speaker、segment或从零重新编号；输入编号可能不连续，禁止补出不存在的编号。问题来源是面试官或待确认；回答来源必须是明确候选人。纯上下文题不要输出，尚未结束的问题有本块新回答则用原问题来源续接。不得将下一题回答挂到上一题。\n只供上下文：\n"
             +block.context().stream().map(i->line(turns.get(i))).collect(Collectors.joining("\n"))+"\n本块新增：\n"
             +block.added().stream().map(i->line(turns.get(i))).collect(Collectors.joining("\n"));
     }
@@ -57,7 +60,9 @@ final class ImportAnalysis {
         if (!root.path("roles").isArray()) throw new IllegalArgumentException("模型缺少 roles 数组。");
         for (JsonNode r:root.path("roles")) {
             int id=r.path("turnId").asInt(-1); String role=r.path("role").asText("");
-            if (!r.path("turnId").isIntegralNumber() || !allowed.contains(id) || !validRole(role)) throw new IllegalArgumentException("模型角色字段无效。");
+            if (!r.path("turnId").isIntegralNumber() || !r.path("turnId").canConvertToInt()) throw new IllegalArgumentException("模型返回的发言编号必须为有效整数。");
+            if (!allowed.contains(id)) throw new IllegalArgumentException("模型引用了当前分析片段之外的发言编号："+id+"。");
+            if (!validRole(role)) throw new IllegalArgumentException("模型返回的角色分类无效（发言编号 "+id+"）。");
             ImportTurn old=turns.get(id);
             if (!old.roleCorrected()) turns.set(id,new ImportTurn(id,old.segmentIndex(),old.speakerId(),old.startMs(),old.endMs(),old.text(),role,false));
         }
@@ -123,11 +128,12 @@ final class ImportAnalysis {
         }
     }
     static JsonNode request(ReviewModelClient model,ObjectMapper json,Block block,List<ImportTurn> turns,int timeout,long deadline,int depth) throws Exception {
+        String validationFeedback="";
         for(int attempt=0;attempt<3;attempt++) {
             int remaining=(int)((deadline-System.nanoTime())/1_000_000_000L);
             if(remaining<=0 || Thread.currentThread().isInterrupted()) throw new ReviewFailedException("BUDGET","分析预算用完或处理已中断，有效结果已保留。",null);
             try {
-                JsonNode result=model.importJson(prompt(block,turns),Math.min(Math.max(1,timeout),remaining));
+                JsonNode result=model.importJson(prompt(block,turns)+validationFeedback,Math.min(Math.max(1,timeout),remaining));
                 parse(result,block,new ArrayList<>(turns)); return result;
             } catch(ReviewFailedException e) {
                 if(e.code().equals("TRUNCATED") && depth<3 && block.added().size()>1) {
@@ -144,7 +150,10 @@ final class ImportAnalysis {
                 }
                 if(!e.retryable() || attempt==2 || e.code().equals("INVALID_JSON") && attempt==1) throw e;
                 Thread.sleep(Math.min(1000L*(attempt+1),Math.max(1,(deadline-System.nanoTime())/1_000_000)));
-            } catch(IllegalArgumentException e) { if(attempt>=1) throw e; }
+            } catch(IllegalArgumentException e) {
+                if(attempt>=1) throw e;
+                validationFeedback="\n上次返回未通过校验："+e.getMessage()+"请只使用输入中的turn编号和规定角色，重新生成完整JSON。";
+            }
         }
         throw new IllegalStateException("分析重试已耗尽。");
     }
