@@ -1,6 +1,8 @@
 web/.next/
 web/.next-dev/
 web/node_modules/
+desktop/node_modules/
+/docs/
 server/target/
 runtime-logs/
 .m2/
