@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { signIn, signUp } from "@/lib/auth";
+import { forgetRememberedLogin, loadRememberedLogin, rememberLogin } from "@/lib/remember-login";
 import ThemeToggle from "@/components/ThemeToggle";
 import UserGuide from "@/components/UserGuide";
 import Toast from "@/components/Toast";
@@ -17,12 +18,31 @@ export default function LoginPage() {
   const [registering, setRegistering] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [rememberPassword, setRememberPassword] = useState(false);
+  const [savedLoginReady, setSavedLoginReady] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(emptyFieldErrors);
   const submitting = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    if (registering) return;
+    let active = true;
+    setSavedLoginReady(false);
+    void loadRememberedLogin().then((saved) => {
+      if (!active || !formRef.current) return;
+      setRememberPassword(Boolean(saved));
+      if (saved) {
+        (formRef.current.elements.namedItem("email") as HTMLInputElement).value = saved.email;
+        (formRef.current.elements.namedItem("password") as HTMLInputElement).value = saved.password;
+      }
+      setSavedLoginReady(true);
+    });
+    return () => { active = false; };
+  }, [registering]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (submitting.current) return;
+    if (submitting.current || (!registering && !savedLoginReady)) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const email = String(form.get("email"));
@@ -63,6 +83,7 @@ export default function LoginPage() {
         }
       } else {
         await signIn(email, password);
+        if (rememberPassword) await rememberLogin(email, password);
       }
       router.replace("/");
       router.refresh();
@@ -145,6 +166,7 @@ export default function LoginPage() {
             : "登录智面，向下一个心动的机会再近一步。"}
         </p>
         <form
+          ref={formRef}
           className="auth-form"
           key={registering ? "register" : "login"}
           noValidate
@@ -157,6 +179,7 @@ export default function LoginPage() {
               type="email"
               placeholder="输入你的邮箱地址"
               required
+              disabled={loading || (!registering && !savedLoginReady)}
               autoComplete="email"
               aria-invalid={Boolean(fieldErrors.email)}
               aria-describedby={fieldErrors.email ? "email-error" : undefined}
@@ -177,6 +200,7 @@ export default function LoginPage() {
                 placeholder={registering ? "设置你的登录密码" : "输入你的密码"}
                 type={showPassword ? "text" : "password"}
                 required
+                disabled={loading || (!registering && !savedLoginReady)}
                 autoComplete={registering ? "new-password" : "current-password"}
                 aria-invalid={Boolean(fieldErrors.password)}
                 aria-describedby={fieldErrors.password ? "password-error" : undefined}
@@ -244,7 +268,23 @@ export default function LoginPage() {
               )}
             </div>
           )}
-          <button className="primary-button" disabled={loading}>
+          {!registering && (
+            <label className="auth-remember">
+              <input
+                type="checkbox"
+                name="rememberPassword"
+                checked={rememberPassword}
+                disabled={loading || !savedLoginReady}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setRememberPassword(checked);
+                  if (!checked) void forgetRememberedLogin().catch(() => setError("无法清除已记住的密码，请稍后重试。"));
+                }}
+              />
+              记住密码
+            </label>
+          )}
+          <button className="primary-button" disabled={loading || (!registering && !savedLoginReady)}>
             {loading ? (registering ? "注册中…" : "登录中…") : registering ? "注册" : "登录"}
             <span aria-hidden="true">↗</span>
           </button>

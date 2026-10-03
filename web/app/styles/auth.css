@@ -302,6 +302,25 @@ select[aria-invalid="true"] {
   outline: 3px solid color-mix(in srgb, var(--orange) 35%, transparent);
   border-radius: 4px;
 }
+.auth-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.auth-remember input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--green);
+}
+.auth-remember input:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
 
 /* ponytail: the login illustration uses CSS and the existing mascot, no animation dependency. */
 .auth-page.auth-studio {
