@@ -30,6 +30,7 @@ public class AudioTranscriptionService {
     @Value("${app.interview-import.engine:}") private String importEngine = "";
     @Value("${app.interview-import.hotwords:}") private String importHotwords = "";
     private final ObjectMapper json;
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(30)).build();
     public record Turn(int segmentIndex, Integer speakerId, Long startMs, Long endMs, String text) {
         public String localSpeaker() { return segmentIndex + ":" + (speakerId == null ? "unknown" : speakerId); }
     }
@@ -98,7 +99,7 @@ public class AudioTranscriptionService {
             String taskId=callTencent("CreateRecTask",request).path("Data").path("TaskId").asText();
             if(taskId.isBlank()) throw new IllegalStateException("腾讯云未返回识别任务编号。");
             for(int attempt=0;attempt<2160;attempt++) {
-                JsonNode status=callTencent("DescribeTaskStatus",Map.of("TaskId",new BigInteger(taskId))).path("Data");
+                JsonNode status=queryTencentTask(new BigInteger(taskId));
                 int code=status.path("Status").asInt(-1);
                 if(code==2) return status;
                 if(code==3) throw new IllegalStateException("腾讯云录音识别失败，供应商错误码："+status.path("ErrorCode").asText("UNKNOWN"));
@@ -107,7 +108,20 @@ public class AudioTranscriptionService {
             throw new IllegalStateException("腾讯云录音识别仍在处理中，请稍后重试。");
         } catch(IllegalStateException exception) { throw exception; }
         catch(InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException("腾讯云录音识别已中断。",exception); }
+        catch(java.net.http.HttpConnectTimeoutException exception) { throw new IllegalStateException("连接腾讯云语音识别超时，请检查网络后重试。",exception); }
+        catch(java.net.http.HttpTimeoutException exception) { throw new IllegalStateException("腾讯云语音识别请求超时，请稍后重试。",exception); }
         catch(Exception exception) { throw new IllegalStateException("腾讯云录音识别请求失败，请稍后重试。",exception); }
+    }
+    private JsonNode queryTencentTask(BigInteger taskId) throws Exception {
+        // ponytail: retry only read-only queries; resubmitting audio can create duplicate paid tasks.
+        for(int attempt=0;;attempt++) {
+            try { return callTencent("DescribeTaskStatus",Map.of("TaskId",taskId)).path("Data"); }
+            catch(java.io.IOException exception) {
+                if(exception instanceof com.fasterxml.jackson.core.JsonProcessingException || attempt==2) throw exception;
+                log.warn("importId={} segment={} stage=ASR action=DescribeTaskStatus retry={} causeType={}",org.slf4j.MDC.get("importId"),org.slf4j.MDC.get("importSegment"),attempt+1,exception.getClass().getSimpleName());
+                Thread.sleep(1000L*(attempt+1));
+            }
+        }
     }
     JsonNode callTencent(String action,Map<String,?> params) throws Exception {
         String body=json.writeValueAsString(params), contentType="application/json; charset=utf-8";
@@ -119,11 +133,11 @@ public class AudioTranscriptionService {
         byte[] serviceKey=hmac(dateKey,"asr"), signingKey=hmac(serviceKey,"tc3_request");
         String signature=java.util.HexFormat.of().formatHex(hmac(signingKey,toSign));
         String authorization="TC3-HMAC-SHA256 Credential="+tencentSecretId+"/"+scope+", SignedHeaders=content-type;host, Signature="+signature;
-        HttpRequest request=HttpRequest.newBuilder(URI.create("https://"+TENCENT_HOST+"/")).timeout(Duration.ofSeconds(30))
+        HttpRequest request=HttpRequest.newBuilder(URI.create("https://"+TENCENT_HOST+"/")).timeout(Duration.ofSeconds(60))
             .header("Content-Type",contentType).header("Authorization",authorization)
             .header("X-TC-Action",action).header("X-TC-Version",TENCENT_VERSION).header("X-TC-Timestamp",Long.toString(timestamp)).header("X-TC-Region",tencentRegion)
             .POST(HttpRequest.BodyPublishers.ofString(body)).build();
-        HttpResponse<String> response=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build().send(request,HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());
         JsonNode root=json.readTree(response.body()).path("Response");
         log.info("importId={} segment={} stage=ASR action={} httpStatus={} requestId={} errorType={}", org.slf4j.MDC.get("importId"), org.slf4j.MDC.get("importSegment"), action, response.statusCode(), root.path("RequestId").asText("").replaceAll("[^a-zA-Z0-9._-]",""), root.path("Error").path("Code").asText("OK"));
         if(response.statusCode()/100!=2||root.has("Error")) throw new IllegalStateException("腾讯云 ASR 请求失败："+root.path("Error").path("Code").asText("HTTP "+response.statusCode()));

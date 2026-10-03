@@ -346,7 +346,7 @@ class AiMockQuestionAgentTest {
         org.mockito.Mockito.doReturn(ogg).when(storage).download(anyString());
         voice.audio(user,sessionId,questionId,new MockMultipartFile("file","answer.ogg","audio/ogg",ogg));
         String assetId=jdbc.sql("SELECT id FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single();
-        voice.processAudio(user,sessionId,assetId);
+        runVoiceTask(user,sessionId,"AI_AUDIO",assetId);
         assertEquals("转写后的回答",jdbc.sql("SELECT transcript FROM ai_mock_audio_assets WHERE question_id=:id").param("id",questionId).query(String.class).single());
         verify(storage).download(anyString());
     }
