@@ -89,6 +89,20 @@ test('shows absolute time, local speakers, uncertain and corrected roles', () =>
   assert.match(correction, /\/roles/); assert.match(correction, /\/analyze/); assert.doesNotMatch(correction, /\/audio/);
 });
 
+test('partial transcripts keep transcription active until it actually completes', () => {
+  for (const status of ['TRANSCRIBING', 'TRANSCRIPTION_FAILED', 'ANALYZING', 'ANALYSIS_FAILED', 'READY', 'SAVED']) {
+    const html = renderQuestions({ task: { status, originalFilename: '录音.wav', sizeBytes: 1024, transcript: '已完成的部分转写', error: '' } });
+    const steps = html.match(/<ol class="import-steps"[^>]*>(.*?)<\/ol>/)[1].match(/<li\b[^>]*>.*?<\/li>/g);
+    const transcriptionComplete = !['TRANSCRIBING', 'TRANSCRIPTION_FAILED'].includes(status);
+    const analysisComplete = ['READY', 'SAVED'].includes(status);
+    assert.equal(steps[1].includes('class="done"'), transcriptionComplete);
+    assert.equal(steps[2].includes('class="done"'), analysisComplete);
+    assert.equal(steps[2].includes('aria-current="step"'), transcriptionComplete && !analysisComplete);
+    assert.equal(steps[3].includes('class="done"'), status === 'SAVED');
+    assert.equal((html.match(/aria-current="step"/g) || []).length, status === 'SAVED' ? 0 : 1);
+  }
+});
+
 test('ready reanalysis forces AI extraction and protects unsaved edits; other states have no fresh button', async () => {
   const questions = [{ question: '项目职责？', answer: '真实回答', orderIndex: 1, speakerEvidence: '来源' }];
   const task = { id: 'fresh', status: 'READY', originalFilename: '录音.wav', sizeBytes: 1024, transcript: '原话', error: '', questions };

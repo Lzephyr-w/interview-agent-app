@@ -492,6 +492,8 @@ export default function InterviewsPage() {
     (item) => item.simulationType === activeGroup.type,
   );
   const questionReadOnly = detail?.interview.simulationType !== "REAL";
+  const importTranscriptionComplete = !!importTask && ["ANALYZING", "ANALYSIS_FAILED", "READY", "SAVED"].includes(importTask.status);
+  const importAnalysisComplete = !!importTask && ["READY", "SAVED"].includes(importTask.status);
   const audioFileInput = <input type="file" aria-label={importTask ? "重新导入音频" : "上传面试录音"} accept="audio/webm,audio/ogg,audio/mpeg,audio/mp4,audio/wav,.webm,.ogg,.mp3,.mp4,.m4a,.wav" disabled={audioImportBusy} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadAudio(file); }} />;
   const audioImportPanel =
     mode === "questions" && detail && !questionReadOnly ? (
@@ -511,9 +513,9 @@ export default function InterviewsPage() {
             <div className="import-file"><span className="import-file-icon" aria-hidden="true">♫</span><div><strong>{importTask.originalFilename}</strong><small>{(importTask.sizeBytes / 1024 / 1024).toFixed(1)} MiB · 面试录音</small></div><span className="import-badge">{importingAudio || analyzingImport ? "处理中" : importTask.status === "READY" ? "待确认" : "待处理"}</span><label className="secondary-button audio-reimport">{importingAudio ? "导入中…" : "重新导入"}{audioFileInput}</label></div>
             <ol className="import-steps" aria-label="录音导入进度">
               <li className="done"><span>✓</span>上传</li>
-              <li className={importTask.transcript ? "done" : "current"} aria-current={!importTask.transcript ? "step" : undefined}><span>{importTask.transcript ? "✓" : "2"}</span>转写</li>
-              <li className={importTask.status === "READY" ? "done" : importTask.transcript ? "current" : ""} aria-current={importTask.transcript && importTask.status !== "READY" ? "step" : undefined}><span>{importTask.status === "READY" ? "✓" : "3"}</span>识别问答</li>
-              <li className={importTask.status === "READY" ? "current" : ""} aria-current={importTask.status === "READY" ? "step" : undefined}><span>4</span>确认</li>
+              <li className={importTranscriptionComplete ? "done" : "current"} aria-current={!importTranscriptionComplete ? "step" : undefined}><span>{importTranscriptionComplete ? "✓" : "2"}</span>转写</li>
+              <li className={importAnalysisComplete ? "done" : importTranscriptionComplete ? "current" : ""} aria-current={importTranscriptionComplete && !importAnalysisComplete ? "step" : undefined}><span>{importAnalysisComplete ? "✓" : "3"}</span>识别问答</li>
+              <li className={importTask.status === "SAVED" ? "done" : importTask.status === "READY" ? "current" : ""} aria-current={importTask.status === "READY" ? "step" : undefined}><span>{importTask.status === "SAVED" ? "✓" : "4"}</span>确认</li>
             </ol>
             {importTask.error && <div className="import-notice"><span aria-hidden="true">!</span><div><strong role="alert">{importTask.status === "TRANSCRIPTION_FAILED" || !importTask.transcript ? "录音转写未完成，请重新上传" : "问答识别未完成，转写已保留"}</strong><details><summary>查看原因</summary><p>{importTask.error}</p></details></div>{importTask.transcript && importTask.status !== "TRANSCRIPTION_FAILED" && <button className="secondary-button" type="button" disabled={analyzingImport || importingAudio} onClick={() => void analyzeImported()}>{analyzingImport ? "识别中…" : "重新识别"}</button>}</div>}
             {!!importTask.turns?.length && <details className="import-transcript import-dialogue">
