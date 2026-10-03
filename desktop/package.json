@@ -1,0 +1,15 @@
+{
+  "name": "zhimian-desktop",
+  "productName": "智面",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "postinstall": "node node_modules/electron/install.js",
+    "start": "electron .",
+    "test": "node main.test.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.5.1"
+  }
+}

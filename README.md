@@ -39,7 +39,7 @@
 - 真实面试录音导入支持 WebM、Ogg、MP3、MP4/M4A、WAV，单文件不超过 800 MB；超过 5 MB 的音频会由服务器 FFmpeg 转码、切片后逐段识别，临时文件在处理后删除。服务器需安装 FFmpeg；录音不保存到 Supabase。
 - 简历上传支持 PDF、DOC、DOCX，单文件不超过 10 MiB；扫描件或受保护文件可能无法提取正文。
 - 薄弱点分析只在用户点击“开始 AI 分析 / 重新分析”时调用一次模型；当前面试、问题、最新复盘或关联简历变化后，旧快照会隐藏并提示重新分析。
-- 本项目仅覆盖本地开发启动，不包含生产部署配置。
+- 本项目提供本地开发启动和个人 Windows 桌面生产运行入口，不包含公共服务器部署配置。
 
 ## 2. 技术栈与环境要求
 
@@ -271,6 +271,34 @@ Windows 可双击项目根目录的 `start-dev.cmd`，或在 PowerShell 执行�
 ```
 
 脚本在启动任何服务前验证 Python：存在 `agent/.venv` 时必须使用其中的 Python 3.10+，虚拟环境损坏或版本过低会直接报错；没有虚拟环境时显式使用 `py -3.10`，不回退到 PATH 中不确定版本的 `python`。验证通过后在后台启动 Python Agent、Java 后端和 Next.js 前端。首次使用前先复制并填写 `agent/.env.local`；脚本不会自动生成或覆盖密钥。
+
+### 3.11 个人 Windows 桌面入口
+
+沿用三份 `.env.local`，业务数据库必须配置 PostgreSQL；桌面模式拒绝回退到 H2。首次使用或更新代码、前端公开配置后，在项目根目录执行：
+
+```powershell
+Push-Location .\desktop
+npm.cmd ci --ignore-scripts=false
+Pop-Location
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop.ps1 -Action Prepare
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop.ps1 -Action Install
+```
+
+首次安装 Electron 窗口运行时需要 Node.js 22.12+ 和网络；日常打开不会安装依赖。`Prepare` 执行前端类型检查/生产构建及 Java JAR 打包（跳过 Java 测试，不代表完整后端测试通过）。准备前请关闭 App，并停止占用 3000、8080、8090 的服务。`Install` 创建带项目机器人图标的“智面”快捷方式，并移除本项目旧的“停止智面”。
+
+以后双击“智面”会打开独立 App 窗口，隐藏启动三个服务，就绪后加载页面；重复双击聚焦同一个窗口。**关闭主窗口会自动停止 Next.js、Java、Python 及其子进程**，无需单独停止入口；启动途中关闭也会取消启动并清理。关闭文件预览窗口不退出主 App。请先保存录音和编辑内容，进行中的任务会被中断。服务仅绑定回环地址，登录、数据和 AI 仍需联网。Electron 使用独立的持久化用户目录 `%APPDATA%\Zhimian`，首次使用需要重新登录。
+
+命令行检查或不打开窗口时可使用：
+
+```powershell
+.\desktop.ps1 -Action Start -NoWindow -NoDialog
+.\desktop.ps1 -Action Status
+.\desktop.ps1 -Action Stop -NoDialog
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop.test.ps1
+node .\desktop\main.test.cjs
+```
+
+`-NoWindow` 是命令行服务调试模式，需要配对 `Stop`；桌面 App 自动管理退出。如果用任务管理器强制结束 App 主进程，退出钩子无法执行，保留 `Stop` 命令用于恢复。构建过时、配置缺失或陌生端口占用会报错，不会自动换端口或终止开发进程。日志、构建指纹和进程状态保存在被 Git 忽略的 `runtime-logs/desktop-*`；密钥不会写进快捷方式。详细调研和验收记录仅保存在本机 `docs/`，不随 Git 提交。
 
 ## 4. 模拟 Agent 契约与职责（simulation.v1）
 
