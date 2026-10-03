@@ -38,6 +38,10 @@ try {
     Assert-Fails { Invoke-DesktopCommand $nodePath @('-e', 'process.exit(7)') $desktopRoot 'command' } 'exit 7'
     $moduleCheck = '$env:PSModulePath="C:\unavailable-module-path"; . ''' + (Join-Path $desktopRoot 'desktop.ps1').Replace("'", "''") + '''; foreach($n in @("Get-FileHash","Get-CimInstance","Get-NetTCPConnection")){ if(-not (Get-Command $n -ErrorAction SilentlyContinue)){throw "Missing native module command"} }'
     Invoke-DesktopCommand $desktopPowerShell @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($moduleCheck))) $desktopRoot 'command'
+    $fingerprint = Get-DesktopFingerprint
+    $fingerprintCheck = '. ''' + (Join-Path $desktopRoot 'desktop.ps1').Replace("'", "''") + '''; Get-DesktopFingerprint'
+    Invoke-DesktopCommand $desktopPowerShell @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($fingerprintCheck))) $desktopRoot 'command'
+    Assert ((Get-Content -LiteralPath (Join-Path $desktopLogs 'command.log') -Raw).Trim() -eq $fingerprint) 'Source fingerprint differs between PowerShell versions.'
     $fixtureCode = 'const http=require("http");const s=http.createServer((q,r)=>{if(q.url==="/html")r.end("<html>fixture</html>");else if(q.url==="/health")r.end(JSON.stringify({status:"ok"}));else{r.statusCode=503;r.end("down")}});s.listen(0,"127.0.0.1",()=>console.log(s.address().port));'
     $fixture = Start-Process -FilePath $nodePath -ArgumentList ('-e ' + (ConvertTo-DesktopArgument $fixtureCode)) `
         -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $desktopLogs 'http.log')

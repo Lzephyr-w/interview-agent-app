@@ -100,8 +100,11 @@ function Get-DesktopFingerprint {
         'web/middleware.ts', 'web/.env.local', 'server/pom.xml', 'agent/pyproject.toml')) {
         Get-Item -LiteralPath (Join-Path $desktopRoot $file)
     }
-    $parts = @($files | Sort-Object FullName | ForEach-Object {
-        $_.FullName.Substring($desktopRoot.Length) + ':' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    # Ordinal ordering is identical in Windows PowerShell/.NET Framework and PowerShell 7/.NET.
+    [string[]]$paths = @($files | ForEach-Object { $_.FullName })
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $parts = @(foreach ($path in $paths) {
+        $path.Substring($desktopRoot.Length) + ':' + (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
     })
     foreach ($name in @('NEXT_PUBLIC_API_BASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY')) {
         $parts += $name + ':' + [Environment]::GetEnvironmentVariable($name)
