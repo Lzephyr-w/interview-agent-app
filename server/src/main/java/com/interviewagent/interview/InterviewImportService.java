@@ -11,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -344,7 +343,7 @@ class InterviewImportService {
                     if(answer.equals(old.answer())) answer=ImportAnalysis.text(a,turns);
                 }
                 var warnings=organized?ImportOrganization.warnings(old.kind(),q,a,turns):new ArrayList<>(q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns));
-                if(organized) for(var warning:old.warnings()) if(Set.of("DRAFT_UNCERTAIN","UNCOVERED_TURNS").contains(warning.code())) warnings.add(warning);
+                if(organized) for(var warning:old.warnings()) if(ImportOrganization.REVIEW_WARNINGS.contains(warning.code())) warnings.add(warning);
                 updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId(),old.kind(),old.notes(),old.edits()));
             }
             updated=new ArrayList<>(organized?ImportOrganization.boundaries(updated,turns):ImportAnalysis.boundaries(updated));

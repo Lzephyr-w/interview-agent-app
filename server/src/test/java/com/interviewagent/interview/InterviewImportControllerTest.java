@@ -317,6 +317,30 @@ class InterviewImportControllerTest {
         mockMvc.perform(post("/api/v1/interview-imports/{id}/confirm",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions.length()").value(1));
     }
+    @Test void invalidCorrectionKeepsPreviewAndCannotClearReviewWarningFromTheClient() throws Exception {
+        String user="invalid-edit-user",target=existingInterview(user),raw="请求怎么封装？创建Excel实例。";
+        var result=topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","请求封装？","创建Axios实例。");
+        ((com.fasterxml.jackson.databind.node.ObjectNode)result.path("questions").get(0)).withArray("edits").addObject()
+            .put("turnId",1).put("original","不存在的原词").put("replacement","Axios").put("evidenceSource","RESUME").put("evidenceId","").put("evidence","Axios").put("reason","术语核对").put("uncertain",false);
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(result);
+        var response=mockMvc.perform(post("/api/v1/interview-imports/text").with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of("interviewId",target,"transcript",raw))))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("READY"))
+            .andExpect(jsonPath("$.questions[0].answer").value("创建Excel实例。"))
+            .andExpect(jsonPath("$.questions[0].warnings[0].code").value("EDIT_VALIDATION_FAILED"))
+            .andExpect(jsonPath("$.questions[0].edits.length()").value(0)).andExpect(jsonPath("$.transcript").value(raw)).andReturn();
+        var task=json.readTree(response.getResponse().getContentAsString()); String id=task.path("id").asText();
+        var body=json.createObjectNode(); body.set("questions",task.path("questions"));
+        var question=(com.fasterxml.jackson.databind.node.ObjectNode)body.path("questions").get(0); question.putArray("warnings");
+        mockMvc.perform(post("/api/v1/interview-imports/{id}/confirm",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString())).andExpect(status().isBadRequest());
+        mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].warnings[0].code").value("EDIT_VALIDATION_FAILED"));
+        question.put("reviewConfirmed",true);
+        mockMvc.perform(post("/api/v1/interview-imports/{id}/confirm",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].answerText").value("创建Excel实例。"));
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(1)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verifyNoInteractions(transcription);
+    }
+
     @Test void uncertainAnswersRequireExplicitReviewOrExclusionAndCannotHideSources() throws Exception {
         String user="pending-preview-user",target=existingInterview(user);
         when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","问题？","实际回答。"));

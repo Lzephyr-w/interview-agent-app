@@ -37,7 +37,9 @@ class ImportOrganizationTest {
         assertEquals("CANDIDATE_QUESTION",topics.get(2).kind()); assertTrue(topics.get(2).warnings().isEmpty());
         assertEquals(List.of(8),topics.getLast().questionTurnIds()); assertEquals("UNCOVERED_TURNS",topics.getLast().warnings().getFirst().code());
         assertEquals(before,turns.stream().map(ImportTurn::text).toList());
-        assertThrows(IllegalArgumentException.class,()->ImportOrganization.parse(root,block,turns,"",List.of()));
+        var rejected=ImportOrganization.parse(root,block,turns,"",List.of()).get(1);
+        assertTrue(rejected.edits().isEmpty()); assertTrue(rejected.answer().contains("Excel实例"));
+        assertTrue(rejected.warnings().stream().anyMatch(w->w.code().equals("EDIT_VALIDATION_FAILED")));
         ((ObjectNode)root.path("questions").get(1).path("edits").get(0)).put("evidenceSource","CONTEXT").put("evidenceId","2").put("evidence","Excel实例");
         var guessed=ImportOrganization.parse(root,block,turns,"",cards).get(1);
         assertTrue(guessed.edits().getFirst().uncertain()); assertEquals("DRAFT_UNCERTAIN",guessed.warnings().getFirst().code());
@@ -52,5 +54,32 @@ class ImportOrganizationTest {
         var turns=List.of(turn(0,"请求封装？","UNKNOWN"),turn(1,"创建实例。","UNKNOWN"),turn(2,"继续。","UNKNOWN"));
         var corrected=turns.stream().map(t->new ImportTurn(t.id(),0,0,null,null,t.text(),"INTERVIEWER",true)).toList();
         assertEquals(ImportOrganization.blocks(turns),ImportOrganization.blocks(corrected));
+    }
+    @Test void editMetadataMismatchDoesNotDiscardOtherTopicsOrRetryTheWholeModelReply() throws Exception {
+        var turns=new ArrayList<>(List.of(turn(0,"请求怎么封装？","INTERVIEWER"),turn(1,"创建Excel实例。","CANDIDATE"),turn(2,"认证怎么做？","INTERVIEWER"),turn(3,"请求头带token。","CANDIDATE")));
+        var block=new ImportAnalysis.Block(List.of(),List.of(0,1,2,3));
+        var root=json.readTree("""
+            {"roles":[],"questions":[
+            {"kind":"QA","question":"请求封装？","answer":"创建Axios实例。","questionTurnIds":[0],"answerTurnIds":[1],"notes":[],"edits":[{"turnId":0,"original":"Excel","replacement":"Axios","evidenceSource":"RESUME","evidenceId":"","evidence":"Axios","reason":"名称核对","uncertain":false}]},
+            {"kind":"QA","question":"认证？","answer":"请求头带token。","questionTurnIds":[2],"answerTurnIds":[3],"notes":[],"edits":[]}]}
+            """);
+        var edit=(ObjectNode)root.path("questions").get(0).path("edits").get(0);
+        var fixed=ImportOrganization.parse(root,block,turns,"Axios",List.of());
+        assertEquals(1,fixed.getFirst().edits().getFirst().turnId()); // Correct only an exact, unique source within this topic.
+        edit.put("original","不存在的原词");
+        var model=org.mockito.Mockito.mock(com.interviewagent.ai.ReviewModelClient.class);
+        org.mockito.Mockito.when(model.organizeImportJson(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(root);
+        var reply=ImportOrganization.request(model,json,block,turns,"Axios",List.of(),List.of(),10,System.nanoTime()+10_000_000_000L);
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(1)).organizeImportJson(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyInt());
+        var topics=ImportOrganization.boundaries(ImportOrganization.parse(reply,block,turns,"Axios",List.of()),turns);
+        assertEquals(2,topics.size()); assertEquals("创建Excel实例。",topics.getFirst().answer()); assertTrue(topics.getFirst().edits().isEmpty());
+        assertEquals("EDIT_VALIDATION_FAILED",topics.getFirst().warnings().getFirst().code()); assertEquals("请求头带token。",topics.getLast().answer());
+        assertTrue(topics.getLast().warnings().isEmpty());
+        edit.put("replacement","未用于最终稿的词");
+        var unused=ImportOrganization.parse(root,block,turns,"Axios",List.of()).getFirst();
+        assertEquals("创建Axios实例。",unused.answer()); assertTrue(unused.edits().isEmpty());
+        assertTrue(unused.warnings().stream().anyMatch(w->w.code().equals("EDIT_VALIDATION_FAILED")));
+        ((ObjectNode)root.path("questions").get(0)).putArray("answerTurnIds").add(99);
+        assertThrows(IllegalArgumentException.class,()->ImportOrganization.parse(root,block,turns,"Axios",List.of()));
     }
 }
