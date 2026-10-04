@@ -426,9 +426,9 @@ class AiConversationService {
             .sql("SELECT r.id, r.summary, r.weakness_tags, i.company, i.role FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE r.id = :id AND i.user_id = :userId")
             .param("id", reviewReportId).param("userId", userId).query((rs, row) -> new ReviewInfo(rs.getString("id"), rs.getString("summary"), rs.getString("weakness_tags"), rs.getString("company"), rs.getString("role"))).optional().orElse(null);
         if (review == null) { context.unavailable("复盘报告", "来源已删除"); return; }
-        List<String> details = jdbc.sql("SELECT evaluation, answer_evidence, missing_evidence, improvement_action FROM question_reviews WHERE review_report_id = :id")
-            .param("id", review.id()).query((rs, row) -> "评价：" + rs.getString("evaluation") + "；依据：" + rs.getString("answer_evidence") + "；缺失：" + rs.getString("missing_evidence") + "；动作：" + rs.getString("improvement_action")).list();
-        context.add("复盘报告", review.company() + " · " + review.role(), "复盘摘要：" + review.summary() + "\n弱项：" + String.join("、", stringList(review.tags())) + "\n逐题关键信息：\n" + String.join("\n", details));
+        List<String> details = jdbc.sql("SELECT q.question_text, qr.evaluation, qr.answer_evidence, qr.improvement_action FROM question_reviews qr JOIN interview_questions q ON q.id = qr.interview_question_id WHERE qr.review_report_id = :id ORDER BY q.sort_order, q.created_at, q.id")
+            .param("id", review.id()).query((rs, row) -> "问题：" + rs.getString("question_text") + "；回答表现：" + rs.getString("evaluation") + "；本题判断依据：" + rs.getString("answer_evidence") + "；怎么改进：" + rs.getString("improvement_action")).list();
+        context.add("复盘报告", review.company() + " · " + review.role(), "复盘以本场已确认问答的表现与改进为核心，资料仅辅助理解。反问回答、面试官说明归属面试官，不当作候选人错答或弱项；尊重没做过、不了解的边界。\n复盘摘要：" + review.summary() + "\n弱项：" + String.join("、", stringList(review.tags())) + "\n逐题关键信息：\n" + String.join("\n", details));
     }
 
     private void addWeaknessContext(String userId, String weaknessTag, ContextBuilder context) {

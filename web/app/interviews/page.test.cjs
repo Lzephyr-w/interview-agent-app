@@ -5,8 +5,8 @@ const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 
-function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL', busy = '', expandedSources = false, buttons, inputs, textareas, dialogs, effects, states, onApi } = {}) {
-  const detail = { interview: { id: 'test', simulationType: type, company: '测试', role: '前端', interviewTime: '2026-10-01T00:00:00Z' }, questions: [], reviews: [] };
+function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL', busy = '', expandedSources = false, buttons, inputs, textareas, dialogs, effects, states, onApi, reviews = [], savedQuestions = [], page = 'questions' } = {}) {
+  const detail = { interview: { id: 'test', simulationType: type, company: '测试', role: '前端', interviewTime: '2026-10-01T00:00:00Z' }, questions: savedQuestions, reviews };
   const source = readFileSync(`${__dirname}/page.tsx`, 'utf8')
     .replace('useState<Detail>()', `useState(${JSON.stringify(detail)})`)
     .replace('useState<ImportTask>()', 'useState(testTask)')
@@ -28,7 +28,7 @@ function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL'
         return [value, (next) => { if (states) states[index] = typeof next === 'function' ? next(states[index]) : next; }];
       },
     };
-    if (id === 'next/navigation') return { usePathname: () => '/interviews/test/questions', useRouter: () => ({}) };
+    if (id === 'next/navigation') return { usePathname: () => `/interviews/test/${page}`, useRouter: () => ({}) };
     if (id === 'next/link') return ({ children, ...props }) => React.createElement('a', props, children);
     if (id === '@/components/AppShell') return ({ children }) => children;
     if (id === '@/components/ConfirmDialog') return (props) => { dialogs?.push(props); return null; };
@@ -49,6 +49,35 @@ function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL'
   }, output, output.exports, task, questions);
   return renderToStaticMarkup(React.createElement(output.exports.default));
 }
+
+test('new and historical reviews show paragraphs, ordered advice and hide all missing-evidence content', () => {
+  const old = { id: 'old', readiness: '基本准备', summary: '历史单段总结。', createdAt: '2026-10-01T00:00:00Z', weaknessTags: ['沟通表达'], questionReviews: [
+    { questionId: 'q1', evaluation: '讲清了已实现的范围。', improvementAction: '先解释场景和取舍。', recommendedAnswerStructure: '场景→方案→边界', answerEvidence: '没有做过分片。', missingEvidence: '不能出现在任何栏目中的旧资料清单', possibleFollowups: [] },
+  ] };
+  const current = { ...old, id: 'current', summary: '本场先介绍了职责。\r\n\r\n项目追问中说明了实现边界。\n \n下一次先讲清方案取舍。', questionReviews: [
+    { ...old.questionReviews[0], missingEvidence: '', possibleFollowups: ['什么情况下值得分片？'] },
+    { ...old.questionReviews[0], questionId: 'deleted', possibleFollowups: [] },
+  ] };
+  const buttons = [], effects = [], requests = [];
+  const html = renderQuestions({ page: 'review', reviews: [current, old], savedQuestions: [{ id: 'q1', questionText: '失败后如何恢复？', answerText: '没有做过分片。', sortOrder: 0 }], buttons, effects, onApi: async (url) => { requests.push(url); return []; } });
+  const summaries = [...html.matchAll(/<div class="review-summary">([\s\S]*?)<\/div>/g)];
+  assert.equal(summaries.length, 2);
+  assert.equal((summaries[0][1].match(/<p>/g) || []).length, 3);
+  assert.equal(summaries[1][1], '<p>历史单段总结。</p>');
+  assert.equal((html.match(/<h3>本场面试复盘<\/h3>/g) || []).length, 2);
+  assert.doesNotMatch(html, /准备度：|基本准备|缺失证据|旧资料清单|待补充/);
+  assert.match(html, /失败后如何恢复？/); assert.match(html, /已删除的问题/);
+  assert.equal((html.match(/可以练习的追问：/g) || []).length, 1);
+  assert.match(html, /什么情况下值得分片？/);
+  const first = html.match(/<details class="review-question"[\s\S]*?<\/details>/)[0];
+  const fields = ['回答表现：', '怎么改进：', '建议回答组织：', '本题判断依据：', '可以练习的追问：'];
+  fields.forEach((field, index) => { assert.ok(first.includes(field)); if (index) assert.ok(first.indexOf(fields[index - 1]) < first.indexOf(field)); });
+  assert.match(first, /class="review-answer-evidence"/);
+  assert.doesNotMatch(first, /<details[^>]*open/);
+  assert.equal(buttons.filter((button) => button.children === '删除复盘').length, 2);
+  assert.match(html, /2026/);
+  assert.equal(requests.length, 0);
+});
 
 test('question composer isolates methods and handles failed, empty and ready imports', () => {
   for (const method of ['audio', 'text', 'manual']) {
@@ -224,7 +253,7 @@ test('pending source warnings block saving until explicit review and preserve so
   const questions = [{ question: '问题？', answer: '原话。', orderIndex: 1, speakerEvidence: '来源', questionTurnIds: [0], answerTurnIds: [1], sourceId: '0', reviewConfirmed: false, warnings: [{ code: 'ANSWER_ROLE_UNCERTAIN', message: '回答角色未定', turnIds: [1] }] }];
   const task = { id: 'pending', status: 'READY', originalFilename: '录音.wav', sizeBytes: 1024, transcript: '原文', error: '', questions, turns: [{ id: 0, text: '问题？', role: 'INTERVIEWER' }, { id: 1, text: '原话。', role: 'UNKNOWN' }] };
   const buttons = [], inputs = [], requests = [];
-  const html = renderQuestions({ task, questions, buttons, inputs, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
+  const html = renderQuestions({ task, questions, expandedSources: true, buttons, inputs, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
   assert.match(html, /先逐条核对或排除待确认项/);
   assert.equal(buttons.find((b) => String(b.children).startsWith('确认加入')).disabled, true);
   assert.match(html, /\[1\] 原话。/);

@@ -31,6 +31,12 @@ class WeaknessControllerTest {
     @Autowired ObjectMapper json;
     @Autowired JdbcClient jdbc;
     @MockBean ReviewModelClient model;
+    @MockBean com.interviewagent.ai.AgentPythonClient agent;
+    @MockBean com.interviewagent.ai.AiMockTaskWorker backgroundWorker;
+
+    @org.junit.jupiter.api.AfterEach void noExternalAgentCalls() {
+        org.mockito.Mockito.verifyNoInteractions(agent);
+    }
 
     @BeforeEach void clearData() {
         jdbc.sql("DELETE FROM weakness_analyses").update();
@@ -55,13 +61,19 @@ class WeaknessControllerTest {
             .andExpect(jsonPath("$.items[0].evidence[0].questionId").value(a.question()))
             .andExpect(jsonPath("$.items[0].evidence[0].reviewReportId").value("z-new-a"))
             .andExpect(jsonPath("$.items[0].evidence[0].interviewId").value(a.interview()));
-        org.junit.jupiter.api.Assertions.assertTrue(jdbc.sql("SELECT input_version FROM weakness_analyses WHERE user_id = 'user-a'").query(String.class).single().startsWith("v2:"));
+        org.junit.jupiter.api.Assertions.assertTrue(jdbc.sql("SELECT input_version FROM weakness_analyses WHERE user_id = 'user-a'").query(String.class).single().startsWith("v3:"));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(model).replyJson(prompt.capture());
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains(a.question()));
         org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains(b.question()));
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("最新复盘"));
         org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains("旧复盘"));
+        org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains("missingEvidence"));
+        org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains("旧缺失证据仅历史保留"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("不当成候选人错答或薄弱点"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("\"evaluation\""));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("\"answerEvidence\""));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("\"improvementAction\""));
 
         mockMvc.perform(get("/api/v1/weaknesses").with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$[0].tag").value("系统设计"));
@@ -174,7 +186,7 @@ class WeaknessControllerTest {
     private void insertReview(String interview, String report, String summary, String question) {
         jdbc.sql("INSERT INTO review_reports (id, interview_id, readiness, summary, weakness_tags) VALUES (:id, :interview, :readiness, :summary, :tags)")
             .param("id", report).param("interview", interview).param("readiness", "待补充").param("summary", summary).param("tags", "[\"系统设计\"]").update();
-        jdbc.sql("INSERT INTO question_reviews (id, review_report_id, interview_question_id, evaluation, answer_evidence, missing_evidence, improvement_action, recommended_answer_structure, possible_followups) VALUES (:id, :report, :question, '待补充', '待补充', '待补充', '补充验证', '结论-依据', '[]')").param("id", UUID.randomUUID().toString()).param("report", report).param("question", question).update();
+        jdbc.sql("INSERT INTO question_reviews (id, review_report_id, interview_question_id, evaluation, answer_evidence, missing_evidence, improvement_action, recommended_answer_structure, possible_followups) VALUES (:id, :report, :question, '待补充', '待补充', '旧缺失证据仅历史保留', '补充验证', '结论-依据', '[]')").param("id", UUID.randomUUID().toString()).param("report", report).param("question", question).update();
     }
 
     private record Seed(String resume, String interview, String question) {}

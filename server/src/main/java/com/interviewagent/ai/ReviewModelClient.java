@@ -1,5 +1,7 @@
 package com.interviewagent.ai;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.io.JsonEOFException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.interviewagent.interview.ReviewFailedException;
@@ -29,7 +31,18 @@ public class ReviewModelClient {
     }
 
     public JsonNode review(String prompt) {
-        return jsonReply(prompt, "AI 复盘", reviewTimeoutSeconds, 8192);
+        return jsonReply(prompt, "AI 复盘", reviewTimeoutSeconds, 8192, true);
+    }
+
+    /** Review-only deadline cap; import, weakness and generic replies keep their existing limits. */
+    public JsonNode review(String prompt, int remainingSeconds) {
+        return jsonReply(prompt, "AI 复盘", Math.min(Math.max(1, reviewTimeoutSeconds), remainingSeconds), 8192, true);
+    }
+
+    /** Native structured output for interview reviews; legacy callers retain JSON mode. */
+    public JsonNode review(String prompt, int remainingSeconds, Map<String, Object> schema) {
+        return jsonReply(prompt, "AI 复盘", Math.min(Math.max(1, reviewTimeoutSeconds), remainingSeconds), 8192, true,
+            Map.of("type", "json_schema", "json_schema", Map.of("name", "interview_review", "strict", true, "schema", schema)));
     }
 
     public String reply(String prompt) {
@@ -49,15 +62,39 @@ public class ReviewModelClient {
 
     private JsonNode jsonReply(String prompt, String label) { return jsonReply(prompt, label, 60, 8192); }
     private JsonNode jsonReply(String prompt, String label, int timeoutSeconds, int tokens) {
+        return jsonReply(prompt, label, timeoutSeconds, tokens, false);
+    }
+    private JsonNode jsonReply(String prompt, String label, int timeoutSeconds, int tokens, boolean review) {
+        return jsonReply(prompt, label, timeoutSeconds, tokens, review, Map.of("type", "json_object"));
+    }
+    private JsonNode jsonReply(String prompt, String label, int timeoutSeconds, int tokens, boolean review, Map<String, Object> responseFormat) {
         try {
-        JsonNode response = request(Map.of("model", model, "temperature", 0.2, "max_tokens", tokens, "response_format", Map.of("type", "json_object"), "messages", List.of(Map.of("role", "user", "content", prompt))), timeoutSeconds);
+        JsonNode response = request(Map.of("model", model, "temperature", 0.2, "max_tokens", tokens, "response_format", responseFormat, "messages", List.of(Map.of("role", "user", "content", prompt))), timeoutSeconds);
         if ("length".equals(response.path("choices").path(0).path("finish_reason").asText())) throw new ReviewFailedException("TRUNCATED", label + "输出被截断，请缩小输入后重试。", null);
         String content = content(response);
         if (content.isBlank()) throw new ReviewFailedException("CONTENT_MISSING", label + "响应缺少 content，请重试。", null);
-        try { JsonNode root = json.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(jsonText(content)); if (root == null || !root.isObject()) throw new IllegalArgumentException("not an object"); return root; }
-        catch (Exception exception) { throw new ReviewFailedException("INVALID_JSON", label + "模型输出非法 JSON，请重试。", exception); }
+        try { JsonNode root = json.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(jsonText(content, review)); if (root == null || !root.isObject()) throw new IllegalArgumentException("not an object"); return root; }
+        catch (Exception exception) {
+            String message = label + "模型输出非法 JSON，请重试。";
+            if (review) {
+                var location = exception instanceof JsonProcessingException error ? error.getLocation() : null;
+                int line = location == null ? -1 : location.getLineNr(), column = location == null ? -1 : location.getColumnNr();
+                String finishReason = switch (response.path("choices").path(0).path("finish_reason").asText()) {
+                    case "stop" -> "stop"; case "length" -> "length"; case "content_filter" -> "content_filter";
+                    case "tool_calls" -> "tool_calls"; default -> "unknown";
+                };
+                // Never log the parser message/source: either can contain private interview answers.
+                log.warn("stage=REVIEW_JSON model={} finishReason={} contentChars={} causeType={} line={} column={} charOffset={}",
+                    model, finishReason, content.length(), exception.getClass().getSimpleName(), line, column, location == null ? -1 : location.getCharOffset());
+                String reason = exception instanceof JsonEOFException ? "JSON 未完整闭合" : exception instanceof JsonProcessingException ? "JSON 语法错误" : "JSON 顶层不是对象";
+                message = label + "模型输出" + reason + (line > 0 ? "（第" + line + "行，第" + column + "列）" : "") + "，请重试。";
+            }
+            throw new ReviewFailedException("INVALID_JSON", message, exception);
+        }
         } catch (ReviewFailedException e) {
             log.warn("importId={} block={} stage=MODEL errorType={} causeType={}", org.slf4j.MDC.get("importId"), org.slf4j.MDC.get("importBlock"), e.code(), e.getCause()==null ? "" : e.getCause().getClass().getSimpleName());
+            if (review && "json_schema".equals(responseFormat.get("type")) && List.of("HTTP_400", "HTTP_422").contains(e.code()))
+                throw new ReviewFailedException(e.code(), "AI 复盘结构化输出请求被拒绝（" + e.code().replace('_', ' ') + "），请检查中转支持和模型配置。本次复盘未保存。", e);
             throw e;
         }
     }
@@ -97,8 +134,10 @@ public class ReviewModelClient {
         return message.path("reasoning_content").asText("").trim();
     }
 
-    private static String jsonText(String value) {
+    private static String jsonText(String value, boolean review) {
         String clean = value.trim().replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "").trim();
+        // Review output must be complete; extracting braces can hide an unfinished answer or trailing text.
+        if (review) return clean;
         int start = clean.indexOf('{'), end = clean.lastIndexOf('}');
         return start >= 0 && end > start ? clean.substring(start, end + 1) : clean;
     }

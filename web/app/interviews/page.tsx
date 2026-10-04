@@ -1415,7 +1415,7 @@ function ReviewCard({
           <p className="profile-label">
             {new Date(report.createdAt).toLocaleString()}
           </p>
-          <h3>准备度：{report.readiness}</h3>
+          <h3>本场面试复盘</h3>
         </div>
         <button
           className="danger-button"
@@ -1425,7 +1425,11 @@ function ReviewCard({
           删除复盘
         </button>
       </div>
-      <p>{report.summary}</p>
+      <div className="review-summary">
+        {report.summary.trim().split(/\r?\n\s*\r?\n/).filter(Boolean).map((paragraph, index) => (
+          <p key={index}>{paragraph}</p>
+        ))}
+      </div>
       <p className="tag-list">
         {report.weaknessTags.map((tag) => (
           <span key={tag}>{tag}</span>
@@ -1442,29 +1446,27 @@ function ReviewCard({
             </summary>
             <div>
               <p>
-                <b>评价：</b>
+                <b>回答表现：</b>
                 {item.evaluation}
               </p>
               <p>
-                <b>回答依据：</b>
-                {item.answerEvidence}
-              </p>
-              <p>
-                <b>缺失证据：</b>
-                {item.missingEvidence}
-              </p>
-              <p>
-                <b>改进动作：</b>
+                <b>怎么改进：</b>
                 {item.improvementAction}
               </p>
               <p>
-                <b>推荐回答结构：</b>
+                <b>建议回答组织：</b>
                 {item.recommendedAnswerStructure}
               </p>
-              <p>
-                <b>可能追问：</b>
-                {item.possibleFollowups.join("；") || "待补充"}
+              <p className="review-answer-evidence">
+                <b>本题判断依据：</b>
+                {item.answerEvidence}
               </p>
+              {item.possibleFollowups.length > 0 && (
+                <p>
+                  <b>可以练习的追问：</b>
+                  {item.possibleFollowups.join("；")}
+                </p>
+              )}
             </div>
           </details>
         ))}

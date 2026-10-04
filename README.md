@@ -14,7 +14,7 @@
 - **真实面试记录**：创建、编辑和删除面试；维护问题、回答和自评；支持粘贴转写文本按空行分段；支持上传录音、语音转写、AI 识别问答后检查并加入面试记录。
   <img width="2560" height="1184" alt="image" src="https://github.com/user-attachments/assets/7e963210-2eb8-4bf5-8221-b36b5ba54166" />
 
-- **AI 复盘**：根据面试问题、回答和关联资料生成复盘报告、准备度、逐题建议和薄弱点标签；支持查看和删除历史复盘。
+- **AI 复盘**：以本场已确认问答生成整场表现总结和逐题改进建议，关联资料仅辅助理解；支持查看和删除历史复盘。准备度仅保留接口兼容，页面不作为主要结论。
   <img width="2560" height="1181" alt="image" src="https://github.com/user-attachments/assets/a0142222-e27c-4305-aa2c-f1495e67cd24" />
 
 - **AI 文本模拟**：开始时可选择 1–10 道主问题（旧请求默认 4 道）；每道已回答的主问题可能有 1–2 道追问，追问不计入主问题数量。支持跳过、逐题 AI 反馈，并在完成后保存为正式面试记录。
@@ -48,7 +48,7 @@
 | 前端 | Next.js 15.2.4、React 19.0.0、TypeScript 5.8.2 |
 | 后端 | Java 21、Spring Boot 3.4.3、Spring Security、Spring JDBC |
 | 数据库 | PostgreSQL / Supabase PostgreSQL；未配置数据库连接时默认使用 H2 内存数据库 |
-| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 至 V32 |
+| 数据库迁移 | Flyway，当前迁移脚本包含 V1 至 V20、V22 至 V33（V21 保留缺号） |
 | 文件解析 | Apache PDFBox 3.0.8、Apache POI 5.5.1 |
 | 认证与存储 | Supabase Auth、Supabase 私有 Storage |
 | AI | LangChain 单 Agent + OpenAI 兼容 Chat Completions API；腾讯云录音文件识别 API |
@@ -122,12 +122,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
 | `AI_REVIEW_API_URL` | OpenAI 兼容 Chat Completions 地址；AI 复盘、录音导入和薄弱点分析需要 |
 | `AI_REVIEW_API_KEY` | AI 模型服务端密钥 |
 | `AI_REVIEW_MODEL` | AI 模型名 |
+| `AI_REVIEW_TIMEOUT_SECONDS` | 仅复盘单次请求超时，默认240秒；每次还受整场剩余时间限制，输出8192 tokens |
 | `TENCENT_CLOUD_SECRET_ID` / `TENCENT_CLOUD_SECRET_KEY` | 腾讯云 ASR 服务端密钥 |
 | `TENCENT_CLOUD_REGION` | 默认 `ap-shanghai` |
 | `TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE` | 共享默认 `16k_zh`，保留 AI 语音模拟兼容性 |
 | `INTERVIEW_IMPORT_ASR_ENGINE` | 仅真实导入覆盖；空值沿用共享默认，可选 `16k_zh_en_2.0` / `16k_zh_en_meeting`，不同引擎费用不同 |
 | `INTERVIEW_IMPORT_ASR_HOTWORDS` | 可选 `JavaScript\|5,TypeScript\|5,Vue\|5,React\|5,Node.js\|5,Axios\|5,Base64\|5`；最多128项，每词30字符/10汉字，权重1–11；100仅16k_zh且可能强制同音替换 |
-| `INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS` | 导入单次 AI 超时，默认90秒；共享复盘/弱项仍60秒 |
+| `INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS` | 录音整理单次 AI 超时，默认180秒；弱项通用 JSON 调用仍60秒，复盘独立默认240秒 |
 | `INTERVIEW_IMPORT_AI_BUDGET_SECONDS` | 导入分析总预算，默认900秒；超预算保留有效结果 |
 | `AGENT_SERVICE_URL` | Python Agent 地址，默认 `http://localhost:8090` |
 | `AGENT_INTERNAL_KEY` | Java 与 Python Agent 之间的共享密钥，必须与 `agent/.env.local` 相同 |
@@ -200,7 +201,7 @@ py -3.10 -m pip install -e ".[test]"
 
 ### 3.5 初始化数据库
 
-不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 至 V32 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
+不需要手工执行迁移。后端启动时 Flyway 会自动创建并使用与应用连接一致的 schema：H2 使用 `PUBLIC`，PostgreSQL 使用 JDBC URL 中的 `currentSchema`；没有该参数时才使用 `APP_DATABASE_SCHEMA` 或 `PUBLIC`。后端会执行仓库中的 V1 至 V20、V22 至 V33 迁移；已执行的迁移文件不要修改。训练任务可选保存 `source_question_id`，用于回到具体问题；删除来源后任务的文字快照仍保留。
 
 ### 3.6 启动后端
 
@@ -300,37 +301,9 @@ node .\desktop\main.test.cjs
 
 `-NoWindow` 是命令行服务调试模式，需要配对 `Stop`；桌面 App 自动管理退出。如果用任务管理器强制结束 App 主进程，退出钩子无法执行，保留 `Stop` 命令用于恢复。构建过时、配置缺失或陌生端口占用会报错，不会自动换端口或终止开发进程。日志、构建指纹和进程状态保存在被 Git 忽略的 `runtime-logs/desktop-*`；密钥不会写进快捷方式。详细调研和验收记录仅保存在本机 `docs/`，不随 Git 提交。
 
-## 4. 模拟 Agent 契约与职责（simulation.v1）
+## 4. 开发与验收记录
 
-新建文本/语音会话的六种模型操作统一由 Java 调用 Python 内部接口 `POST /v1/agent/simulations`，使用 `X-Agent-Key` 鉴权。请求带 `version: simulation.v1`、Java 生成的 UUID `requestId`、`operation`、`deadlineAtEpochMs` 和 `input`。浏览器继续使用现有 Java API；Python 拒绝带 Origin 的模拟请求，不提供 CORS，不接收自由 Prompt、用户或资料数据库 ID。
-
-| operation | input（均含 materials、history） | result |
-| --- | --- | --- |
-| VOICE_PLAN | 冻结资料 | plan：严格 10 项，每项 order/type/competency/projectName/technology/angle；firstQuestion：首题正文和匹配第一个槽位的元数据 |
-| VOICE_PLAN_ONLY | 冻结资料，可选 focusCount=1或3 | plan：严格 10 项，沿用六个槽位字段，并增加 alternatives：0–2 个仅含 competency/angle 的候选；不返回题目正文或 firstQuestion |
-| VOICE_QUESTION | 加 slot | questionText/type/competency/projectName/technology |
-| VOICE_FEEDBACK | 加 questionText、answer | feedback |
-| TEXT_MAIN_QUESTION | 历史题目 | questionText |
-| TEXT_FOLLOW_UP | 加 questionText、answer | questionText |
-| TEXT_FEEDBACK | 加 questionText、answer | feedback |
-
-成功响应为 `{version, requestId, result}`；失败响应为 `{version, requestId, error: {code, message, retryable}}`。错误码仅为 INVALID_REQUEST、MODEL_TIMEOUT、MODEL_UNAVAILABLE、INVALID_MODEL_OUTPUT、UNAUTHORIZED、INTERNAL_ERROR；Java 使用本地稳定中文提示，不透传供应商异常。
-
-- Java 是唯一业务事实来源：JWT 归属校验、资料授权和裁剪、会话/任务/时限、事务、幂等、题数顺序和最终校验。wire 上问题最多 800 字符，业务质量上问题正文最多 200 字符且最多一个问号；反馈最多两句，题目元数据最多 120 字符，计划字段不得承载问题；非法结果不落库。新会话的 PROJECT 槽位和题目必须引用冻结快照中的真实项目。文本模拟由用户选 1–10 道主问题；已回答的主问题有首道追问，首道追问标记“不确定”时可能追加第二道，追问不计入主问题数量。语音固定前 5 题基础、随后 4 题项目、最后 1 题场景或行为。
-- V24 在两个会话表增加 `material_snapshot`，创建事务内冻结公司、岗位、轮次、JD（8,000 字符）、已解析简历（12,000 字符）和证据卡四字段。最多 30 张证据卡，按固定预算分摊裁剪描述/亮点/技术栈并保留项目名；超限明确报错。后续修改资料不改变本场出题或反馈的输入。
-- V32 增加 `ai_mock_package_preparations` 与语音会话的 `preparation_id`。创建或更新面试包仅在保存事务内入队 `PACKAGE_VOICE_PLAN`，后台调用 `VOICE_PLAN_ONLY`；结果按实际裁剪资料的 SHA-256 指纹和规则版本复用。每个槽位有默认能力点/角度和零至两个有效候选，沿用真实项目与技术点；每场选取一个切入点，随机排列第 1–5 题和第 6–9 题，保留分布、去重和相邻字段限制，然后冻结选定计划。`/prepare` 不生成首题，`begin` 激活五十分钟计时后入队 `AI_FIRST`，使用 `VOICE_QUESTION` 生成本场首题；直接创建正式会话也会入队首题。准备中多个会话共用计划任务，完成后只为已开始会话入队首题。轮询与重试不重新抽选。JD 或证据卡独立修改后在下次准备入口核对指纹，旧包自动补充；预备会话仍十五分钟过期。规则版本已提升至 `voice-plan-only-v3`，旧缓存不会供新会话复用，已存在会话保持冻结资料和计划。知识库与文本模拟沿用原流程。
-- V24 给语音会话增加 `generation_version`：历史默认 LEGACY，新建显式写 SIMULATION_AGENT_V1。只有 LEGACY 能读取旧 3 题/无计划数据；新会话始终返回 10 题并拒绝 3 项计划。无快照的历史会话继续按原授权关联查询，不回填伪快照。
-- Python 的小型无状态 simulation 模块负责固定 Prompt、simulation 专用 JSON mode 和 Markdown 围栏/说明容错解析；每个请求只调用模型一次。不复用通用聊天 AgentRuntime，不调用 Java 工具、不连接数据库，不存储会话。
-- 十题计划稳定性修订：完整展示十槽 JSON 示例，首次请求三个切入点，后续任务尝试使用 `focusCount=1` 只请求基础十题。计划数组、十个独立 JSON 对象、数字字符串顺序、题型大小写及缺失空技术字段可规范化；不足十题、截断或歧义 JSON、重复默认能力点、虚构项目继续拒绝。候选缺失/重复/非法只剔除候选，不拖垮有效基础计划；Java 可重新排列相同题型槽位以满足相邻限制，选项数量为零时仍随机排列并冻结。规则版本为 `voice-plan-only-v3`。2026-10-02 故障的三次日志分别为 Extra data、fields、plan；本次 Python 59 项、相关 Java 24 项通过，同份 PostgreSQL 冻结资料的新提示词真实模型请求返回有效十题。尚未重启运行服务，不代表已恢复原失败任务或达到零失败率。
-- 语音出题若返回多个普通问句，会先保留带前置背景的第一个完整问句，再执行原有严格校验；含引号、代码、首问超长或括号不完整时不截断，仍由后台重试。日志只记录修复原因，不记录正文。首题格式/质量失败与下一题相同，最多三次立即重新排队；服务不可用/超时保留退避。任务 API 仅在最终 FAILED 时返回错误，PENDING/PROCESSING 不暴露上次失败；重试耗尽提示“本次内容未能生成，请重试”，错误代码保留用于诊断。
-- 每次模拟 HTTP 请求预算 70 秒，Python 按统一 deadline 取消模型等待，并关闭模型 SDK 自动重试；JSON 或结构非法返回可重试错误，由现有 ai_mock_tasks 完成新的完整尝试。MODEL_TIMEOUT、MODEL_UNAVAILABLE 和 Java 业务质量拒绝均最多自动尝试 3 次，间隔 5 秒、15 秒；V24 的 available_at 防止忙轮询。手动重试复用同一任务/资源并重置尝试次数。通用聊天的 90 秒策略不变。
-- 短事务在写入前锁定会话并核验任务令牌和两分钟租约；长模型调用不占数据库事务。会话过期统一转换 TIME_EXPIRED 并取消无意义任务，过期或旧 worker 的结果不可写入。处理中禁止结束保存；FAILED 可重试或结束保存已答内容；重复 finish 返回同一记录。
-- V24 另增加语音题目的 ai_feedback，用于确认文本的逐题反馈；录音反馈同时保留在原音频记录中，重试复用已保存转写。无词级时间戳，不推断语速、停顿或情绪。
-- 日志只记录关联 ID、操作、结果码、错误类别和耗时，不记录资料/回答/模型原文。AI 复盘、录音导入和薄弱点分析仍使用 ReviewModelClient；通用对话仍使用 /v1/agent/reply。
-
-常规模拟使用 `VOICE_PLAN_ONLY` 只预生成计划；知识库及历史会话沿用 `VOICE_PLAN` 合并返回计划和首题。没有新增依赖或题库服务。AI 对话现支持 SSE 流式输出，刷新后重新进入会话会自动恢复未完成回复，旧的非流式接口仍保留。自动测试使用本地假模型/H2；真实模型供应商、PostgreSQL 并发和私有 Storage/转写须单独联调，不以测试通过代替外部验收。
-
-常规模拟命中计划缓存时不再规划，但启动后仍需一次首题模型请求；候选随机化增加多样性，不保证跨场题目完全不重复，也不承诺首题即时返回。需同时重启 Java 后端和 Python Agent 才能使用新增操作；部署期间遗留的 `AI_FIRST`/历史 `AI_CREATE` 与旧计划结果仍保留兼容处理。
+模拟 Agent 的 `simulation.v1` 契约、职责边界和历史实施记录已集中放在 [`docs/后续优化功能.md`](../docs/后续优化功能.md)；README 只保留当前功能、运行方式和按日期保留的项目记录，避免把内部协议混入入门文档。
 
 
 ### 2026-10-01：真实面试录音导入当前基线
@@ -434,3 +407,46 @@ v3/v4只生成可读问答，未回填逐条发言角色，导致原文面板持
 ### 2026-10-04：问答输入响应优化
 
 问答卡片和发言/原文面板使用React.memo，编辑时只让当前卡片更新；原文对照和发言列表展开后才生成内容，展开后也不随其他问答的输入重复渲染。稳定操作回调读取最新草稿，输入即时更新，排序、排除、角色修改提示和确认提交保留原有流程。已留折叠来源不读取发言、编辑保留其他条目及排序/确认保留最新文字的可运行检查，未执行测试、构建或浏览器检查，未提交、未推送。
+
+### 2026-10-04：面试复盘以整场表现与逐题改进为核心
+
+代码已修改，待用户验收。复盘标题为“本场面试复盘”；完整场次总结目标600–1000个中文字符、4–6个自然段，短场次按实际内容缩短。总结仍最多4000字符，长度不足不重试。逐题依次展示回答表现、怎么改进、建议回答组织、次级判断依据、可以练习的追问；默认零到两个追问，空时隐藏。自我介绍、职业方向、候选人反问及面试官说明分别归属；只依据记录评价内容，不推断语速、紧张或招聘结论。
+
+本场问答完整输入，JD、关联READY简历、证据卡仅用于理解背景，不作为标准答案。新报告不要求模型返回`missingEvidence`，旧模型字段忽略，服务端兼容列写空字符串；旧报告数据保留，前端统一隐藏该栏目。弱项输入与聊天复盘上下文不再消费该字段；弱项输入版本v3沿用原指纹/过期规则，旧口径快照需用户主动重新分析，GET不请求AI。
+
+复盘预算仅影响`POST /api/v1/interviews/{id}/review`，不改变录音整理、弱项与通用聊天调用：
+
+| 边界 | 当前实现 |
+| --- | --- |
+| 单次输入 | 完整Prompt与复盘JSON Schema合计最多32000个Java UTF-16字符（包括序列化转义），其中预留1000字符供格式修正；外围简历/JD/证据卡分别先限2500/1500/2000字符，再按剩余空间裁剪；问答不截断 |
+| 单次输出 | 8192 tokens；每次最多6题是保守的输出预算代理，超过6题或完整输入放不下才分批；不是精确token计算或供应商容量保证 |
+| 分批 | 原顺序按完整问题划分，局部Q1/Q2映射回真实ID；最多8批（至多48题，长回答可能更少），逐批完整评价后，以覆盖全场题目、回答关键信息及完整逐题结果另生成一次总结，再严格校验全量唯一覆盖 |
+| 请求次数 | 默认合并请求1次；分批为批数+1次总结，整场最多10次（含格式修正）；不固定追加调用，无网络自动重试 |
+| 格式修正 | 整场共享最多1次，仅结构校验/非法JSON；截断、供应商错误或额度耗尽明确失败，不保存部分结果 |
+| 时间 | 从复盘入口起共900秒，单次超时取配置值（默认240秒）与整场剩余整秒的较小值；保存前后检查剩余预算，保存事务另限30秒 |
+| 保存 | 全部生成和校验在事务外；TransactionTemplate短事务锁定归属与问答，复核ID、顺序、内容、自评、反馈及面试信息；问答写入共享面试锁，变化则拒绝旧结果，事务内故障全部回滚 |
+
+2026-10-04用户验收排查：20:55第二批请求返回HTTP 200后出现`JsonParseException`，整场唯一一次格式修正后出现`JsonEOFException`；与此前Cockpit中转断流返回408属于不同阶段。现有日志没有模型全文，不能还原具体坏字符，也不能把EOF直接认定为8192-token额度截断。复盘契约已改为序列化的合法JSON示例，明确双引号/反斜杠/段落换行转义及完整闭合；修正提示带安全错误类型/位置。复盘专用解析保留完整Markdown代码围栏兼容，不再截取首尾大括号掩盖额外或未完成内容，严格拒绝多份JSON、前后解释及未闭合输出；录音整理、弱项与通用聊天原解析行为保持。诊断仅记录完成原因白名单、内容长度、异常类型及行/列/偏移，不记录模型全文或解析器原始报错（可能含回答内容）。预算和次数未增加，修正后仍失败不保存；已补充合法换行/引号、EOF、前后文本、多对象、原调用兼容及修正失败保留旧报告的回归用例，未执行。代码已修改，待用户验收，尚不能保证上游每次生成有效JSON。
+
+单题完整问答（含JSON转义）超限、超过8批、整场总结输入超限、任一批失败/截断/校验失败或预算耗尽，均明确失败，原问答和旧报告保留。字符与题数阈值尚未经真实模型样本验证，模型的段落质量、事实归属及具体建议仍需用户验收，不能保证供应商不截断。
+
+更新运行版本后，用户主动点击“生成复盘 / 重新复盘”才新增新口径报告；刷新只读已有报告，不改写旧总结，不重新转写或整理录音。沿用现有API、DTO和数据库，无迁移、依赖、Agent或队列。首次实施阶段只补充Java接口/预算/下游与页面回归用例，未执行检查；后续用户授权自测的结果见下方。改动未提交。相关检查可重新运行（命令需在对应目录执行）：
+
+```powershell
+# server目录；包含本次回归用例
+mvn -o -B -ntp -s .mvn/settings.xml "-Dtest=InterviewControllerTest,ReviewModelClientTest,WeaknessControllerTest,AiConversationControllerTest" "-Dapp.agent.url=http://127.0.0.1:9" test
+# web目录；页面检查，不代表真实浏览器/模型效果
+node --test app/interviews/page.test.cjs
+```
+
+### 2026-10-04：复盘结构化输出修复与授权自测
+
+21:21的首批响应以`finish_reason=stop`返回未闭合JSON，一次修正成功后，21:23第三批又在3209字符内容的第3207列出现语法错误。仅增加提示未解决输出稳定性；原始响应未保存，不能断言该字符具体是尾逗号或何种内容。
+
+复盘专用请求改为`response_format.type=json_schema`、`strict=true`，根据合并报告/逐题批次/整场总结发送对应Schema：全部字段必填、对象不允许新增属性、readiness与弱项标签使用固定枚举、questionId只允许本批Q编号，不含missingEvidence。规则依据[OpenAI Docs结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs)。服务端继续独立校验类型、长度、标签和全量唯一ID，Schema纳入32000字符预算；不增加调用/修正/时间额度，不截断原回答，也不自动补括号或丢题。中转若以HTTP400/422拒绝结构化请求，会明确提示检查中转支持与模型配置，不自动降级或额外请求。录音整理、弱项及通用聊天沿用原调用。
+
+按用户新的自测授权，最终本地检查通过：后端四组35项回归（H2内存库、模型Mock或127.0.0.1模拟HTTP）、前端14项页面回归、TypeScript检查、后端Maven打包及Next生产构建。模拟HTTP覆盖`stop`但JSON未闭合、首次修正成功后后续批次再次出现尾部语法错误、修正额度耗尽不保存半份报告、HTTP400拒绝时不重试；覆盖三种Schema与完整输入预算。前端生产构建在`server/target/review-web-build-20261004`隔离目录，使用占位公共配置，未覆盖正在运行的生产/开发目录，也未重启现有服务。前端旧来源用例改为展开后核对，保留原文按需渲染。
+
+首次基线测试暴露已有后台任务会调用本机Agent；已向用户说明这一意外，并在本次接口测试中Mock后台worker/Agent、断言不调用外部Agent，最终回归日志没有真实Agent调用。环境文件、真实数据库、原问答与历史报告未改动。`InterviewReviewGatewaySmokeTest`是另行明确授权后才能运行的真实中转检查，默认跳过，只调用一次模型、使用合成六题、不启动应用上下文、不连接数据库或保存报告。代码已修改，待用户验收；本地检查不等于所有真实长场次的模型质量已经通过。
+
+用户随后明确授权一次合成六题请求。21:45当前Cockpit中转接受严格Schema请求并返回HTTP200，用时约51秒，JSON解析、固定标签/长度与六题唯一全量覆盖校验通过，总结687字符，调用次数1、无数据库访问。日志在`server/target/review-gateway-smoke.log`；这只证明该合成样本通过，不保证中转永不断流、始终执行Schema约束或所有真实长场次的内容质量。默认本地回归不会运行此真实检查；若将来要重跑，须先另行授权真实请求，再在server目录运行`mvn -o -B -ntp -s .mvn/settings.xml "-Dtest=InterviewReviewGatewaySmokeTest" "-Dreview.gateway.smoke=true" test`。当前运行服务没有重启，需用户更新后端运行版本后主动重新生成报告才使用本次契约。

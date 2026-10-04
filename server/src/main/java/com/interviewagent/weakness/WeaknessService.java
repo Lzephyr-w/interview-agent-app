@@ -30,7 +30,7 @@ public class WeaknessService {
     private static final Set<String> TAGS = Set.of("技术基础", "算法与数据结构", "系统设计", "项目深挖", "业务理解", "行为面", "沟通表达", "岗位匹配", "简历风险", "英语表达");
     private static final Set<String> STATUSES = Set.of("NOT_STARTED", "IN_PROGRESS", "COMPLETED");
     private static final int MAX_ITEMS = 3;
-    private static final String INPUT_VERSION_PREFIX = "v2:";
+    private static final String INPUT_VERSION_PREFIX = "v3:";
     private final JdbcClient jdbc;
     private final ObjectMapper json;
     private final ReviewModelClient model;
@@ -128,8 +128,8 @@ public class WeaknessService {
         Map<String, LatestReview> latestByInterview = jdbc.sql("SELECT id, interview_id, readiness, summary, weakness_tags FROM (SELECT r.id, r.interview_id, r.readiness, r.summary, r.weakness_tags, ROW_NUMBER() OVER (PARTITION BY r.interview_id ORDER BY r.created_at DESC, r.id DESC) rn FROM review_reports r JOIN interviews i ON i.id = r.interview_id WHERE i.user_id = :userId) ranked WHERE rn = 1")
             .param("userId", userId).query((rs, row) -> new LatestReview(rs.getString("id"), rs.getString("readiness"), rs.getString("summary"), rs.getString("weakness_tags"), rs.getString("interview_id"))).list().stream()
             .collect(java.util.stream.Collectors.toMap(LatestReview::interviewId, review -> review));
-        Map<String, List<InputQuestion>> questionsByInterview = jdbc.sql("SELECT q.id, q.interview_id, q.question_text, q.answer_text, q.self_assessment, q.sort_order, q.created_at, i.company, i.role, i.interview_round, i.interview_type, latest.id latest_report_id, qr.evaluation, qr.answer_evidence, qr.missing_evidence, qr.improvement_action, qr.recommended_answer_structure FROM interview_questions q JOIN interviews i ON i.id = q.interview_id LEFT JOIN (SELECT id, interview_id FROM (SELECT r.id, r.interview_id, ROW_NUMBER() OVER (PARTITION BY r.interview_id ORDER BY r.created_at DESC, r.id DESC) rn FROM review_reports r JOIN interviews ri ON ri.id = r.interview_id WHERE ri.user_id = :userId) ranked WHERE rn = 1) latest ON latest.interview_id = q.interview_id LEFT JOIN question_reviews qr ON qr.interview_question_id = q.id AND qr.review_report_id = latest.id WHERE i.user_id = :userId ORDER BY q.interview_id, q.sort_order, q.created_at, q.id")
-            .param("userId", userId).query((rs, row) -> new InputQuestion(rs.getString("id"), rs.getString("question_text"), rs.getString("answer_text"), rs.getString("self_assessment"), rs.getString("latest_report_id"), rs.getString("evaluation"), rs.getString("answer_evidence"), rs.getString("missing_evidence"), rs.getString("improvement_action"), rs.getString("recommended_answer_structure"), rs.getString("interview_id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("interview_type"))).list().stream()
+        Map<String, List<InputQuestion>> questionsByInterview = jdbc.sql("SELECT q.id, q.interview_id, q.question_text, q.answer_text, q.self_assessment, q.sort_order, q.created_at, i.company, i.role, i.interview_round, i.interview_type, latest.id latest_report_id, qr.evaluation, qr.answer_evidence, qr.improvement_action, qr.recommended_answer_structure FROM interview_questions q JOIN interviews i ON i.id = q.interview_id LEFT JOIN (SELECT id, interview_id FROM (SELECT r.id, r.interview_id, ROW_NUMBER() OVER (PARTITION BY r.interview_id ORDER BY r.created_at DESC, r.id DESC) rn FROM review_reports r JOIN interviews ri ON ri.id = r.interview_id WHERE ri.user_id = :userId) ranked WHERE rn = 1) latest ON latest.interview_id = q.interview_id LEFT JOIN question_reviews qr ON qr.interview_question_id = q.id AND qr.review_report_id = latest.id WHERE i.user_id = :userId ORDER BY q.interview_id, q.sort_order, q.created_at, q.id")
+            .param("userId", userId).query((rs, row) -> new InputQuestion(rs.getString("id"), rs.getString("question_text"), rs.getString("answer_text"), rs.getString("self_assessment"), rs.getString("latest_report_id"), rs.getString("evaluation"), rs.getString("answer_evidence"), rs.getString("improvement_action"), rs.getString("recommended_answer_structure"), rs.getString("interview_id"), rs.getString("company"), rs.getString("role"), rs.getString("interview_round"), rs.getString("interview_type"))).list().stream()
             .collect(java.util.stream.Collectors.groupingBy(InputQuestion::interviewId, LinkedHashMap::new, java.util.stream.Collectors.toList()));
         List<InputInterview> interviews = bases.stream().map(base -> {
             LatestReview latest = latestByInterview.get(base.id());
@@ -160,7 +160,7 @@ public class WeaknessService {
                 hash("rf.parsed_status, rf.parsed_text"),
                 hash("q.interview_id, q.question_text, q.answer_text, q.self_assessment"),
                 hash("r.interview_id, r.readiness, r.summary, r.weakness_tags"),
-                hash("qr.review_report_id, qr.interview_question_id, qr.evaluation, qr.answer_evidence, qr.missing_evidence, qr.improvement_action, qr.recommended_answer_structure")
+                hash("qr.review_report_id, qr.interview_question_id, qr.evaluation, qr.answer_evidence, qr.improvement_action, qr.recommended_answer_structure")
             );
         List<InputVersion> values = jdbc.sql(sql)
             .param("userId", userId).query((rs, row) -> new InputVersion(rs.getString("kind"), rs.getString("id"), rs.getString("fingerprint"))).list();
@@ -190,6 +190,9 @@ public class WeaknessService {
         return """
             你是面试复盘分析助手。仅根据下方 JSON 中已有资料生成中文 JSON，不得臆造简历事实、项目指标或面试内容。
             目标是总结当前账户最多 3 个具体薄弱点，而不是计数或复述标签。每个题目只能作为一个弱项的证据；每场面试只提供了最新复盘。资料不足必须写“待补充”。
+            本场已确认问答是评价主体，结合逐题评价、回答依据与改进动作；关联简历仅辅助理解背景，不作为标准答案或缺失资料清单。
+            不把 readiness 当能力分数。尊重没做过、不了解的边界，转写不清不猜错答。
+            【候选人反问】的回答和【面试官说明】均是面试官发言，不当成候选人错答或薄弱点；不将练习追问当成实际发生的追问。
             禁止输出通过概率、录用/淘汰建议、招聘结论、能力评级。
             """ + "标签只能是：" + String.join("、", TAGS) + "。\n" + """
             只输出 JSON：{"summary":"...","weaknesses":[{"tag":"十个既有标签之一","title":"具体标题","diagnosis":"诊断","action":"下一步动作","evidence":[{"questionId":"输入中的 ID","reason":"关联理由"}]}]}。
@@ -358,7 +361,7 @@ public class WeaknessService {
     private record InterviewBase(String id, String company, String role, String interviewRound, String interviewType, OffsetDateTime interviewTime, String status, String resumeFileId, String resumeStatus, String resumeText) {}
     private record InputPayload(List<InputInterview> interviews) {}
     private record InputInterview(String interviewId, String company, String role, String interviewRound, String interviewType, OffsetDateTime interviewTime, String status, String resumeFileId, String resumeStatus, String resumeText, String latestReviewReportId, String latestReviewReadiness, String latestReviewSummary, String latestReviewTags, List<InputQuestion> questions) {}
-    private record InputQuestion(String id, String questionText, String answerText, String selfAssessment, String reviewReportId, String evaluation, String answerEvidence, String missingEvidence, String improvementAction, String recommendedAnswerStructure, String interviewId, String company, String role, String interviewRound, String interviewType) {}
+    private record InputQuestion(String id, String questionText, String answerText, String selfAssessment, String reviewReportId, String evaluation, String answerEvidence, String improvementAction, String recommendedAnswerStructure, String interviewId, String company, String role, String interviewRound, String interviewType) {}
     private record LatestReview(String id, String readiness, String summary, String tags, String interviewId) {}
     private record ParsedAnalysis(String summary, List<WeaknessItem> items) {}
     private record StoredAnalysis(String fingerprint, String inputVersion, String summary, List<WeaknessItem> items, OffsetDateTime updatedAt) {}

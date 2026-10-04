@@ -41,6 +41,7 @@ class AiConversationControllerTest {
     @Autowired ObjectMapper objectMapper;
     @Autowired JdbcClient jdbc;
     @MockBean AgentPythonClient agent;
+    @MockBean com.interviewagent.ai.AiMockTaskWorker backgroundWorker;
     @SpyBean ResumeFileService resumeFiles;
 
     @Test
@@ -140,6 +141,29 @@ class AiConversationControllerTest {
         Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM mock_interviews WHERE id = 'mock-a'").query(Integer.class).single());
         Assertions.assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM training_tasks WHERE id = 'task-a'").query(Integer.class).single());
         Assertions.assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM ai_conversation_messages WHERE conversation_id = :id").param("id", conversation).query(Integer.class).single());
+    }
+
+    @Test void reviewContextUsesPerformanceEvidenceAndActionsWithoutLegacyMissingEvidence() throws Exception {
+        String user = "chat-review-context-user", interview = interviewFor(user, packageFor(user));
+        String report = UUID.randomUUID().toString(), questionId = UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO interview_questions (id,interview_id,question_text,answer_text,self_assessment,sort_order) VALUES (:id,:interview,'【候选人反问】团队分工？','【面试官回答】按业务分工','GOOD',0)").param("id", questionId).param("interview", interview).update();
+        jdbc.sql("INSERT INTO review_reports (id,interview_id,readiness,summary,weakness_tags) VALUES (:id,:interview,'基本准备','本场以项目交流为主','[]')").param("id", report).param("interview", interview).update();
+        jdbc.sql("INSERT INTO question_reviews (id,review_report_id,interview_question_id,evaluation,answer_evidence,missing_evidence,improvement_action,recommended_answer_structure,possible_followups) VALUES (:id,:report,:question,'反问帮助了解岗位','面试官说明按业务分工','不要传给聊天的旧缺失清单','下次明确协作边界','职责→协作','[]')")
+            .param("id", UUID.randomUUID().toString()).param("report", report).param("question", questionId).update();
+        String conversation = id(mockMvc.perform(post("/api/v1/ai-conversations").with(jwt().jwt(t -> t.subject(user))).contentType(MediaType.APPLICATION_JSON)
+            .content(objectMapper.writeValueAsString(java.util.Map.of("interviewId", interview, "reviewReportId", report))))
+            .andExpect(status().isCreated()).andReturn(), "conversation.id");
+        String message = id(mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages", conversation).with(jwt().jwt(t -> t.subject(user))).contentType(MediaType.APPLICATION_JSON)
+            .content("{\"content\":\"如何改进反问？\",\"clientRequestId\":\"review-context-request\"}"))
+            .andExpect(status().isCreated()).andReturn(), "messages[0].id");
+        when(agent.reply(anyString(), anyString(), anyList(), anyString())).thenReturn("先明确协作边界。");
+        mockMvc.perform(post("/api/v1/ai-conversations/{id}/messages/{messageId}/reply", conversation, message).with(jwt().jwt(t -> t.subject(user)))).andExpect(status().isOk());
+        var messages = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        verify(agent).reply(anyString(), anyString(), messages.capture(), anyString());
+        String context = messages.getValue().toString();
+        for (String expected : java.util.List.of("回答表现：反问帮助了解岗位", "本题判断依据：面试官说明按业务分工", "怎么改进：下次明确协作边界", "归属面试官", "【候选人反问】团队分工")) Assertions.assertTrue(context.contains(expected), expected);
+        Assertions.assertFalse(context.contains("缺失："));
+        Assertions.assertFalse(context.contains("不要传给聊天的旧缺失清单"));
     }
 
     private String packageFor(String user) throws Exception {
