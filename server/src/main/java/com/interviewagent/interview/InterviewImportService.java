@@ -102,6 +102,16 @@ class InterviewImportService {
 
     InterviewImport get(String userId, String id) { return api(task(userId, id)); }
 
+    InterviewImport pending(String userId,String interviewId) {
+        interviews.ensureEditableQuestions(userId,interviewId);
+        // Latest attempt wins, including SAVED: an older abandoned draft must not reappear after confirmation.
+        var id=jdbc.sql("SELECT id FROM interview_audio_imports WHERE user_id=:user AND target_interview_id=:target ORDER BY created_at DESC,id DESC LIMIT 1")
+            .param("user",userId).param("target",interviewId).query(String.class).optional().orElse(null);
+        if(id==null) return null;
+        var row=task(userId,id);
+        return row.finalInterviewId!=null||row.status.equals("SAVED")?null:api(row);
+    }
+
     InterviewImport importText(String userId,ImportTextRequest request) {
         if(request==null||request.interviewId()==null||request.interviewId().isBlank()) throw new IllegalArgumentException("请选择本场面试。");
         interviews.ensureEditableQuestions(userId,request.interviewId());
@@ -214,6 +224,8 @@ class InterviewImportService {
         java.util.Map<String, JsonNode> progress = new java.util.LinkedHashMap<>();
         try {
             ResumeSnapshot resume=resume(userId,row.targetInterviewId);
+            String name=ImportOrganization.resumeName(resume.text(),resume.info().filename());
+            String organizationResume=name.isBlank()?resume.text():"本场候选人姓名："+name+"\n"+resume.text();
             String inputHash=inputHash(turns,resume);
             JsonNode previous=row.progress==null?json.createObjectNode():json.readTree(row.progress);
             boolean compatible=!force&&previous.path("blocks").isObject()&&previous.path("version").asText().equals(ImportOrganization.VERSION)&&previous.path("inputHash").asText().equals(inputHash);
@@ -237,7 +249,7 @@ class InterviewImportService {
                 long started=System.nanoTime();
                 if(result==null) {
                     try(var task=org.slf4j.MDC.putCloseable("importId",id); var part=org.slf4j.MDC.putCloseable("importBlock",key)) {
-                        try { result=ImportOrganization.request(model,json,block,turns,resume.text(),resume.cards(),organized,requestTimeout,deadline); }
+                        try { result=ImportOrganization.request(model,json,block,turns,organizationResume,resume.cards(),organized,requestTimeout,deadline); }
                         catch(ReviewFailedException e) {
                             if(!e.code().equals("TRUNCATED")||block.added().size()<2) throw e;
                             int mid=block.added().size()/2;
@@ -248,7 +260,7 @@ class InterviewImportService {
                     }
                     // Cache only after cross-block continuity validation, so bad continuations can be retried.
                 }
-                var next=ImportOrganization.parse(result,block,turns,resume.text(),resume.cards()); ImportOrganization.merge(organized,next);
+                var next=ImportOrganization.parse(result,block,turns,organizationResume,resume.cards()); ImportOrganization.merge(organized,next);
                 if(organized.size()>80) throw new IllegalArgumentException("整理话题超过80条，请手工整理。");
                 progress.put(key,json.valueToTree(java.util.Map.of("added",block.added(),"context",block.context(),"result",result)));
                 jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=:progress,analysis_json=:analysis,transcript_json=:detail WHERE id=:id AND user_id=:user")
@@ -315,7 +327,7 @@ class InterviewImportService {
         if(request==null||request.questions()==null||request.questions().size()>80) throw new IllegalArgumentException("问答草稿无效。");
         try {
             var current=api(row);
-            boolean organized=current.organization().equals(ImportOrganization.VERSION);
+            boolean organized=ImportOrganization.isOrganized(current.organization());
             var turns=readTurns(row); if(turns.isEmpty()) turns=textTurns(row.transcript);
             var oldCorrections=corrections(row); var selected=ImportCorrections.select(oldCorrections,request.acceptedCorrectionIds());
             var oldDisplay=ImportCorrections.display(turns,oldCorrections); var display=ImportCorrections.display(turns,selected);
@@ -330,7 +342,12 @@ class InterviewImportService {
                 if(!item.sourceId().isBlank()&&!sources.add(item.sourceId())) throw new IllegalArgumentException("问答来源重复。");
                 var old=current.questions().stream().filter(value->value.sourceId().equals(item.sourceId())).findFirst()
                     .orElse(new ImportedQuestion(item.question(),item.answer(),item.orderIndex(),item.speakerEvidence(),q,a));
-                if(known.contains(item.sourceId())&&!item.sourceId().isBlank()&&(old.questionTurnIds().isEmpty()?a.isEmpty():q.isEmpty())) throw new IllegalArgumentException("请保留或修正来源，不能删除来源绕过待确认。");
+                if(old.sourceSpan()!=null) {
+                    if(!old.sourceSpan().equals(item.sourceSpan())||!q.isEmpty()||!a.isEmpty()) throw new IllegalArgumentException("请保留原文对照范围，不能删除或替换来源绕过核对。");
+                } else {
+                    if(item.sourceSpan()!=null) throw new IllegalArgumentException("不能为手工问答伪造原文范围。");
+                    if(known.contains(item.sourceId())&&!item.sourceId().isBlank()&&(old.questionTurnIds().isEmpty()?a.isEmpty():q.isEmpty())) throw new IllegalArgumentException("请保留或修正来源，不能删除来源绕过待确认。");
+                }
                 if(excluded.contains(item.sourceId())) throw new IllegalArgumentException("已排除的问答不能同时加入。");
                 String question=text(item.question(),4000),answer=text(item.answer(),20000);
                 if(question.isBlank()) throw new IllegalArgumentException("请先填写问题，再保存预览修改。");
@@ -342,13 +359,16 @@ class InterviewImportService {
                     if(question.equals(old.question())) question=q.isEmpty()?old.question():ImportAnalysis.text(q,turns);
                     if(answer.equals(old.answer())) answer=ImportAnalysis.text(a,turns);
                 }
-                var warnings=organized?ImportOrganization.warnings(old.kind(),q,a,turns):new ArrayList<>(q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns));
+                var warnings=old.sourceSpan()!=null?new ArrayList<ImportWarning>():organized?ImportOrganization.warnings(old.kind(),q,a,turns):new ArrayList<>(q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns));
                 if(organized) for(var warning:old.warnings()) if(ImportOrganization.REVIEW_WARNINGS.contains(warning.code())) warnings.add(warning);
-                updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId(),old.kind(),old.notes(),old.edits()));
+                updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId(),old.kind(),old.notes(),old.edits(),old.sourceSpan()));
             }
             updated=new ArrayList<>(organized?ImportOrganization.boundaries(updated,turns):ImportAnalysis.boundaries(updated));
-            for(var old:current.questions()) if(!old.warnings().isEmpty()&&!sources.contains(old.sourceId())&&!excluded.contains(old.sourceId())) throw new IllegalArgumentException("请明确核对或排除待确认问答，不能隐去其来源。");
-            if(confirming) for(var q:updated) if(!q.warnings().isEmpty()&&!q.reviewConfirmed()) throw new IllegalArgumentException("请先核对待确认问答的原文与归属，或明确排除。");
+            for(var old:current.questions()) if((old.sourceSpan()!=null||!old.warnings().isEmpty())&&!sources.contains(old.sourceId())&&!excluded.contains(old.sourceId())) throw new IllegalArgumentException("请明确核对或排除待确认问答，不能隐去其来源。");
+            if(confirming) for(var q:updated) {
+                if(q.sourceSpan()!=null&&q.kind().equals("UNASSIGNED")&&q.question().equals("未整理的原文")) throw new IllegalArgumentException("请补充未整理的内容或明确排除，不能将原文提示作为问答加入。");
+                if((q.sourceSpan()!=null||!q.warnings().isEmpty())&&!q.reviewConfirmed()) throw new IllegalArgumentException("请先核对整理稿及不确定内容，或明确排除。");
+            }
             var root=row.analysis==null?json.createObjectNode():(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(row.analysis);
             root.set("questions",json.valueToTree(updated)); root.set("corrections",json.valueToTree(selected)); root.set("excludedQuestionIds",json.valueToTree(excluded));
             jdbc.sql("UPDATE interview_audio_imports SET analysis_json=:analysis,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user")
@@ -372,8 +392,9 @@ class InterviewImportService {
             List<ImportWarning> warnings=item.has("warnings")?json.convertValue(item.path("warnings"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportWarning>>(){}):List.of();
             List<String> notes=item.has("notes")?json.convertValue(item.path("notes"),new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){}):List.of();
             List<ImportEdit> edits=item.has("edits")?json.convertValue(item.path("edits"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportEdit>>(){}):List.of();
-            if(!root.path("organization").asText().equals(ImportOrganization.VERSION)) { question=compactGeneratedText(question,questionIds,turns); answer=compactGeneratedText(answer,answerIds,turns); }
-            result.add(new ImportedQuestion(question,answer,i+1,evidence,questionIds,answerIds,warnings,item.path("reviewConfirmed").asBoolean(false),item.has("sourceId")?item.path("sourceId").asText():null,item.path("kind").asText("QA"),notes,edits));
+            ImportSourceSpan source=item.hasNonNull("sourceSpan")?ImportOrganization.span(item.path("sourceSpan"),java.util.stream.IntStream.range(0,turns.size()).boxed().collect(java.util.stream.Collectors.toSet())):null;
+            if(!ImportOrganization.isOrganized(root.path("organization").asText())) { question=compactGeneratedText(question,questionIds,turns); answer=compactGeneratedText(answer,answerIds,turns); }
+            result.add(new ImportedQuestion(question,answer,i+1,evidence,questionIds,answerIds,warnings,item.path("reviewConfirmed").asBoolean(false),item.has("sourceId")?item.path("sourceId").asText():null,item.path("kind").asText("QA"),notes,edits,source));
         }
         return result;
     }

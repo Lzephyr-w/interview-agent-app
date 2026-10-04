@@ -944,8 +944,48 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
 .import-empty > span { color: var(--green); font: 36px Georgia, serif; height: 32px; }
 .import-empty p { margin: 0; color: var(--muted); font-size: 13px; }
 .import-questions .question-card { display: grid; gap: 12px; border-radius: 12px; }
-.import-questions .field:first-of-type textarea { min-height: 68px; }
+.import-questions details.question-card { display: block; }
+.import-questions .question-card:not(.import-draft-card) .field:first-of-type textarea { min-height: 68px; }
 .import-questions .muted { margin: 0; font-size: 12px; }
+.import-questions .import-draft-card { min-width: 0; padding: 18px 20px; background: var(--paper); }
+.import-questions details.import-draft-card[open] { display: grid; box-shadow: none; }
+.import-draft-card > summary { font-size: 13px; line-height: 1.6; }
+.import-question-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.import-question-heading > label,
+.import-draft-card .import-answer-field { color: var(--muted); font-size: 12px; font-weight: 500; }
+.import-question-heading .import-question-actions { flex-wrap: nowrap; gap: 6px; }
+.import-question-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 10px;
+  color: var(--muted);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+.import-question-actions .icon-button { width: 32px; padding: 0; font-size: 17px; }
+.import-question-actions .danger-button { color: var(--danger); }
+.import-question-actions button:hover:not(:disabled) { color: var(--green); background: var(--green-soft); border-color: var(--green); }
+.import-question-actions .danger-button:hover:not(:disabled) { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--paper)); border-color: var(--danger); }
+.import-question-actions button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.import-question-actions button:disabled { opacity: .4; }
+.import-draft-card textarea { field-sizing: content; min-width: 0; padding: 12px 14px; color: var(--ink); background: color-mix(in srgb, var(--surface) 45%, var(--paper)); border-radius: 10px; font-size: 14px; font-weight: 400; line-height: 1.8; }
+.import-draft-card .import-question-input { min-height: 56px; font-size: 15px; font-weight: 600; line-height: 1.6; }
+.import-draft-card .import-answer-field textarea { min-height: 128px; }
+.import-draft-card textarea::placeholder { color: var(--muted); font-weight: 400; }
+.import-draft-note { margin: 0; padding: 9px 12px; color: var(--muted); background: color-mix(in srgb, var(--green-soft) 30%, var(--paper)); border-left: 2px solid var(--line); border-radius: 0 7px 7px 0; font-size: 12px; line-height: 1.7; }
+.import-draft-card .import-transcript { padding: 10px 0 0; border-top: 1px solid var(--line); border-bottom: 0; color: var(--muted); }
+.import-draft-card .import-transcript > summary::before { content: "›"; color: var(--muted); font-weight: 400; }
+.import-draft-card .transcript-preview { margin-bottom: 0; color: var(--ink); font-size: 13px; line-height: 1.8; }
+.import-review-check { display: flex; align-items: flex-start; gap: 8px; color: rgb(200, 116, 116); font-size: 13px; line-height: 1.6; cursor: pointer; }
+.import-review-check input { flex: 0 0 auto; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--green); }
+.import-review-check input:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 @media (max-width: 600px) {
   .import-file { flex-wrap: wrap; }
   .import-file > div { flex-basis: calc(100% - 56px); }
@@ -958,6 +998,7 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   .import-notice > button { margin-left: 20px; }
   .import-confirm { align-items: stretch; flex-direction: column; }
   .qa-manual-form { grid-template-columns: 1fr; }
+  .import-questions .import-draft-card { padding: 14px; }
 }
 .import-steps .done {
   color: var(--green);

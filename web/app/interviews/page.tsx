@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import AppShell from "@/components/AppShell";
@@ -71,6 +71,7 @@ type ImportedQuestion = {
   kind?: "QA" | "INTRODUCTION" | "CANDIDATE_QUESTION" | "INTERVIEWER_NOTE" | "UNASSIGNED";
   notes?: string[];
   edits?: { turnId: number; original: string; replacement: string; evidenceSource: string; evidenceId: string; evidence: string; reason: string; uncertain: boolean }[];
+  sourceSpan?: { start: number; end: number };
 };
 type ImportCorrection = { id: string; turnId: number; original: string; replacement: string; evidence: string; evidenceSource: string; reason: string; error: string; accepted: boolean };
 type ImportTurn = { id: number; segmentIndex: number; speakerId: number | null; startMs: number | null; endMs: number | null; text: string; role: "INTERVIEWER" | "CANDIDATE" | "UNKNOWN"; roleCorrected: boolean };
@@ -136,6 +137,83 @@ function errorMessage(cause: unknown, fallback: string) {
 
 type PageMode = "list" | "new" | "detail" | "edit" | "questions" | "review";
 
+function LazyImportDetails({ className, summary, children }: { className: string; summary: ReactNode; children: () => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className={className} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>{summary}</summary>
+      {open && children()}
+    </details>
+  );
+}
+const ImportSourceText = memo(function ImportSourceText({ task, span }: { task: ImportTask; span: NonNullable<ImportedQuestion["sourceSpan"]> }) {
+  return <LazyImportDetails className="import-transcript" summary="对照这段原文">{() => <pre className="transcript-preview">{task.turns?.filter((turn) => turn.id >= span.start && turn.id <= span.end).map((turn) => turn.text).join("\n") || task.transcript}</pre>}</LazyImportDetails>;
+});
+const ImportOriginalTranscript = memo(function ImportOriginalTranscript({ text }: { text: string }) {
+  return <LazyImportDetails className="import-transcript" summary={<>原始转写 <span>展开查看</span></>}>{() => <pre className="transcript-preview">{text}</pre>}</LazyImportDetails>;
+});
+type ImportQuestionCardProps = {
+  importTask: ImportTask;
+  item: ImportedQuestion;
+  index: number;
+  count: number;
+  updateImported: (index: number, patch: Partial<ImportedQuestion>) => void;
+  moveImported: (index: number, direction: -1 | 1) => void;
+  excludeImported: (index: number) => void;
+  updateSources: (index: number, field: "questionTurnIds" | "answerTurnIds", value: string) => void;
+  reviewImported: (index: number, reviewed: boolean) => void;
+};
+const ImportQuestionCard = memo(function ImportQuestionCard({ importTask, item, index, count, updateImported, moveImported, excludeImported, updateSources, reviewImported }: ImportQuestionCardProps) {
+  function sourceText(ids: number[]) { return ids.map((id) => importTask.turns?.find((turn) => turn.id === id)?.text ?? "").join(" "); }
+  if (item.sourceSpan) {
+    const span = item.sourceSpan;
+    const content = <>
+      <div className="import-question-heading">
+        <label htmlFor={`import-question-${item.sourceId || index}`}>{item.kind === "CANDIDATE_QUESTION" ? "候选人反问" : item.kind === "INTERVIEWER_NOTE" ? "面试官说明" : "问题"}</label>
+        <div className="item-actions import-question-actions"><button className="icon-button" type="button" aria-label="上移问题" title="上移问题" disabled={index === 0} onClick={() => moveImported(index, -1)}>↑</button><button className="icon-button" type="button" aria-label="下移问题" title="下移问题" disabled={index === count - 1} onClick={() => moveImported(index, 1)}>↓</button><button className="danger-button" type="button" onClick={() => excludeImported(index)}>排除这条</button></div>
+      </div>
+      <textarea className="import-question-input" id={`import-question-${item.sourceId || index}`} rows={2} value={item.question} onChange={(event) => updateImported(index, { question: event.target.value })} />
+      <label className="field import-answer-field">{item.kind === "CANDIDATE_QUESTION" || item.kind === "INTERVIEWER_NOTE" ? "面试官发言" : "回答"}<textarea rows={6} value={item.answer} onChange={(event) => updateImported(index, { answer: event.target.value })} placeholder="没有可确认回答时留空" /></label>
+      {item.notes?.map((note, n) => <p className="import-draft-note" key={n}>{note}</p>)}
+      {item.warnings?.filter((warning) => warning.code !== "DRAFT_UNCERTAIN").map((warning) => <p className="import-draft-note" key={warning.code}>{warning.message}</p>)}
+      <ImportSourceText task={importTask} span={span} />
+    </>;
+    return item.kind === "UNASSIGNED" ? <details className="question-card import-draft-card" key={item.sourceId}><summary>有一段未整理原文，展开核对</summary>{content}</details> : <article className="question-card import-draft-card" key={item.sourceId}>{content}</article>;
+  }
+  return (
+    <article className="question-card" key={item.sourceId || `${item.orderIndex}-${index}`}>
+      <div className="question-card-head"><strong>第 {index + 1} {importTask.organization ? "个话题" : "题"}{item.kind && item.kind !== "QA" ? ` · ${{ INTRODUCTION: "自我介绍", CANDIDATE_QUESTION: "候选人反问", INTERVIEWER_NOTE: "面试官说明", UNASSIGNED: "待补充来源" }[item.kind]}` : ""}</strong><div className="item-actions"><button className="icon-button" type="button" aria-label="上移问题" disabled={index === 0} onClick={() => moveImported(index, -1)}>↑</button><button className="icon-button" type="button" aria-label="下移问题" disabled={index === count - 1} onClick={() => moveImported(index, 1)}>↓</button><button className="danger-button" type="button" onClick={() => excludeImported(index)}>{item.sourceId ? "排除这条" : "删除"}</button></div></div>
+      <label className="field">问题<textarea rows={2} value={item.question} onChange={(event) => updateImported(index, { question: event.target.value })} /></label>
+      <label className="field">{item.kind === "CANDIDATE_QUESTION" || item.kind === "INTERVIEWER_NOTE" ? "面试官发言" : "回答"}<textarea rows={importTask.organization ? 6 : undefined} value={item.answer} onChange={(event) => updateImported(index, { answer: event.target.value })} placeholder="空回答会加入为“没答上”" /></label>
+      {!!item.notes?.length && <div className="import-notice"><div><strong>整理说明</strong>{item.notes.map((note, n) => <p key={n}>{note}</p>)}</div></div>}
+      {!!item.edits?.length && <details className="import-transcript"><summary>AI 整理时的术语修正（{item.edits.length}）</summary>{item.edits.map((edit, n) => <article className="import-turn" key={n}><strong>{edit.original} → {edit.replacement}{edit.uncertain ? "（上下文推测，待核对）" : ""}</strong><p>依据（{edit.evidenceSource === "RESUME" ? "本场简历" : edit.evidenceSource === "EVIDENCE_CARD" ? "关联项目证据卡" : "原始发言"}）：{edit.evidence}</p><p className="muted">{edit.reason}</p></article>)}</details>}
+      {(item.answer.trim() === "" || item.speakerEvidence.includes("待确认")) && <p className="muted">待确认：{item.speakerEvidence || "未识别出明确回答"}</p>}
+      {!!(item.questionTurnIds?.length || item.answerTurnIds?.length) && <LazyImportDetails className="import-transcript" summary="核对原始来源（编号从 0 开始）">{() => <>
+        <div className="form-row"><label className="field">问题来源编号<input key={`q-${item.questionTurnIds?.join(",")}`} defaultValue={item.questionTurnIds?.join(",") ?? ""} onBlur={(event) => { if (event.target.value !== (item.questionTurnIds?.join(",") ?? "")) updateSources(index, "questionTurnIds", event.target.value); }} /></label><label className="field">回答来源编号<input key={`a-${item.answerTurnIds?.join(",")}`} defaultValue={item.answerTurnIds?.join(",") ?? ""} onBlur={(event) => { if (event.target.value !== (item.answerTurnIds?.join(",") ?? "")) updateSources(index, "answerTurnIds", event.target.value); }} /></label></div>
+        <pre className="transcript-preview">{[...new Set([...(item.questionTurnIds ?? []), ...(item.answerTurnIds ?? [])])].sort((a, b) => a - b).map((id) => `[${id}] ${importTask.turns?.find((turn) => turn.id === id)?.text ?? "请参照上方原始转写"}`).join("\n")}</pre>
+        {importTask.organization && item.kind !== "UNASSIGNED" && <button className="secondary-button" type="button" onClick={() => updateImported(index, { question: item.questionTurnIds?.length ? sourceText(item.questionTurnIds) : item.question, answer: sourceText(item.answerTurnIds ?? []) })}>将本话题恢复为原文摘录</button>}
+      </>}</LazyImportDetails>}
+      {!!item.warnings?.length && <div className="import-notice"><div><strong>这条问答需要核对</strong>{item.warnings.map((warning) => <p key={warning.code}>{warning.message}</p>)}<label><input type="checkbox" checked={!!item.reviewConfirmed} onChange={(event) => reviewImported(index, event.target.checked)} /> 我已核对原文、问题边界与角色归属</label></div></div>}
+    </article>
+  );
+});
+
+function importTime(ms: number | null) { return ms === null ? "时间未知" : `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`; }
+const ImportDialogue = memo(function ImportDialogue({ importTask, audioImportBusy, requestRoleCorrection }: { importTask: ImportTask; audioImportBusy: boolean; requestRoleCorrection: (turnId: number, role: ImportTurn["role"]) => void }) {
+  return <LazyImportDetails className="import-transcript import-dialogue" summary={<>时间、说话人与角色（可修正）<small>{importTask.turns?.length} 条发言</small></>}>{() => <>
+    <p className="import-dialogue-hint">{importTask.source === "TEXT" ? "文本来源编号从 0 开始，不推测时间或声音身份。" : "声音编号仅在同一片段内有效。"}角色按对话内容自动推断，无法确定时标为待确认。修改角色后自动重新分析，原始转写保留。</p>
+    <div className="import-dialogue-list" role="region" aria-label="面试发言列表" tabIndex={0}>
+      {importTask.turns?.map((turn) => <article className="import-turn" data-role={turn.role} key={turn.id}>
+        <div className="import-turn-meta">
+          {turn.segmentIndex < 0 ? <div><span>发言编号 {turn.id} · 文本来源</span></div> : <div><time>{importTime(turn.startMs)} – {importTime(turn.endMs)}</time><span>片段 {turn.segmentIndex + 1} / 说话人 {turn.speakerId ?? "未知"}</span></div>}
+          <label className="import-turn-role"><span>{turn.roleCorrected ? "已修正角色" : turn.role === "UNKNOWN" ? "角色待确认" : "推断角色"}</span><select aria-label={`发言 ${turn.id + 1} 角色`} value={turn.role} disabled={audioImportBusy || importTask.status === "SAVED" || importTask.status === "TRANSCRIPTION_FAILED"} onChange={(event) => requestRoleCorrection(turn.id, event.target.value as ImportTurn["role"])}><option value="UNKNOWN">待确认</option><option value="INTERVIEWER">面试官</option><option value="CANDIDATE">候选人</option></select></label>
+        </div>
+        {turn.text.length > 120 ? <details className="import-turn-text"><summary><span>{turn.text.slice(0, 120)}…</span><small className="import-turn-expand">展开全文</small><small className="import-turn-collapse">收起全文</small></summary><p>{turn.text}</p></details> : <p className="import-turn-short">{turn.text}</p>}
+      </article>)}
+    </div>
+  </>}</LazyImportDetails>;
+});
+
 export default function InterviewsPage() {
   const pathname = usePathname();
   const router = useRouter();
@@ -180,14 +258,24 @@ export default function InterviewsPage() {
   const [importQuestions, setImportQuestions] = useState<ImportedQuestion[]>(
     [],
   );
+  // Stable card actions read the latest draft without re-rendering every card on each keystroke.
+  const importQuestionsRef = useRef(importQuestions);
+  importQuestionsRef.current = importQuestions;
   const [importingAudio, setImportingAudio] = useState(false);
+  const [restoringImport, setRestoringImport] = useState(false);
   const [analyzingImport, setAnalyzingImport] = useState(false);
   const [confirmReanalysis, setConfirmReanalysis] = useState(false);
   const [reanalysisForce, setReanalysisForce] = useState(true);
   const [pendingRole, setPendingRole] = useState<{ turnId: number; role: ImportTurn["role"] }>();
   const [draggingAudio, setDraggingAudio] = useState(false);
   const [addMethod, setAddMethod] = useState("audio");
-  const audioImportBusy = importingAudio || analyzingImport || saving;
+  const importProcessing = !!importTask && ["TRANSCRIBING", "ANALYZING"].includes(importTask.status);
+  const audioImportBusy = importingAudio || analyzingImport || restoringImport || importProcessing || saving;
+
+  function setImportPreview(task?: ImportTask) {
+    const pending = task && task.status !== "SAVED" && !task.finalInterviewId ? task : undefined;
+    setImportTask(pending); setImportQuestions(pending?.questions ?? []);
+  }
 
   async function load() {
     setLoading(true);
@@ -223,19 +311,34 @@ export default function InterviewsPage() {
     if (interviewId) void loadDetail(interviewId);
   }, [interviewId, mode]);
   useEffect(() => {
-    if (mode !== "questions" || !detail) return;
-    const id = window.sessionStorage.getItem(
-      `interview-audio-import-id-${detail.interview.id}`,
-    );
-    if (!id) return;
-    void api<ImportTask>(`/api/v1/interview-imports/${id}`)
+    setImportPreview(); setRestoringImport(false);
+    if (mode !== "questions" || !detail || detail.interview.id !== interviewId || detail.interview.simulationType !== "REAL") return;
+    let active = true;
+    setRestoringImport(true);
+    void api<ImportTask | undefined>(`/api/v1/interview-imports/pending?interviewId=${encodeURIComponent(detail.interview.id)}`)
       .then((task) => {
-        setImportTask(task);
-        setImportQuestions(task.questions);
-        if (task.source === "TEXT") setAddMethod("text");
+        if (!active || !task || task.status === "SAVED" || task.finalInterviewId) return;
+        setImportPreview(task);
+        setAddMethod(task.source === "TEXT" ? "text" : "audio");
       })
-      .catch(() => window.sessionStorage.removeItem("interview-audio-import-id"));
-  }, [detail?.interview.id, mode]);
+      .catch((cause) => { if (active) setError(errorMessage(cause, "未确认导入加载失败，请刷新重试。")); })
+      .finally(() => { if (active) setRestoringImport(false); });
+    return () => { active = false; };
+  }, [interviewId, detail?.interview.id, mode]);
+  useEffect(() => {
+    if (mode !== "questions" || !importTask || !importProcessing) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api<ImportTask>(`/api/v1/interview-imports/${importTask.id}`).then((task) => {
+        if (!active) return;
+        setImportPreview(task);
+        if (task.status === "SAVED" || task.finalInterviewId) {
+          if (interviewId) void loadDetail(interviewId);
+        }
+      }).catch((cause) => { if (active) setError(errorMessage(cause, "导入进度加载失败，正在重试。")); });
+    }, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [interviewId, mode, importTask?.id, importTask?.status]);
 
   async function saveInterview(event: FormEvent) {
     event.preventDefault();
@@ -276,12 +379,7 @@ export default function InterviewsPage() {
         method: "POST",
         body: data,
       });
-      setImportTask(task);
-      setImportQuestions(task.questions);
-      window.sessionStorage.setItem(
-        `interview-audio-import-id-${detail.interview.id}`,
-        task.id,
-      );
+      setImportPreview(task);
       setMessage(
         task.status === "READY"
           ? "转写与问答识别完成，请检查后保存。"
@@ -306,7 +404,7 @@ export default function InterviewsPage() {
     else void analyzeImported();
   }
   function hasImportEdits() {
-    const original = importTask?.questions ?? [];
+    const original = importTask?.questions ?? [], importQuestions = importQuestionsRef.current;
     return !!importTask?.excludedQuestionIds?.length || !!importTask?.corrections?.some((c) => c.accepted) || importQuestions.length !== original.length || importQuestions.some((item, index) =>
       item.question !== original[index].question || item.answer !== original[index].answer || item.orderIndex !== original[index].orderIndex,
     ) || importQuestions.some((item) => item.reviewConfirmed || (!importTask?.organization && importTask?.turns?.length && item.questionTurnIds?.length && (
@@ -321,8 +419,7 @@ export default function InterviewsPage() {
     setAnalyzingImport(true); setError("");
     try {
       const task = await api<ImportTask>("/api/v1/interview-imports/text", { method: "POST", body: JSON.stringify({ interviewId: detail.interview.id, transcript }) });
-      setImportTask(task); setImportQuestions(task.questions);
-      window.sessionStorage.setItem(`interview-audio-import-id-${detail.interview.id}`, task.id);
+      setImportPreview(task);
       setMessage(task.status === "READY" ? "文本识别完成，请核对原话和纠错建议。" : "文本已保留，可重试分析。");
     } catch (cause) { setError(errorMessage(cause, "文本识别失败。")); }
     finally { setAnalyzingImport(false); }
@@ -332,20 +429,24 @@ export default function InterviewsPage() {
     setAnalyzingImport(true); setError("");
     try {
       const task = await api<ImportTask>(`/api/v1/interview-imports/${importTask.id}/draft`, { method: "PATCH", body: JSON.stringify({ questions: questions.map((q, index) => ({ ...q, orderIndex: index + 1 })), acceptedCorrectionIds, excludedQuestionIds }) });
-      setImportTask(task); setImportQuestions(task.questions);
+      setImportPreview(task);
     } catch (cause) { setError(errorMessage(cause, "保存预览修改失败，当前编辑已保留。")); }
     finally { setAnalyzingImport(false); }
   }
-  function excludeImported(index: number) {
+  const excludeImported = useCallback((index: number) => {
+    const importQuestions = importQuestionsRef.current;
     const item = importQuestions[index];
     void saveImportDraft(importQuestions.filter((_, current) => current !== index), undefined,
       [...(importTask?.excludedQuestionIds ?? []), ...(item.sourceId ? [item.sourceId] : [])]);
-  }
-  function updateSources(index: number, field: "questionTurnIds" | "answerTurnIds", value: string) {
+  }, [importTask, audioImportBusy]);
+  const updateSources = useCallback((index: number, field: "questionTurnIds" | "answerTurnIds", value: string) => {
     if (!/^(\d+(\s*,\s*\d+)*)?$/.test(value.trim())) { setError("来源编号请用英文逗号分隔，例如 0,1。"); return; }
     const ids = value.trim() ? value.split(",").map(Number) : [];
-    void saveImportDraft(importQuestions.map((q, current) => current === index ? { ...q, [field]: ids, reviewConfirmed: false } : q));
-  }
+    void saveImportDraft(importQuestionsRef.current.map((q, current) => current === index ? { ...q, [field]: ids, reviewConfirmed: false } : q));
+  }, [importTask, audioImportBusy]);
+  const reviewImported = useCallback((index: number, reviewed: boolean) => {
+    void saveImportDraft(importQuestionsRef.current.map((q, current) => current === index ? { ...q, reviewConfirmed: reviewed } : q));
+  }, [importTask, audioImportBusy]);
   async function analyzeImported(force = false) {
     if (!importTask || audioImportBusy) return;
     setAnalyzingImport(true);
@@ -355,8 +456,7 @@ export default function InterviewsPage() {
         `/api/v1/interview-imports/${importTask.id}/analyze${force ? "?force=true" : ""}`,
         { method: "POST" },
       );
-      setImportTask(task);
-      setImportQuestions(task.questions);
+      setImportPreview(task);
       setMessage(
         task.status === "READY"
           ? "问答识别完成，请检查后保存。"
@@ -377,27 +477,26 @@ export default function InterviewsPage() {
         method: "PATCH", body: JSON.stringify({ roles: [{ turnId, role }] }),
       });
       const task = await api<ImportTask>(`/api/v1/interview-imports/${importTask.id}/analyze`, { method: "POST" });
-      setImportTask(task); setImportQuestions(task.questions);
+      setImportPreview(task);
       setMessage(task.status === "READY" ? "角色修正已用于重新分析，请检查问答。" : "角色已保存，问答分析未完成，可重试。");
     } catch (cause) {
       setError(errorMessage(cause, "角色修正或重新分析失败。"));
       const task = await api<ImportTask>(`/api/v1/interview-imports/${importTask.id}`).catch(() => undefined);
-      if (task) { setImportTask(task); setImportQuestions(task.questions); }
+      if (task) setImportPreview(task);
     } finally { setAnalyzingImport(false); }
   }
-  function requestRoleCorrection(turnId: number, role: ImportTurn["role"]) {
+  const requestRoleCorrection = useCallback((turnId: number, role: ImportTurn["role"]) => {
     if (hasImportEdits()) setPendingRole({ turnId, role });
     else void correctImportRole(turnId, role);
-  }
-  function importTime(ms: number | null) { return ms === null ? "时间未知" : `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}`; }
-  function updateImported(index: number, patch: Partial<ImportedQuestion>) {
+  }, [importTask, audioImportBusy]);
+  const updateImported = useCallback((index: number, patch: Partial<ImportedQuestion>) => {
     setImportQuestions((items) =>
       items.map((item, current) =>
         current === index ? { ...item, ...patch, reviewConfirmed: false } : item,
       ),
     );
-  }
-  function moveImported(index: number, direction: -1 | 1) {
+  }, []);
+  const moveImported = useCallback((index: number, direction: -1 | 1) => {
     setImportQuestions((items) => {
       const target = index + direction;
       if (target < 0 || target >= items.length) return items;
@@ -405,7 +504,7 @@ export default function InterviewsPage() {
       [next[index], next[target]] = [next[target], next[index]];
       return next.map((item, orderIndex) => ({ ...item, orderIndex: orderIndex + 1 }));
     });
-  }
+  }, []);
   async function saveImported() {
     if (!importTask || audioImportBusy) return;
     setSaving(true);
@@ -425,11 +524,7 @@ export default function InterviewsPage() {
           }),
         },
       );
-      window.sessionStorage.removeItem(
-        `interview-audio-import-id-${saved.interview.id}`,
-      );
-      setImportTask(undefined);
-      setImportQuestions([]);
+      setImportPreview();
       await loadDetail(saved.interview.id);
       setMessage("识别问答已加入本场面试，请继续检查或发起复盘。");
     } catch (cause) {
@@ -565,11 +660,11 @@ export default function InterviewsPage() {
   const audioFileInput = <input type="file" aria-label={importTask ? "重新导入音频" : "上传面试录音"} accept="audio/webm,audio/ogg,audio/mpeg,audio/mp4,audio/wav,.webm,.ogg,.mp3,.mp4,.m4a,.wav" disabled={audioImportBusy} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadAudio(file); }} />;
   const audioImportPanel =
     mode === "questions" && detail && !questionReadOnly ? (
-      <div className="audio-import" aria-busy={importingAudio || analyzingImport}>
+      <div className="audio-import" aria-busy={importingAudio || analyzingImport || restoringImport || importProcessing}>
         {!importTask && (
           <label className={`audio-dropzone${draggingAudio ? " dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDraggingAudio(true); }} onDragLeave={() => setDraggingAudio(false)} onDrop={(event) => { event.preventDefault(); setDraggingAudio(false); void uploadAudio(event.dataTransfer.files[0]); }}>
             <span className="audio-upload-icon" aria-hidden="true">↑</span>
-            <strong>{importingAudio ? "正在转写与识别…" : "点击上传，或将录音拖到这里"}</strong>
+            <strong>{restoringImport ? "正在恢复未确认的导入…" : importingAudio ? "正在转写与识别…" : "点击上传，或将录音拖到这里"}</strong>
             <span>自动整理为问答，确认后加入记录</span>
             <span>录音仅用于识别：较大文件会在服务器临时分段处理，完成后删除</span>
             <small>MP3 / M4A / WAV / WebM / Ogg / MP4 · 最大 800 MB</small>
@@ -578,7 +673,8 @@ export default function InterviewsPage() {
         )}
         {importTask && (
           <div className="audio-import-result">
-            <div className="import-file"><span className="import-file-icon" aria-hidden="true">{importTask.source === "TEXT" ? "≡" : "♫"}</span><div><strong>{importTask.originalFilename}</strong><small>{importTask.source === "TEXT" ? "粘贴文本 · AI 预览" : `${(importTask.sizeBytes / 1024 / 1024).toFixed(1)} MiB · 面试录音`}</small></div><span className="import-badge">{importingAudio || analyzingImport ? "处理中" : importTask.status === "READY" ? "待确认" : "待处理"}</span>{importTask.source !== "TEXT" && <label className="secondary-button audio-reimport">{importingAudio ? "导入中…" : "重新导入"}{audioFileInput}</label>}</div>
+            <div className="import-file"><span className="import-file-icon" aria-hidden="true">{importTask.source === "TEXT" ? "≡" : "♫"}</span><div><strong>{importTask.originalFilename}</strong><small>{importTask.source === "TEXT" ? "粘贴文本 · AI 预览" : `${(importTask.sizeBytes / 1024 / 1024).toFixed(1)} MiB · 面试录音`}</small></div><span className="import-badge">{importingAudio || analyzingImport || importProcessing ? "处理中" : importTask.status === "READY" ? "待确认" : "待处理"}</span>{importTask.source !== "TEXT" && <label className="secondary-button audio-reimport">{importingAudio ? "导入中…" : "重新导入"}{audioFileInput}</label>}</div>
+            <p className="muted">未确认的导入会持续保留，刷新或重新打开后仍可继续；确认提交成功后不再展示。</p>
             {importTask.source !== "TEXT" &&
             <ol className="import-steps" aria-label="录音导入进度">
               <li className="done"><span>✓</span>上传</li>
@@ -586,23 +682,11 @@ export default function InterviewsPage() {
               <li className={importAnalysisComplete ? "done" : importTranscriptionComplete ? "current" : ""} aria-current={importTranscriptionComplete && !importAnalysisComplete ? "step" : undefined}><span>{importAnalysisComplete ? "✓" : "3"}</span>识别问答</li>
               <li className={importTask.status === "SAVED" ? "done" : importTask.status === "READY" ? "current" : ""} aria-current={importTask.status === "READY" ? "step" : undefined}><span>{importTask.status === "SAVED" ? "✓" : "4"}</span>确认</li>
             </ol>}
-            <p className="muted">{importTask.resume?.status === "READY" ? `本场关联简历：${importTask.resume.filename}${importTask.resume.truncated ? "（仅使用前 12000 字符）" : ""}` : `本场简历${importTask.resume?.status === "PENDING" ? "尚未解析完成" : importTask.resume?.status === "FAILED" ? "解析失败" : "不可用"}。`}{importTask.evidenceCards?.length ? ` 关联证据卡：${importTask.evidenceCards.join("、")}。` : " 本场未关联项目证据卡。"} {importTask.organization ? "以下是按话题合并、纠错后的整理稿，确认后加入记录；原始转写保留供对照。" : "原始转写保留。重新识别可按话题整理、结合关联资料纠错。"}</p>
+            <p className="muted">{importTask.resume?.status === "READY" ? `本场关联简历：${importTask.resume.filename}${importTask.resume.truncated ? "（仅使用前 12000 字符）" : ""}` : `本场简历${importTask.resume?.status === "PENDING" ? "尚未解析完成" : importTask.resume?.status === "FAILED" ? "解析失败" : "不可用"}。`}{importTask.evidenceCards?.length ? ` 关联证据卡：${importTask.evidenceCards.join("、")}。` : " 本场未关联项目证据卡。"} {importTask.organization ? "以下结合关联资料整理问答，保留当时回答的意思；不确定处另行说明，原文可展开对照。" : "原始转写保留。重新识别可结合关联资料整理问答。"}</p>
             {importTask.error && <div className="import-notice"><span aria-hidden="true">!</span><div><strong role="alert">{importTask.status === "TRANSCRIPTION_FAILED" || !importTask.transcript ? "录音转写未完成，请重新上传" : "问答识别未完成，转写已保留"}</strong><details><summary>查看原因</summary><p>{importTask.error}</p></details></div>{importTask.transcript && importTask.status !== "TRANSCRIPTION_FAILED" && <button className="secondary-button" type="button" disabled={analyzingImport || importingAudio} onClick={retryImported}>{analyzingImport ? "识别中…" : "重新识别"}</button>}</div>}
-            {!!importTask.turns?.length && <details className="import-transcript import-dialogue">
-              <summary>时间、说话人与角色（可修正）<small>{importTask.turns.length} 条发言</small></summary>
-              <p className="import-dialogue-hint">{importTask.source === "TEXT" ? "文本来源编号从 0 开始，不推测时间或声音身份。" : "声音编号仅在同一片段内有效。"}修改角色后自动重新分析，原始转写保留。</p>
-              <div className="import-dialogue-list" role="region" aria-label="面试发言列表" tabIndex={0}>
-                {importTask.turns.map((turn) => <article className="import-turn" data-role={turn.role} key={turn.id}>
-                  <div className="import-turn-meta">
-                    {turn.segmentIndex < 0 ? <div><span>发言编号 {turn.id} · 文本来源</span></div> : <div><time>{importTime(turn.startMs)} – {importTime(turn.endMs)}</time><span>片段 {turn.segmentIndex + 1} / 说话人 {turn.speakerId ?? "未知"}</span></div>}
-                    <label className="import-turn-role"><span>{turn.roleCorrected ? "已修正角色" : "推断角色"}</span><select aria-label={`发言 ${turn.id + 1} 角色`} value={turn.role} disabled={audioImportBusy || importTask.status === "SAVED" || importTask.status === "TRANSCRIPTION_FAILED"} onChange={(event) => requestRoleCorrection(turn.id, event.target.value as ImportTurn["role"])}><option value="UNKNOWN">待确认</option><option value="INTERVIEWER">面试官</option><option value="CANDIDATE">候选人</option></select></label>
-                  </div>
-                  {turn.text.length > 120 ? <details className="import-turn-text"><summary><span>{turn.text.slice(0, 120)}…</span><small className="import-turn-expand">展开全文</small><small className="import-turn-collapse">收起全文</small></summary><p>{turn.text}</p></details> : <p className="import-turn-short">{turn.text}</p>}
-                </article>)}
-              </div>
-            </details>}
+            {!!importTask.turns?.length && <ImportDialogue importTask={importTask} audioImportBusy={audioImportBusy} requestRoleCorrection={requestRoleCorrection} />}
             {importTask.transcript && !importTask.turns?.length && importTask.source !== "TEXT" && <p className="muted">旧任务仅有文本；获取真实时间和声音分离需要重新上传原音频。</p>}
-            {importTask.transcript && <details className="import-transcript"><summary>原始转写 <span>展开查看</span></summary><pre className="transcript-preview">{importTask.transcript}</pre></details>}
+            {importTask.transcript && <ImportOriginalTranscript text={importTask.transcript} />}
             {!!importTask.corrections?.length && <details className="import-transcript"><summary>词级纠错建议 <small>{importTask.corrections.length} 条 · 核对后采纳</small></summary>
               {importTask.corrections.map((c) => <article className="import-turn" key={c.id}>
                 <strong>发言编号 {c.turnId}：{c.original} → {c.replacement}</strong>
@@ -614,26 +698,11 @@ export default function InterviewsPage() {
             {importTask.transcript && !importTask.error && importTask.status !== "READY" && <button className="secondary-button" type="button" disabled={analyzingImport || importingAudio} onClick={retryImported}>{analyzingImport ? "识别中…" : "重新识别"}</button>}
             {importTask.transcript && (
               <fieldset className="import-questions" disabled={audioImportBusy} aria-label="待确认问答">
-                <div className="import-review-heading"><h3>{importTask.organization ? "话题整理稿" : "待确认问答"} <span>{importQuestions.length}</span></h3><div className="item-actions">{importTask.status === "READY" && <button className="secondary-button" type="button" disabled={audioImportBusy} title="使用已保存的转写重新分析问答，保留角色修正" onClick={reanalyzeImported}>{analyzingImport ? "识别中…" : "重新识别问答"}</button>}<button className="secondary-button" type="button" disabled={analyzingImport} onClick={() => setImportQuestions((items) => [...items, { question: "", answer: "", orderIndex: items.length + 1, speakerEvidence: "待确认" }])}>＋ 补充问答</button></div></div>
+                <div className="import-review-heading"><h3>{importTask.organization ? "整理后的问答" : "待确认问答"} <span>{importQuestions.filter((q) => q.kind !== "UNASSIGNED").length}</span></h3><div className="item-actions">{importTask.status === "READY" && <button className="secondary-button" type="button" disabled={audioImportBusy} title="使用已保存的转写重新分析问答，保留角色修正" onClick={reanalyzeImported}>{analyzingImport ? "识别中…" : "重新识别问答"}</button>}<button className="secondary-button" type="button" disabled={analyzingImport} onClick={() => setImportQuestions((items) => [...items, { question: "", answer: "", orderIndex: items.length + 1, speakerEvidence: "待确认" }])}>＋ 补充问答</button></div></div>
                 {importQuestions.length === 0 && <div className="import-empty"><span aria-hidden="true">“ ”</span><strong>还没有可确认的问答</strong><p>重新识别，或参照原始转写补充一题。</p></div>}
-                {importQuestions.length === 0 && <button className="secondary-button" type="button" onClick={() => { if (detail) window.sessionStorage.removeItem(`interview-audio-import-id-${detail.interview.id}`); setImportTask(undefined); }}>结束空预览</button>}
-                {importQuestions.map((item, index) => (
-                  <article className="question-card" key={item.sourceId || `${item.orderIndex}-${index}`}>
-                    <div className="question-card-head"><strong>第 {index + 1} {importTask.organization ? "个话题" : "题"}{item.kind && item.kind !== "QA" ? ` · ${{ INTRODUCTION: "自我介绍", CANDIDATE_QUESTION: "候选人反问", INTERVIEWER_NOTE: "面试官说明", UNASSIGNED: "待补充来源" }[item.kind]}` : ""}</strong><div className="item-actions"><button className="icon-button" type="button" aria-label="上移问题" disabled={index === 0} onClick={() => moveImported(index, -1)}>↑</button><button className="icon-button" type="button" aria-label="下移问题" disabled={index === importQuestions.length - 1} onClick={() => moveImported(index, 1)}>↓</button><button className="danger-button" type="button" onClick={() => excludeImported(index)}>{item.sourceId ? "排除这条" : "删除"}</button></div></div>
-                    <label className="field">问题<textarea rows={2} value={item.question} onChange={(event) => updateImported(index, { question: event.target.value })} /></label>
-                    <label className="field">{item.kind === "CANDIDATE_QUESTION" || item.kind === "INTERVIEWER_NOTE" ? "面试官发言" : "回答"}<textarea rows={importTask.organization ? 6 : undefined} value={item.answer} onChange={(event) => updateImported(index, { answer: event.target.value })} placeholder="空回答会加入为“没答上”" /></label>
-                    {!!item.notes?.length && <div className="import-notice"><div><strong>整理说明</strong>{item.notes.map((note, n) => <p key={n}>{note}</p>)}</div></div>}
-                    {!!item.edits?.length && <details className="import-transcript"><summary>AI 整理时的术语修正（{item.edits.length}）</summary>{item.edits.map((edit, n) => <article className="import-turn" key={n}><strong>{edit.original} → {edit.replacement}{edit.uncertain ? "（上下文推测，待核对）" : ""}</strong><p>依据（{edit.evidenceSource === "RESUME" ? "本场简历" : edit.evidenceSource === "EVIDENCE_CARD" ? "关联项目证据卡" : "原始发言"}）：{edit.evidence}</p><p className="muted">{edit.reason}</p></article>)}</details>}
-                    {(item.answer.trim() === "" || item.speakerEvidence.includes("待确认")) && <p className="muted">待确认：{item.speakerEvidence || "未识别出明确回答"}</p>}
-                    {!!(item.questionTurnIds?.length || item.answerTurnIds?.length) && <details className="import-transcript"><summary>核对原始来源（编号从 0 开始）</summary>
-                      <div className="form-row"><label className="field">问题来源编号<input key={`q-${item.questionTurnIds?.join(",")}`} defaultValue={item.questionTurnIds?.join(",") ?? ""} onBlur={(event) => { if (event.target.value !== (item.questionTurnIds?.join(",") ?? "")) updateSources(index, "questionTurnIds", event.target.value); }} /></label><label className="field">回答来源编号<input key={`a-${item.answerTurnIds?.join(",")}`} defaultValue={item.answerTurnIds?.join(",") ?? ""} onBlur={(event) => { if (event.target.value !== (item.answerTurnIds?.join(",") ?? "")) updateSources(index, "answerTurnIds", event.target.value); }} /></label></div>
-                      <pre className="transcript-preview">{[...new Set([...(item.questionTurnIds ?? []), ...(item.answerTurnIds ?? [])])].sort((a, b) => a - b).map((id) => `[${id}] ${importTask.turns?.find((turn) => turn.id === id)?.text ?? "请参照上方原始转写"}`).join("\n")}</pre>
-                      {importTask.organization && item.kind !== "UNASSIGNED" && <button className="secondary-button" type="button" onClick={() => updateImported(index, { question: item.questionTurnIds?.length ? sourceText(item.questionTurnIds) : item.question, answer: sourceText(item.answerTurnIds ?? []) })}>将本话题恢复为原文摘录</button>}
-                    </details>}
-                    {!!item.warnings?.length && <div className="import-notice"><div><strong>这条问答需要核对</strong>{item.warnings.map((warning) => <p key={warning.code}>{warning.message}（发言 {warning.turnIds.join(",")}）</p>)}<label><input type="checkbox" checked={!!item.reviewConfirmed} onChange={(event) => void saveImportDraft(importQuestions.map((q, current) => current === index ? { ...q, reviewConfirmed: event.target.checked } : q))} /> 我已核对原文、问题边界与角色归属</label></div></div>}
-                  </article>
-                ))}
-                {importQuestions.length > 0 && <div className="import-confirm"><span>{importQuestions.some((q) => q.warnings?.length && !q.reviewConfirmed) ? "先逐条核对或排除待确认项" : "确认后加入本场记录"}</span><button className="primary-button" type="button" disabled={saving || analyzingImport || importQuestions.some((item) => !item.question.trim() || (!!item.warnings?.length && !item.reviewConfirmed))} onClick={() => void saveImported()}>{saving ? "正在加入…" : `确认加入 ${importQuestions.length} 条问答`}</button></div>}
+                {importQuestions.map((item, index) => <ImportQuestionCard key={item.sourceId || `${item.orderIndex}-${index}`} importTask={importTask} item={item} index={index} count={importQuestions.length} updateImported={updateImported} moveImported={moveImported} excludeImported={excludeImported} updateSources={updateSources} reviewImported={reviewImported} />)}
+                {importQuestions.some((q) => q.sourceSpan) && <label className="import-review-check" htmlFor="import-review-confirmation"><input id="import-review-confirmation" type="checkbox" checked={importQuestions.filter((q) => q.sourceSpan).every((q) => q.reviewConfirmed)} onChange={(event) => { const reviewed = event.target.checked; setImportQuestions((items) => items.map((q) => q.sourceSpan ? { ...q, reviewConfirmed: reviewed } : q)); }} /><span>我已核对整理稿、不确定说明及未整理内容</span></label>}
+                {importQuestions.length > 0 && <div className="import-confirm"><span>{importQuestions.some((q) => q.sourceSpan && q.kind === "UNASSIGNED" && q.question === "未整理的原文") ? "请补充或排除未整理的内容" : importQuestions.some((q) => (q.sourceSpan || q.warnings?.length) && !q.reviewConfirmed) ? importQuestions.some((q) => q.sourceSpan) ? "核对整理稿后确认加入" : "先逐条核对或排除待确认项" : "确认后加入本场记录"}</span><button className="primary-button" type="button" disabled={saving || analyzingImport || importQuestions.some((item) => !item.question.trim() || (!!item.sourceSpan && item.kind === "UNASSIGNED" && item.question === "未整理的原文") || ((!!item.sourceSpan || !!item.warnings?.length) && !item.reviewConfirmed))} onClick={() => void saveImported()}>{saving ? "正在加入…" : `确认加入 ${importQuestions.length} 条问答`}</button></div>}
               </fieldset>
             )}
           </div>
@@ -1017,7 +1086,7 @@ export default function InterviewsPage() {
                     <button type="button" aria-pressed={addMethod === "text"} aria-controls="qa-text-panel" onClick={() => setAddMethod("text")}><span aria-hidden="true">≡</span>粘贴文本</button>
                     <button type="button" aria-pressed={addMethod === "manual"} aria-controls="qa-manual-panel" onClick={() => setAddMethod("manual")}><span aria-hidden="true">＋</span>手动添加</button>
                   </div></div>
-                <div id="qa-audio-panel" hidden={addMethod !== "audio"}>{importTask?.source !== "TEXT" ? audioImportPanel : <p className="muted">当前有文本预览，请先完成或排除文本问答。</p>}</div>
+                <div id="qa-audio-panel" hidden={addMethod !== "audio"}>{!importTask && audioImportPanel}</div>
                   <div id="qa-text-panel" className="qa-input-panel" hidden={addMethod !== "text"}>
                     <label className="field">粘贴面试转写
                     <textarea
@@ -1039,7 +1108,6 @@ export default function InterviewsPage() {
                         分段并加入问答
                       </button>
                     </div></div>
-                    {importTask?.source === "TEXT" && audioImportPanel}
                   </div>
                   <div id="qa-manual-panel" className="qa-input-panel" hidden={addMethod !== "manual"}>
                     <form className="library-form qa-manual-form" onSubmit={addQuestion}>
@@ -1080,6 +1148,7 @@ export default function InterviewsPage() {
                     </div>
                     </form>
                   </div>
+                  {importTask && audioImportPanel}
                 </section>}
                 <div className="question-list">
                   <div className="qa-list-heading"><h3>本场问答 <span>{detail.questions.length}</span></h3><span>{questionReadOnly ? "面试原始记录" : "点击问题可编辑"}</span></div>

@@ -3,6 +3,7 @@ package com.interviewagent.interview;
 import static com.interviewagent.interview.InterviewApi.*;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,7 @@ class InterviewImportController {
     InterviewImportController(InterviewImportService service) { this.service = service; }
     @PostMapping("/audio") @ResponseStatus(HttpStatus.CREATED) InterviewImport upload(@AuthenticationPrincipal Jwt jwt, @RequestParam(value = "interviewId", required = false) String interviewId, @RequestParam("file") MultipartFile file) { return service.upload(jwt.getSubject(), interviewId, file); }
     @PostMapping("/text") @ResponseStatus(HttpStatus.CREATED) InterviewImport text(@AuthenticationPrincipal Jwt jwt, @RequestBody ImportTextRequest request) { return service.importText(jwt.getSubject(),request); }
+    @GetMapping("/pending") ResponseEntity<InterviewImport> pending(@AuthenticationPrincipal Jwt jwt, @RequestParam String interviewId) { var task=service.pending(jwt.getSubject(),interviewId); return task==null?ResponseEntity.noContent().build():ResponseEntity.ok(task); }
     @GetMapping("/{id}") InterviewImport get(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.get(jwt.getSubject(), id); }
     @PostMapping("/{id}/analyze") InterviewImport analyze(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestParam(defaultValue = "false") boolean force) { return service.analyze(jwt.getSubject(), id, force); }
     @PatchMapping("/{id}/roles") InterviewImport roles(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestBody ImportRolesRequest request) { return service.correctRoles(jwt.getSubject(), id, request); }

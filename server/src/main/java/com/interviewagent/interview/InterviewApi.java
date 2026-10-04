@@ -2,6 +2,7 @@ package com.interviewagent.interview;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 public final class InterviewApi {
     private InterviewApi() {}
@@ -11,8 +12,10 @@ public final class InterviewApi {
     public record TranscriptRequest(String transcript) {}
     public record ImportWarning(String code, String message, List<Integer> turnIds) {}
     public record ImportEdit(int turnId,String original,String replacement,String evidenceSource,String evidenceId,String evidence,String reason,boolean uncertain) {}
-    public record ImportedQuestion(String question, String answer, int orderIndex, String speakerEvidence, List<Integer> questionTurnIds, List<Integer> answerTurnIds, List<ImportWarning> warnings, boolean reviewConfirmed, String sourceId,String kind,List<String> notes,List<ImportEdit> edits) {
+    public record ImportSourceSpan(int start,int end) {}
+    public record ImportedQuestion(String question, String answer, int orderIndex, String speakerEvidence, @JsonInclude(JsonInclude.Include.NON_EMPTY) List<Integer> questionTurnIds, @JsonInclude(JsonInclude.Include.NON_EMPTY) List<Integer> answerTurnIds, List<ImportWarning> warnings, boolean reviewConfirmed, String sourceId,String kind,List<String> notes,List<ImportEdit> edits,@JsonInclude(JsonInclude.Include.NON_NULL) ImportSourceSpan sourceSpan) {
         public ImportedQuestion { questionTurnIds=questionTurnIds==null?List.of():List.copyOf(questionTurnIds); answerTurnIds=answerTurnIds==null?List.of():List.copyOf(answerTurnIds); warnings=warnings==null?List.of():List.copyOf(warnings); sourceId=sourceId==null?questionTurnIds.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")):sourceId; kind=kind==null?"QA":kind; notes=notes==null?List.of():List.copyOf(notes); edits=edits==null?List.of():List.copyOf(edits); }
+        public ImportedQuestion(String question,String answer,int orderIndex,String evidence,List<Integer> q,List<Integer> a,List<ImportWarning> warnings,boolean confirmed,String sourceId,String kind,List<String> notes,List<ImportEdit> edits) { this(question,answer,orderIndex,evidence,q,a,warnings,confirmed,sourceId,kind,notes,edits,null); }
         public ImportedQuestion(String question,String answer,int orderIndex,String evidence,List<Integer> q,List<Integer> a,List<ImportWarning> warnings,boolean confirmed,String sourceId) { this(question,answer,orderIndex,evidence,q,a,warnings,confirmed,sourceId,"QA",List.of(),List.of()); }
         public ImportedQuestion(String question,String answer,int orderIndex,String evidence,List<Integer> q,List<Integer> a,List<ImportWarning> warnings,boolean confirmed) { this(question,answer,orderIndex,evidence,q,a,warnings,confirmed,null); }
         public ImportedQuestion(String question, String answer, int orderIndex, String evidence, List<Integer> q, List<Integer> a) { this(question,answer,orderIndex,evidence,q,a,List.of(),false); }

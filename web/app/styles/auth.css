@@ -120,7 +120,7 @@ h1 em {
   font-weight: 700;
   font-size: 14px;
 }
-input,
+input:not([type="radio"], [type="checkbox"]),
 textarea,
 select {
   width: 100%;
