@@ -14,8 +14,10 @@ class InterviewImportController {
     private final InterviewImportService service;
     InterviewImportController(InterviewImportService service) { this.service = service; }
     @PostMapping("/audio") @ResponseStatus(HttpStatus.CREATED) InterviewImport upload(@AuthenticationPrincipal Jwt jwt, @RequestParam(value = "interviewId", required = false) String interviewId, @RequestParam("file") MultipartFile file) { return service.upload(jwt.getSubject(), interviewId, file); }
+    @PostMapping("/text") @ResponseStatus(HttpStatus.CREATED) InterviewImport text(@AuthenticationPrincipal Jwt jwt, @RequestBody ImportTextRequest request) { return service.importText(jwt.getSubject(),request); }
     @GetMapping("/{id}") InterviewImport get(@AuthenticationPrincipal Jwt jwt, @PathVariable String id) { return service.get(jwt.getSubject(), id); }
     @PostMapping("/{id}/analyze") InterviewImport analyze(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestParam(defaultValue = "false") boolean force) { return service.analyze(jwt.getSubject(), id, force); }
     @PatchMapping("/{id}/roles") InterviewImport roles(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestBody ImportRolesRequest request) { return service.correctRoles(jwt.getSubject(), id, request); }
+    @PatchMapping("/{id}/draft") InterviewImport draft(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestBody ImportDraftRequest request) { return service.saveDraft(jwt.getSubject(),id,request); }
     @PostMapping("/{id}/confirm") InterviewDetail confirm(@AuthenticationPrincipal Jwt jwt, @PathVariable String id, @RequestBody ImportConfirmRequest request) { return service.confirm(jwt.getSubject(), id, request); }
 }

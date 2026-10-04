@@ -338,7 +338,7 @@ node .\desktop\main.test.cjs
 - 原始录音最大800,000,000字节，不上传Supabase；大文件/WebM由FFmpeg流式PCM落盘，16kHz单声道16bit，WAV每段约120秒、含头<=5,000,000字节。优先在末尾10秒寻找200ms短静音，没有静音用2秒重叠及真实偏移。原始重叠仍保留，分析按时间/来源去重。正常、失败、超时、中断均清理临时文件。PCM只能避免进一步损失，无法恢复原录音丢失的信息。
 - 腾讯云真实导入SpeakerDiarization=1、ResTextFormat=2，不指定SpeakerNumber；保存FinalSentence/SpeakerId/StartMs/EndMs。局部声音编号为片段+SpeakerId，不能跨片段认人；语义角色INTERVIEWER/CANDIDATE/UNKNOWN与声音编号分开保存，证据不足待确认。
 - INTERVIEW_IMPORT_ASR_ENGINE空值兼容共享默认，可显式16k_zh_en_2.0/16k_zh_en_meeting；不同引擎费用不同，AI语音模拟共享引擎不变。INTERVIEW_IMPORT_ASR_HOTWORDS可选技术术语，格式“词|权重”，最多128词/30字符/10汉字，权重1–11，100仅16k_zh且会强制同音替换。不自动修改本地密钥。
-- 分析按发言约4500字符分块，携带未结束问题和相邻发言，用来源编号合并并引用原话。候选人反问、面试官讲解不能算候选人回答，错误回答仍是已回答。原始文本保留，手工编辑仍可用；模型不负责纠错或补写。
+- 分析按发言约4500字符分块，携带未结束问题和相邻发言，用来源编号合并并引用原话。候选人反问、面试官讲解不能算候选人回答，错误回答仍是已回答。原始文本保留，手工编辑仍可用；2026-10-04 起模型另行提出有证据的词级纠错建议，不能补写或润色回答。
 - 问答中的ASR来源片段使用空格拼接，不按每句强制换行。读取已有导入时，仅在文本与原系统拼接结果完全一致且有有效来源编号时整理分隔符；原始转写、片段内部段落、手工编辑和已确认问答不批量改写，无需重新ASR或AI分析。
 - INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS=90、INTERVIEW_IMPORT_AI_BUDGET_SECONDS=900。瞬态/429/5xx最多3次，非法JSON/业务字段最多2次，鉴权不重试；length截断缩块。有效块保存，失败部分可重试，未全部完成不READY。旧任务仅transcript也能分析；真实声音分离须重新上传原音频。
 - PATCH /api/v1/interview-imports/{id}/roles 接收 {roles:[{turnId,role}]}，保存用户角色修正并清空旧分析。页面随后调用已有/analyze，只读保存文本，不请求ASR。JWT、跨用户404、目标校验、可编辑问答和确认幂等保留。
@@ -348,3 +348,14 @@ node .\desktop\main.test.cjs
 - 真实验收：用同一双人技术术语+噪声原录音、有效腾讯云及AI配置，对比前后错词/角色归属/遗漏并人工标注。FFmpeg和Mock通过不能证明识别准确率提高，旧任务文本不能代替原始录音。
 
 本轮验证：`mvn -B -ntp -s .mvn/settings.xml test` 执行118项，99项通过、15项失败、4项错误；导入/分段/ASR参数/模型错误分类/复盘/弱项相关36项全部通过且无跳过。失败集中在SimulationWorkflowTest、AiMockQuestionAgentTest、MockInterviewControllerTest，包含现有异步worker与即时断言、模拟mock契约问题，完整后端验收未通过。前端 `npm run lint`、`node --test app/interviews/page.test.cjs`（2项）、`npm run build` 通过。FFmpeg实际生成多段WAV并验证大小、排序、偏移及成功/失败/中断清理；未执行真实双人原录音和供应商效果对比。
+
+### 2026-10-04：本场简历辅助识别与待确认预览
+
+- 仅使用当前用户本场面试包关联的 READY 简历，最多取前 12000 字符，保存输入与证据快照；缺失、解析中或失败时只使用转写。简历是资料，不能补成候选人没说过的答案。
+- 模型只返回角色、问答来源和可选 `corrections`。纠错包含原词的 UTF-16 区间及简历/上下文证据；服务端验证区间、短词和证据，拒绝采纳数字、否定、错位或重叠替换。建议默认未采纳，用户核对后采纳/撤销，只影响生成的预览与正式保存文本；原始转写和手工段落保留。
+- 有效来源的角色、顺序或下一题边界冲突转为每题 `warnings`，列出具体编号；非法编号和结构仍有限重试后失败。页面支持原文对照、来源修改、角色修正、明确核对或排除。确认前服务端重新计算冲突，不能靠传入空 warnings 或移除来源绕过；`reviewConfirmed` 表示用户明确核对，不表示模型自动验证。
+- `PATCH /api/v1/interview-imports/{id}/draft` 保存预览、`acceptedCorrectionIds` 和 `excludedQuestionIds`；确认沿用事务与幂等。`POST /api/v1/interview-imports/text` 接收 `{interviewId,transcript}`，最多40000字符，先生成 AI 预览，原空行直接导入仍保留。
+- 分析缓存使用 `resume-asr-v1`、原文/人工角色/本场简历摘要及块来源编号；旧契约或资料变化只重新分析已保存的转写，不重新请求腾讯云。重分析、角色调整前提示覆盖已有手工编辑或核对状态。
+- 使用已有 JSON 列，无新增迁移、依赖、Agent、向量库或长期原音频存储。每场简历 ASR 热词和真实原录音效果对照仍为后续项。
+
+验证记录：导入分析/控制器/音频分段/模型客户端32项，ASR服务8项均通过；控制器最后补充的文本角色修改不覆盖原文检查也通过。页面8项及 TypeScript 检查通过，生产构建完成一次。最后文本来源展示调整后，桌面 Prepare 因已有3000端口服务拒绝重建，没有停止新启动的服务；桌面生产包须停服务后重新 Prepare。按用户要求停止后续检测，不执行本场真实模型重试或原录音准确率对照，也不宣称全套后端通过。

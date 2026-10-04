@@ -5,7 +5,7 @@ const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 
-function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL', busy = '', buttons, dialogs, onApi } = {}) {
+function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL', busy = '', buttons, inputs, dialogs, onApi } = {}) {
   const detail = { interview: { id: 'test', simulationType: type, company: '测试', role: '前端', interviewTime: '2026-10-01T00:00:00Z' }, questions: [], reviews: [] };
   const source = readFileSync(`${__dirname}/page.tsx`, 'utf8')
     .replace('useState<Detail>()', `useState(${JSON.stringify(detail)})`)
@@ -14,7 +14,7 @@ function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL'
     .replace('useState("audio")', `useState(${JSON.stringify(method)})`)
     .replace(new RegExp(`(const \\[${busy},[^\\n]+useState\\()false`), '$1true');
   const compiled = ts.transpileModule(source, {
-    compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
+    compilerOptions: { target: ts.ScriptTarget.ES2017, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
   }).outputText;
   const output = { exports: {} };
   new Function('require', 'module', 'exports', compiled)((id) => {
@@ -23,10 +23,11 @@ function renderQuestions({ method = 'audio', task, questions = [], type = 'REAL'
     if (id === '@/components/AppShell') return ({ children }) => children;
     if (id === '@/components/ConfirmDialog') return (props) => { dialogs?.push(props); return null; };
     if (id === '@/lib/api') return { api: onApi };
-    if (id === 'react/jsx-runtime' && buttons) {
+    if (id === 'react/jsx-runtime' && (buttons || inputs)) {
       const runtime = require(id);
       const capture = (jsx) => (tag, props, key) => {
-        if (tag === 'button') buttons.push(props);
+        if (tag === 'button') buttons?.push(props);
+        if (tag === 'input') inputs?.push(props);
         return jsx(tag, props, key);
       };
       return { ...runtime, jsx: capture(runtime.jsx), jsxs: capture(runtime.jsxs) };
@@ -147,4 +148,58 @@ test('long dialogue stays in a keyboard-accessible scroll region with collapsed 
   assert.match(html, /展开全文/);
   assert.match(html, /收起全文/);
   assert.match(html, new RegExp(turns[0].text));
+});
+
+test('pending source warnings block saving until explicit review and preserve source IDs in the draft', async () => {
+  const questions = [{ question: '问题？', answer: '原话。', orderIndex: 1, speakerEvidence: '来源', questionTurnIds: [0], answerTurnIds: [1], sourceId: '0', reviewConfirmed: false, warnings: [{ code: 'ANSWER_ROLE_UNCERTAIN', message: '回答角色未定', turnIds: [1] }] }];
+  const task = { id: 'pending', status: 'READY', originalFilename: '录音.wav', sizeBytes: 1024, transcript: '原文', error: '', questions, turns: [{ id: 0, text: '问题？', role: 'INTERVIEWER' }, { id: 1, text: '原话。', role: 'UNKNOWN' }] };
+  const buttons = [], inputs = [], requests = [];
+  const html = renderQuestions({ task, questions, buttons, inputs, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
+  assert.match(html, /先逐条核对或排除待确认项/);
+  assert.equal(buttons.find((b) => String(b.children).startsWith('确认加入')).disabled, true);
+  assert.match(html, /\[1\] 原话。/);
+  await inputs.find((p) => p.type === 'checkbox').onChange({ target: { checked: true } });
+  await new Promise(setImmediate);
+  assert.equal(requests[0].url, '/api/v1/interview-imports/pending/draft');
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.questions[0].reviewConfirmed, true);
+  assert.deepEqual(body.questions[0].answerTurnIds, [1]);
+  const approved = [], reviewed = [{ ...questions[0], reviewConfirmed: true }];
+  renderQuestions({ task, questions: reviewed, buttons: approved });
+  assert.equal(approved.find((b) => String(b.children).startsWith('确认加入')).disabled, false);
+});
+
+test('text preview shows resume fallback and unaccepted corrections; acceptance and exclusion are explicit', async () => {
+  const questions = [{ question: '工具？', answer: '靠带。', orderIndex: 1, speakerEvidence: '来源', sourceId: '0', questionTurnIds: [0], answerTurnIds: [1] }];
+  const task = { id: 'text', source: 'TEXT', status: 'READY', originalFilename: '粘贴转写.txt', sizeBytes: 80, transcript: '工具？靠带。', error: '', questions, resume: { filename: 'r.pdf', status: 'PENDING', truncated: false }, corrections: [{ id: 'fix', turnId: 1, original: '靠带', replacement: 'Codex', evidence: 'Codex', evidenceSource: 'RESUME', reason: '术语核对', error: '', accepted: false }] };
+  const buttons = [], requests = [];
+  const html = renderQuestions({ method: 'text', task, questions, buttons, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
+  assert.match(html, /粘贴文本 · AI 预览/);
+  assert.match(html, /本场简历尚未解析完成/);
+  assert.match(html, /靠带 → Codex/);
+  assert.match(html, /分段并加入问答/);
+  assert.doesNotMatch(html, /type="file"|录音导入进度/);
+  buttons.find((p) => p.children === '核对后采纳').onClick();
+  await new Promise(setImmediate);
+  assert.deepEqual(JSON.parse(requests[0].options.body).acceptedCorrectionIds, ['fix']);
+  buttons.find((p) => p.children === '排除这条').onClick();
+  await new Promise(setImmediate);
+  assert.deepEqual(JSON.parse(requests[1].options.body).excludedQuestionIds, ['0']);
+  assert.deepEqual(JSON.parse(requests[1].options.body).questions, []);
+  const invalid = renderQuestions({ method: 'text', task: { ...task, corrections: [{ ...task.corrections[0], error: '证据不符' }] }, questions });
+  assert.match(invalid, /无法采纳：证据不符/);
+  assert.match(invalid, /disabled="">核对后采纳/);
+});
+
+test('editing sources resets review and preserves manual text in the request', async () => {
+  const questions = [{ question: '手工问题', answer: '手工回答\n\n段落', orderIndex: 1, speakerEvidence: '来源', sourceId: '0', questionTurnIds: [0], answerTurnIds: [1], reviewConfirmed: true }];
+  const task = { id: 'sources', status: 'READY', originalFilename: '录音.wav', sizeBytes: 1024, transcript: '原文', error: '', questions };
+  const inputs = [], requests = [];
+  renderQuestions({ task, questions, inputs, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
+  inputs.find((p) => p.defaultValue === '1').onBlur({ target: { value: '1,2' } });
+  await new Promise(setImmediate);
+  const question = JSON.parse(requests[0].options.body).questions[0];
+  assert.equal(question.reviewConfirmed, false);
+  assert.deepEqual(question.answerTurnIds, [1, 2]);
+  assert.equal(question.answer, '手工回答\n\n段落');
 });

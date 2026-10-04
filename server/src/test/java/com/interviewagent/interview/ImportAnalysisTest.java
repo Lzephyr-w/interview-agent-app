@@ -58,7 +58,9 @@ class ImportAnalysisTest {
         ImportAnalysis.merge(all,ImportAnalysis.parse(second,new ImportAnalysis.Block(List.of(0,1),List.of(2,3,4)),turns),turns);
         assertEquals(1,all.size()); assertEquals("先查本地。 再查远端。",all.getFirst().answer());
         assertEquals(0,turns.get(0).speakerId()); assertEquals(0,turns.get(2).speakerId()); assertNotEquals(turns.get(0).role(),turns.get(2).role());
-        assertThrows(IllegalArgumentException.class,()->ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[3],\"answerTurnIds\":[4]}]}"),new ImportAnalysis.Block(List.of(),List.of(3,4)),turns));
+        var uncertain=ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[3],\"answerTurnIds\":[4]}]}"),new ImportAnalysis.Block(List.of(),List.of(3,4)),turns).getFirst();
+        assertTrue(uncertain.warnings().stream().anyMatch(w->w.code().equals("QUESTION_ROLE_UNCERTAIN")));
+        assertTrue(uncertain.warnings().stream().anyMatch(w->w.code().equals("ANSWER_ROLE_CONFLICT")));
         assertTrue(ImportAnalysis.prompt(new ImportAnalysis.Block(List.of(0),List.of(2)),turns).contains("speaker=1:0"));
     }
     @Test void joinsAsrTurnsWithoutArtificialLinesAndPreservesOriginalParagraphsAndEdits() {
@@ -73,13 +75,44 @@ class ImportAnalysisTest {
         assertEquals(edited,InterviewImportService.compactGeneratedText(edited,List.of(99),turns));
         assertEquals("Node.js 和 React。\n第二段原文。",turns.get(2).text());
     }
-    @Test void rejectsAnswerJumpingToNextQuestionAndHonorsCorrectedRole() throws Exception {
+    @Test void keepsBoundaryConflictForReviewAndHonorsCorrectedRole() throws Exception {
         var turns=new ArrayList<>(List.of(turn(0,0,0,"第一题？","INTERVIEWER"),turn(1,0,0,"第二题？","INTERVIEWER"),turn(2,0,1,"第二题回答","CANDIDATE")));
         var block=new ImportAnalysis.Block(List.of(),List.of(0,1,2));
-        assertThrows(IllegalArgumentException.class,()->ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[2]},{\"questionTurnIds\":[1],\"answerTurnIds\":[2]}]}"),block,turns));
+        var questions=ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[2]},{\"questionTurnIds\":[1],\"answerTurnIds\":[2]}]}"),block,turns);
+        assertEquals("QUESTION_BOUNDARY_CONFLICT",questions.getFirst().warnings().getFirst().code());
+        assertEquals(1,ImportAnalysis.boundaries(questions).getFirst().warnings().size());
         var t=turns.get(2); turns.set(2,new ImportTurn(2,0,1,2000L,3000L,t.text(),"INTERVIEWER",true));
-        assertThrows(IllegalArgumentException.class,()->ImportAnalysis.parse(json.readTree("{\"roles\":[{\"turnId\":2,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[1],\"answerTurnIds\":[2]}]}"),block,turns));
+        var corrected=ImportAnalysis.parse(json.readTree("{\"roles\":[{\"turnId\":2,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[1],\"answerTurnIds\":[2]}]}"),block,turns).getFirst();
+        assertEquals("ANSWER_ROLE_CONFLICT",corrected.warnings().getFirst().code());
         assertEquals("INTERVIEWER",turns.get(2).role());
+    }
+    @Test void preservesOrderConflictsButStillRejectsInventedOrOverflowingSourceIds() throws Exception {
+        var turns=new ArrayList<>(List.of(turn(0,0,0,"回答。","UNKNOWN"),turn(1,0,1,"问题？","INTERVIEWER")));
+        var block=new ImportAnalysis.Block(List.of(),List.of(0,1));
+        var result=ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[1],\"answerTurnIds\":[0]}]}"),block,turns).getFirst();
+        assertEquals("回答。",result.answer());
+        assertEquals(List.of("ANSWER_ORDER_CONFLICT","ANSWER_ROLE_UNCERTAIN"),result.warnings().stream().map(ImportWarning::code).toList());
+        assertEquals("UNKNOWN",turns.getFirst().role());
+        for(String id:List.of("99","4294967296","\"0\"")) assertThrows(IllegalArgumentException.class,()->ImportAnalysis.parse(json.readTree("{\"roles\":[],\"questions\":[{\"questionTurnIds\":[1],\"answerTurnIds\":["+id+"]}]}"),block,turns));
+    }
+    @Test void correctionUsesExactOccurrenceAndEvidenceWithoutChangingRawOrWrongTechnicalAnswer() throws Exception {
+        var turns=List.of(turn(0,0,1,"靠带靠带。我不知道，uploadFile 就是分片上传。","CANDIDATE"));
+        var block=new ImportAnalysis.Block(List.of(),List.of(0));
+        String suggestion="{\"turnId\":0,\"start\":2,\"end\":4,\"original\":\"靠带\",\"replacement\":\"Codex\",\"evidenceSource\":\"RESUME\",\"evidenceStart\":0,\"evidenceEnd\":5,\"evidence\":\"Codex\",\"reason\":\"本场简历名称\"}";
+        var corrections=ImportCorrections.parse(json.readTree("{\"corrections\":["+suggestion+"]}"),block,turns,"Codex");
+        assertEquals("",corrections.getFirst().error());
+        assertEquals(turns,ImportCorrections.display(turns,corrections));
+        var accepted=ImportCorrections.select(corrections,List.of(corrections.getFirst().id()));
+        assertEquals("靠带Codex。我不知道，uploadFile 就是分片上传。",ImportCorrections.display(turns,accepted).getFirst().text());
+        assertEquals(turns,ImportCorrections.display(turns,ImportCorrections.select(accepted,List.of())));
+        assertEquals("靠带靠带。我不知道，uploadFile 就是分片上传。",turns.getFirst().text());
+        for(String invalid:List.of(suggestion.replace("\"start\":2","\"start\":1"),suggestion.replace("\"evidenceStart\":0","\"evidenceStart\":1"),suggestion.replace("Codex","C2"))) {
+            var rejected=ImportCorrections.parse(json.readTree("{\"corrections\":["+invalid+"]}"),block,turns,"Codex");
+            assertFalse(rejected.getFirst().error().isBlank());
+            assertThrows(IllegalArgumentException.class,()->ImportCorrections.select(rejected,List.of(rejected.getFirst().id())));
+        }
+        var overlap=ImportCorrections.parse(json.readTree("{\"corrections\":["+suggestion+","+suggestion.replace("\"start\":2,\"end\":4,\"original\":\"靠带\"","\"start\":2,\"end\":3,\"original\":\"靠\"")+"]}"),block,turns,"Codex");
+        assertThrows(IllegalArgumentException.class,()->ImportCorrections.select(overlap,overlap.stream().map(ImportCorrection::id).toList()));
     }
     @Test void transientRetriesAreBoundedAndAuthNeverRetries() throws Exception {
         var model=mock(ReviewModelClient.class); var block=new ImportAnalysis.Block(List.of(),List.of(0)); var turns=List.of(turn(0,0,0,"问题？","UNKNOWN"));

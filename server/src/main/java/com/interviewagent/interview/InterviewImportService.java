@@ -102,11 +102,32 @@ class InterviewImportService {
 
     InterviewImport get(String userId, String id) { return api(task(userId, id)); }
 
+    InterviewImport importText(String userId,ImportTextRequest request) {
+        if(request==null||request.interviewId()==null||request.interviewId().isBlank()) throw new IllegalArgumentException("请选择本场面试。");
+        interviews.ensureEditableQuestions(userId,request.interviewId());
+        limit(request.transcript(),"转写文本",40_000);
+        String raw=request.transcript(),id=UUID.randomUUID().toString();
+        if(raw.length()>40_000) throw new IllegalArgumentException("转写文本超过40000字符，请缩短后重试。");
+        jdbc.sql("INSERT INTO interview_audio_imports(id,user_id,target_interview_id,original_filename,content_type,size_bytes,status) VALUES(:id,:user,:target,'粘贴转写.txt','text/plain',:size,'ANALYZING')")
+            .param("id",id).param("user",userId).param("target",request.interviewId()).param("size",raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).update();
+        saveTranscript(userId,id,textTurns(raw),"ANALYZING");
+        jdbc.sql("UPDATE interview_audio_imports SET transcript=:raw WHERE id=:id AND user_id=:user").param("raw",raw).param("id",id).param("user",userId).update();
+        return analyzeTask(userId,id);
+    }
+
+    @Transactional
+    InterviewImport saveDraft(String userId,String id,ImportDraftRequest request) {
+        ImportRow row=task(userId,id,true);
+        updateDraft(userId,row,request,false);
+        return get(userId,id);
+    }
+
     InterviewImport analyze(String userId, String id, boolean force) {
         ImportRow row = task(userId, id);
+        if(row.status.equals("ANALYZING")||row.status.equals("TRANSCRIBING")) throw new IllegalArgumentException("任务处理中，请稍后重试。");
         if (row.transcript.isBlank()) throw new IllegalArgumentException("尚无可分析的转写文本，请重新上传录音。");
         if (row.finalInterviewId != null) return api(row);
-        return analyzeTask(userId, id, force);
+        return analyzeTask(userId, id, force, false);
     }
 
     @Transactional
@@ -115,7 +136,8 @@ class InterviewImportService {
         if (row.finalInterviewId != null) return interviews.get(userId, row.finalInterviewId);
         if (row.transcript.isBlank()) throw new IllegalArgumentException("尚无可保存的转写文本。");
         if (request == null) throw new IllegalArgumentException("请至少保留一道问答后再保存。");
-        List<QuestionRequest> questions = confirmedQuestions(request.questions());
+        updateDraft(userId,row,new ImportDraftRequest(request.questions(),request.acceptedCorrectionIds(),request.excludedQuestionIds()),true);
+        List<QuestionRequest> questions = confirmedQuestions(get(userId,id).questions());
         InterviewDetail detail = row.targetInterviewId == null ? createLegacy(userId, request, questions) : interviews.appendQuestions(userId, row.targetInterviewId, questions);
         jdbc.sql("UPDATE interview_audio_imports SET status='SAVED',final_interview_id=:final,error='',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user AND final_interview_id IS NULL")
             .param("final", detail.interview().id()).param("id", id).param("user", userId).update();
@@ -153,8 +175,10 @@ class InterviewImportService {
             ImportTurn old = turns.get(correction.turnId());
             turns.set(old.id(), new ImportTurn(old.id(), old.segmentIndex(), old.speakerId(), old.startMs(), old.endMs(), old.text(), correction.role(), true));
         }
-        saveTranscript(user, id, turns, "ANALYSIS_FAILED");
-        jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=NULL,analysis_json=NULL,error='角色已修正，请重新分析问答。' WHERE id=:id AND user_id=:user").param("id", id).param("user", user).update();
+        try {
+            jdbc.sql("UPDATE interview_audio_imports SET transcript_json=:detail,status='ANALYSIS_FAILED',analysis_progress_json=NULL,analysis_json=NULL,error='角色已修正，请重新分析问答。',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user")
+                .param("detail",json.writeValueAsString(turns)).param("id", id).param("user", user).update();
+        } catch(java.io.IOException e) { throw new IllegalStateException("保存角色修正失败。",e); }
         return get(user, id);
     }
     private List<ImportTurn> readTurns(ImportRow row) {
@@ -173,14 +197,15 @@ class InterviewImportService {
         return result;
     }
     private InterviewImport analyzeTask(String userId, String id) {
-        return analyzeTask(userId, id, false);
+        return analyzeTask(userId, id, false, true);
     }
-    private InterviewImport analyzeTask(String userId, String id, boolean force) {
+    private InterviewImport analyzeTask(String userId, String id, boolean force, boolean initial) {
         ImportRow row = task(userId, id);
         if (row.finalInterviewId != null) return api(row);
+        if(!initial&&row.status.equals("ANALYZING")) throw new IllegalArgumentException("任务处理中，请稍后重试。");
         if (row.status.equals("TRANSCRIBING") || row.status.equals("TRANSCRIPTION_FAILED")) throw new IllegalArgumentException("转写尚未完整完成，请重新上传录音。");
-        int claimed = jdbc.sql("UPDATE interview_audio_imports SET status='ANALYZING',error='',updated_at=CURRENT_TIMESTAMP" + (force ? ",analysis_progress_json=NULL" : "") + " WHERE id=:id AND user_id=:user" + (force ? " AND status<>'ANALYZING' AND final_interview_id IS NULL" : ""))
-            .param("id", id).param("user", userId).update();
+        int claimed = jdbc.sql("UPDATE interview_audio_imports SET status='ANALYZING',error='',updated_at=CURRENT_TIMESTAMP" + (force ? ",analysis_progress_json=NULL" : "") + " WHERE id=:id AND user_id=:user AND status=:previous AND final_interview_id IS NULL")
+            .param("id", id).param("user", userId).param("previous",row.status).update();
         if (claimed == 0) throw new IllegalArgumentException("任务处理中或已确认，请刷新后重试。");
         long deadline = System.nanoTime() + Math.max(1, analysisBudget) * 1_000_000_000L;
         List<ImportedQuestion> all = new ArrayList<>();
@@ -189,27 +214,41 @@ class InterviewImportService {
         if(legacy) turns.addAll(textTurns(row.transcript));
         java.util.Map<String, JsonNode> progress = new java.util.LinkedHashMap<>();
         try {
-            if (!force && row.progress != null) progress.putAll(json.readValue(row.progress, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, JsonNode>>() {}));
+            ResumeSnapshot resume=resume(userId,row.targetInterviewId);
+            String inputHash=inputHash(turns,resume);
+            JsonNode previous=row.progress==null?json.createObjectNode():json.readTree(row.progress);
+            boolean compatible=!force&&previous.path("blocks").isObject()&&previous.path("version").asText().equals("resume-asr-v1")&&previous.path("inputHash").asText().equals(inputHash);
+            if(compatible) progress.putAll(json.convertValue(previous.path("blocks"),new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String,JsonNode>>(){}));
+            else for(int i=0;i<turns.size();i++) { var t=turns.get(i); if(!t.roleCorrected()) turns.set(i,new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),"UNKNOWN",false)); }
+            List<ImportCorrection> corrections=new ArrayList<>();
+            List<String> accepted=compatible?corrections(row).stream().filter(ImportCorrection::accepted).map(ImportCorrection::id).toList():List.of();
             List<ImportAnalysis.Block> blocks = ImportAnalysis.blocks(turns);
             List<Integer> contextIds = List.of();
             for (int i=0;i<blocks.size();i++) {
-                JsonNode result=progress.get(Integer.toString(i));
                 ImportAnalysis.Block block=new ImportAnalysis.Block(contextIds,blocks.get(i).added());
+                JsonNode cached=progress.get(Integer.toString(i));
+                JsonNode result=cached!=null&&cached.path("added").equals(json.valueToTree(block.added()))&&cached.path("context").equals(json.valueToTree(block.context()))?cached.get("result"):null;
                 long started=System.nanoTime();
                 if(result==null) {
                     try(var task=org.slf4j.MDC.putCloseable("importId",id); var part=org.slf4j.MDC.putCloseable("importBlock",Integer.toString(i))) {
-                        result=ImportAnalysis.request(model,json,block,turns,requestTimeout,deadline,0);
+                        result=ImportAnalysis.request(model,json,block,turns,requestTimeout,deadline,0,resume.text());
                     }
-                    progress.put(Integer.toString(i),result);
+                    progress.put(Integer.toString(i),json.valueToTree(java.util.Map.of("added",block.added(),"context",block.context(),"result",result)));
                     jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=:progress WHERE id=:id AND user_id=:user")
-                        .param("progress",json.writeValueAsString(progress)).param("id",id).param("user",userId).update();
+                        .param("progress",json.writeValueAsString(java.util.Map.of("version","resume-asr-v1","inputHash",inputHash,"blocks",progress))).param("id",id).param("user",userId).update();
                 }
                 ImportAnalysis.merge(all,ImportAnalysis.parse(result,block,turns),turns); contextIds=ImportAnalysis.context(all,block,turns);
+                for(var c:ImportCorrections.parse(result,block,turns,resume.text())) if(corrections.stream().noneMatch(old->old.id().equals(c.id()))) corrections.add(c);
+                var selected=ImportCorrections.select(corrections,accepted.stream().filter(key->corrections.stream().anyMatch(c->c.id().equals(key))).toList());
+                var display=ImportCorrections.display(turns,selected);
                 if(all.size()>80) throw new IllegalArgumentException("问答超过80条，请手工整理。");
                 List<ImportedQuestion> ordered=new ArrayList<>();
-                for(var q:all) ordered.add(new ImportedQuestion(q.question(),q.answer(),ordered.size()+1,q.speakerEvidence(),q.questionTurnIds(),q.answerTurnIds()));
+                for(var q:ImportAnalysis.boundaries(all)) {
+                    ordered.add(new ImportedQuestion(ImportAnalysis.text(q.questionTurnIds(),display),ImportAnalysis.text(q.answerTurnIds(),display),ordered.size()+1,q.speakerEvidence(),q.questionTurnIds(),q.answerTurnIds(),q.warnings(),false,q.sourceId()));
+                    for(var warning:q.warnings()) log.info("importId={} stage=VALIDATION block={} code={} turns={}",id,i,warning.code(),warning.turnIds());
+                }
                 jdbc.sql("UPDATE interview_audio_imports SET analysis_json=:analysis,transcript_json=:detail WHERE id=:id AND user_id=:user")
-                    .param("analysis",json.writeValueAsString(java.util.Map.of("questions",ordered))).param("detail",legacy?null:json.writeValueAsString(turns)).param("id",id).param("user",userId).update();
+                    .param("analysis",json.writeValueAsString(java.util.Map.of("questions",ordered,"corrections",selected,"resume",resume,"excludedQuestionIds",List.of()))).param("detail",legacy?null:json.writeValueAsString(turns)).param("id",id).param("user",userId).update();
                 log.info("importId={} stage=ANALYSIS block={} outputChars={} elapsedMs={}",id,i,result.toString().length(),(System.nanoTime()-started)/1_000_000);
             }
             jdbc.sql("UPDATE interview_audio_imports SET status='READY',error='',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user").param("id",id).param("user",userId).update();
@@ -233,6 +272,66 @@ class InterviewImportService {
         return result;
     }
 
+    private record ResumeSnapshot(String fileId,ImportResume info,String text) {}
+    private ResumeSnapshot resume(String user,String target) {
+        if(target==null) return new ResumeSnapshot("",new ImportResume("","NONE",false),"");
+        return jdbc.sql("SELECT rf.id,rf.original_filename,rf.parsed_status,rf.parsed_text,rf.parsed_truncated FROM interviews i JOIN interview_packages p ON p.id=i.interview_package_id AND p.user_id=:user LEFT JOIN resume_files rf ON rf.id=p.resume_file_id AND rf.user_id=:user WHERE i.id=:target AND i.user_id=:user")
+            .param("user",user).param("target",target).query((rs,n)-> {
+                String id=rs.getString(1),name=rs.getString(2),status=rs.getString(3),raw=rs.getString(4);
+                String value="READY".equals(status)&&raw!=null?raw:"";
+                return new ResumeSnapshot(id==null?"":id,new ImportResume(name==null?"":name,status==null?"NONE":status,rs.getBoolean(5)||value.length()>12000),value.substring(0,Math.min(value.length(),12000)));
+            }).optional().orElse(new ResumeSnapshot("",new ImportResume("","NONE",false),""));
+    }
+    private String inputHash(List<ImportTurn> turns,ResumeSnapshot resume) throws Exception {
+        var original=turns.stream().map(t->new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),t.roleCorrected()?t.role():"UNKNOWN",t.roleCorrected())).toList();
+        return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(json.writeValueAsBytes(java.util.List.of(original,resume))));
+    }
+    private List<ImportCorrection> corrections(ImportRow row) {
+        try { JsonNode root=row.analysis==null?json.createObjectNode():json.readTree(row.analysis); return root.has("corrections")?json.convertValue(root.path("corrections"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportCorrection>>(){}):List.of(); }
+        catch(Exception e) { throw new IllegalStateException("纠错记录格式无效，请重新识别。",e); }
+    }
+    private List<Integer> checkedIds(List<Integer> ids,List<ImportTurn> turns) {
+        java.util.Set<Integer> result=new java.util.TreeSet<>();
+        for(Integer id:ids) { if(id==null||id<0||id>=turns.size()) throw new IllegalArgumentException("问答来源编号无效。"); result.add(id); }
+        return List.copyOf(result);
+    }
+    private void updateDraft(String user,ImportRow row,ImportDraftRequest request,boolean confirming) {
+        if(row.finalInterviewId!=null||row.status.equals("ANALYZING")||row.status.equals("TRANSCRIBING")) throw new IllegalArgumentException("任务处理中或已保存，不能修改草稿。");
+        if(request==null||request.questions()==null||request.questions().size()>80) throw new IllegalArgumentException("问答草稿无效。");
+        try {
+            var current=api(row);
+            var turns=readTurns(row); if(turns.isEmpty()) turns=textTurns(row.transcript);
+            var oldCorrections=corrections(row); var selected=ImportCorrections.select(oldCorrections,request.acceptedCorrectionIds());
+            var oldDisplay=ImportCorrections.display(turns,oldCorrections); var display=ImportCorrections.display(turns,selected);
+            List<String> excluded=request.excludedQuestionIds()==null?current.excludedQuestionIds():List.copyOf(request.excludedQuestionIds());
+            java.util.Set<String> known=new java.util.HashSet<>(current.excludedQuestionIds()); for(var q:current.questions()) known.add(q.sourceId());
+            if(!known.containsAll(excluded)) throw new IllegalArgumentException("排除的问答来源编号无效。");
+            List<ImportedQuestion> updated=new ArrayList<>(); java.util.Set<String> sources=new java.util.HashSet<>();
+            for(var item:request.questions()) {
+                if(item==null||item.orderIndex()!=updated.size()+1) throw new IllegalArgumentException("问答草稿不能为空且顺序必须连续。");
+                var q=checkedIds(item.questionTurnIds(),turns); var a=checkedIds(item.answerTurnIds(),turns);
+                if(!known.contains(item.sourceId())&&!item.sourceId().equals(q.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")))) throw new IllegalArgumentException("问答来源标识无效。");
+                if(!item.sourceId().isBlank()&&!sources.add(item.sourceId())) throw new IllegalArgumentException("问答来源重复。");
+                if(known.contains(item.sourceId())&&!item.sourceId().isBlank()&&q.isEmpty()) throw new IllegalArgumentException("请保留或修正问题来源，不能删除来源绕过待确认。");
+                if(excluded.contains(item.sourceId())) throw new IllegalArgumentException("已排除的问答不能同时加入。");
+                String question=text(item.question(),4000),answer=text(item.answer(),20000);
+                if(question.isBlank()) throw new IllegalArgumentException("请先填写问题，再保存预览修改。");
+                var old=current.questions().stream().filter(value->value.sourceId().equals(item.sourceId())).findFirst().orElse(item);
+                if(!q.isEmpty()&&question.equals(ImportAnalysis.text(old.questionTurnIds(),oldDisplay))) question=ImportAnalysis.text(q,display);
+                if(answer.equals(ImportAnalysis.text(old.answerTurnIds(),oldDisplay))) answer=ImportAnalysis.text(a,display);
+                var warnings=q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns);
+                updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId()));
+            }
+            updated=new ArrayList<>(ImportAnalysis.boundaries(updated));
+            for(var old:current.questions()) if(!old.warnings().isEmpty()&&!sources.contains(old.sourceId())&&!excluded.contains(old.sourceId())) throw new IllegalArgumentException("请明确核对或排除待确认问答，不能隐去其来源。");
+            if(confirming) for(var q:updated) if(!q.warnings().isEmpty()&&!q.reviewConfirmed()) throw new IllegalArgumentException("请先核对待确认问答的原文与归属，或明确排除。");
+            var root=row.analysis==null?json.createObjectNode():(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(row.analysis);
+            root.set("questions",json.valueToTree(updated)); root.set("corrections",json.valueToTree(selected)); root.set("excludedQuestionIds",json.valueToTree(excluded));
+            jdbc.sql("UPDATE interview_audio_imports SET analysis_json=:analysis,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user")
+                .param("analysis",json.writeValueAsString(root)).param("id",row.id).param("user",user).update();
+        } catch(java.io.IOException e) { throw new IllegalStateException("保存问答草稿失败。",e); }
+    }
+
     private List<ImportedQuestion> parse(JsonNode root,List<ImportTurn> turns) {
         JsonNode items = root.path("questions");
         if (!items.isArray() || items.size() > 80) throw new IllegalArgumentException("模型 JSON 未返回有效的 questions 数组。");
@@ -246,7 +345,8 @@ class InterviewImportService {
             if (question.isBlank()) throw new IllegalArgumentException("模型 JSON 存在空问题。");
             List<Integer> questionIds=item.has("questionTurnIds") ? json.convertValue(item.path("questionTurnIds"), new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>() {}) : List.of();
             List<Integer> answerIds=item.has("answerTurnIds") ? json.convertValue(item.path("answerTurnIds"), new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>() {}) : List.of();
-            result.add(new ImportedQuestion(compactGeneratedText(question,questionIds,turns),compactGeneratedText(answer,answerIds,turns),i+1,evidence,questionIds,answerIds));
+            List<ImportWarning> warnings=item.has("warnings")?json.convertValue(item.path("warnings"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportWarning>>(){}):List.of();
+            result.add(new ImportedQuestion(compactGeneratedText(question,questionIds,turns),compactGeneratedText(answer,answerIds,turns),i+1,evidence,questionIds,answerIds,warnings,item.path("reviewConfirmed").asBoolean(false),item.has("sourceId")?item.path("sourceId").asText():null));
         }
         return result;
     }
@@ -258,12 +358,15 @@ class InterviewImportService {
 
     private void fail(String userId, String id, String status, String error) { jdbc.sql("UPDATE interview_audio_imports SET status=:status,error=:error,updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user").param("status", status).param("error", error).param("id", id).param("user", userId).update(); }
     private ImportRow task(String userId,String id) { return task(userId,id,false); }
-    private ImportRow task(String userId, String id, boolean lock) { return jdbc.sql("SELECT id,status,original_filename,size_bytes,transcript,error,analysis_json,final_interview_id,target_interview_id,transcript_json,analysis_progress_json FROM interview_audio_imports WHERE id=:id AND user_id=:user"+(lock?" FOR UPDATE":"")).param("id", id).param("user", userId).query((rs, row) -> new ImportRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4), rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10), rs.getString(11))).optional().orElseThrow(() -> new NoSuchElementException("导入任务不存在或无权访问。")); }
+    private ImportRow task(String userId, String id, boolean lock) { return jdbc.sql("SELECT id,status,original_filename,size_bytes,transcript,error,analysis_json,final_interview_id,target_interview_id,transcript_json,analysis_progress_json,content_type FROM interview_audio_imports WHERE id=:id AND user_id=:user"+(lock?" FOR UPDATE":"")).param("id", id).param("user", userId).query((rs, row) -> new ImportRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4), rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10), rs.getString(11),rs.getString(12))).optional().orElseThrow(() -> new NoSuchElementException("导入任务不存在或无权访问。")); }
     private InterviewImport api(ImportRow row) {
         try {
             List<ImportTurn> turns=readTurns(row);
             List<ImportedQuestion> questions=row.analysis==null ? List.of() : parse(json.readTree(row.analysis),turns.isEmpty()?textTurns(row.transcript):turns);
-            return new InterviewImport(row.id,row.status,row.filename,row.size,row.transcript,row.error,questions,row.finalInterviewId,turns);
+            JsonNode analysis=row.analysis==null?json.createObjectNode():json.readTree(row.analysis);
+            ImportResume reference=analysis.has("resume")?json.treeToValue(analysis.path("resume").path("info"),ImportResume.class):new ImportResume("","NONE",false);
+            List<String> excluded=analysis.has("excludedQuestionIds")?json.convertValue(analysis.path("excludedQuestionIds"),new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){}):List.of();
+            return new InterviewImport(row.id,row.status,row.filename,row.size,row.transcript,row.error,questions,row.finalInterviewId,turns,corrections(row),reference,row.contentType.equals("text/plain")?"TEXT":"AUDIO",excluded);
         } catch(Exception e) { throw new IllegalStateException("导入结果格式无效，请重新分析。",e); }
     }
     private static String validateAudio(MultipartFile file) {
@@ -302,5 +405,5 @@ class InterviewImportService {
     private static String text(String value, int maximum) { String result = value == null ? "" : value.trim(); if (result.length() > maximum) throw new IllegalArgumentException("模型 JSON 字段过长。"); return result; }
     private static String limit(String value, String label, int maximum) { String result = value == null ? "" : value.trim(); if (result.isBlank()) throw new IllegalArgumentException(label + "为空，请重新上传。"); if (result.length() > maximum) throw new IllegalArgumentException(label + "超过 " + maximum + " 个字符，请缩短录音后重试。"); return result; }
     private static String message(Exception exception, String fallback) { String value = exception.getMessage(); return value == null || value.isBlank() ? fallback : value; }
-    private record ImportRow(String id, String status, String filename, long size, String transcript, String error, String analysis, String finalInterviewId, String targetInterviewId, String detail, String progress) {}
+    private record ImportRow(String id, String status, String filename, long size, String transcript, String error, String analysis, String finalInterviewId, String targetInterviewId, String detail, String progress,String contentType) {}
 }
