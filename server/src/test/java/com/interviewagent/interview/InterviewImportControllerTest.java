@@ -38,9 +38,15 @@ class InterviewImportControllerTest {
         int i=0;
         for(JsonNode q:node.path("questions")) {
             var question=questions.addObject(); question.putArray("questionTurnIds").add(i++); question.putArray("answerTurnIds").add(i++);
+            question.put("kind","QA"); question.put("question",q.path("question").asText()); question.put("answer",q.path("answer").asText()); question.putArray("notes"); question.putArray("edits");
             if(q.path("question").asText().isBlank()) question.putArray("questionTurnIds").removeAll();
         }
         for(int j=0;j<i;j++) { var role=roles.addObject(); role.put("turnId",j); role.put("role",j%2==0?"INTERVIEWER":"CANDIDATE"); }
+        return root;
+    }
+    private JsonNode topic(String sources,String question,String answer) throws Exception {
+        var root=json.readTree(sources);
+        for(var q:root.path("questions")) { var node=(com.fasterxml.jackson.databind.node.ObjectNode)q; node.put("kind","QA"); node.put("question",question); node.put("answer",answer); node.putArray("notes"); node.putArray("edits"); }
         return root;
     }
     private static AudioTranscriptionService.Transcript transcript(String text) {
@@ -52,7 +58,7 @@ class InterviewImportControllerTest {
     }
     @Test void importsOrderedQuestionsAndConfirmIsIdempotent() throws Exception {
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("面试官：你如何处理缓存一致性？候选人：我会双删并监控。面试官：如何验证？候选人：压测和回归测试。"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"你如何处理缓存一致性？\",\"answer\":\"我会双删并监控。\",\"orderIndex\":1,\"speakerEvidence\":\"面试官/候选人\"},{\"question\":\"如何验证？\",\"answer\":\"压测和回归测试。\",\"orderIndex\":2,\"speakerEvidence\":\"面试官/候选人\"}]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"你如何处理缓存一致性？\",\"answer\":\"我会双删并监控。\",\"orderIndex\":1,\"speakerEvidence\":\"面试官/候选人\"},{\"question\":\"如何验证？\",\"answer\":\"压测和回归测试。\",\"orderIndex\":2,\"speakerEvidence\":\"面试官/候选人\"}]}"));
         String target = existingInterview("user-a");
         mockMvc.perform(multipart("/api/v1/interview-imports/audio").file(wav()).param("interviewId", target).with(jwt().jwt(token -> token.subject("user-b")))).andExpect(status().isNotFound());
         String task = upload("user-a", target);
@@ -67,34 +73,34 @@ class InterviewImportControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(2, jdbc.sql("SELECT COUNT(*) FROM interview_questions WHERE interview_id=:id").param("id", interview).query(Integer.class).single());
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", task).param("force", "true").with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("SAVED"));
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test void readyTaskCanForceFreshAnalysisWithoutAsrAndKeepsCorrectedRoles() throws Exception {
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("面试官：缓存？候选人：不知道。"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"缓存？\",\"answer\":\"不知道。\"}]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"缓存？\",\"answer\":\"不知道。\"}]}"));
         String id = upload("fresh-user");
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", id).with(jwt().jwt(t -> t.subject("fresh-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions.length()").value(1));
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
         String detail = jdbc.sql("SELECT transcript_json FROM interview_audio_imports WHERE id=:id").param("id", id).query(String.class).single();
         JsonNode turns = json.readTree(detail);
         ((com.fasterxml.jackson.databind.node.ObjectNode) turns.get(1)).put("roleCorrected", true);
         jdbc.sql("UPDATE interview_audio_imports SET transcript_json=:turns WHERE id=:id").param("turns", turns.toString()).param("id", id).update();
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(json.readTree("{\"roles\":[{\"turnId\":1,\"role\":\"INTERVIEWER\"}],\"questions\":[]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(json.readTree("{\"roles\":[{\"turnId\":1,\"role\":\"INTERVIEWER\"}],\"questions\":[]}"));
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", id).param("force", "true").with(jwt().jwt(t -> t.subject("other-user"))))
             .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", id).param("force", "true").with(jwt().jwt(t -> t.subject("fresh-user"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions").isEmpty())
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions[0].kind").value("UNASSIGNED"))
             .andExpect(jsonPath("$.transcript").value("面试官：缓存？\n候选人：不知道。"))
             .andExpect(jsonPath("$.turns[1].role").value("CANDIDATE")).andExpect(jsonPath("$.turns[1].roleCorrected").value(true));
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
         org.mockito.Mockito.verify(transcription, org.mockito.Mockito.times(1)).transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test void failedFreshAnalysisKeepsPreviousQuestionsAndCanRetryButCannotRestartActiveTask() throws Exception {
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("面试官：缓存？候选人：不知道。"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"缓存？\",\"answer\":\"不知道。\"}]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"缓存？\",\"answer\":\"不知道。\"}]}"));
         String id = upload("fresh-failed-user");
         String progress = jdbc.sql("SELECT analysis_progress_json FROM interview_audio_imports WHERE id=:id").param("id", id).query(String.class).single();
         jdbc.sql("UPDATE interview_audio_imports SET status='ANALYZING' WHERE id=:id").param("id", id).update();
@@ -102,13 +108,13 @@ class InterviewImportControllerTest {
             .andExpect(status().isBadRequest());
         org.junit.jupiter.api.Assertions.assertEquals(progress, jdbc.sql("SELECT analysis_progress_json FROM interview_audio_imports WHERE id=:id").param("id", id).query(String.class).single());
         jdbc.sql("UPDATE interview_audio_imports SET status='READY' WHERE id=:id").param("id", id).update();
-        org.mockito.Mockito.doThrow(new ReviewFailedException("AUTHENTICATION", "auth", null)).when(model).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.doThrow(new ReviewFailedException("AUTHENTICATION", "auth", null)).when(model).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", id).param("force", "true").with(jwt().jwt(t -> t.subject("fresh-failed-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ANALYSIS_FAILED")).andExpect(jsonPath("$.questions.length()").value(1));
-        org.mockito.Mockito.doReturn(json.readTree("{\"roles\":[],\"questions\":[]}")).when(model).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.doReturn(json.readTree("{\"roles\":[],\"questions\":[]}")).when(model).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze", id).with(jwt().jwt(t -> t.subject("fresh-failed-user"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions").isEmpty());
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(3)).importJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions[0].kind").value("UNASSIGNED"));
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(3)).organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt());
         org.mockito.Mockito.verify(transcription, org.mockito.Mockito.times(1)).transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong());
     }
 
@@ -119,7 +125,7 @@ class InterviewImportControllerTest {
         MockMultipartFile bad = new MockMultipartFile("file", "fake.mp3", "audio/mpeg", "not audio".getBytes());
         mockMvc.perform(multipart("/api/v1/interview-imports/audio").file(bad).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isBadRequest());
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("一段转写"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"\",\"answer\":\"回答\",\"orderIndex\":1}]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"\",\"answer\":\"回答\",\"orderIndex\":1}]}"));
         String task = upload("user-a");
         mockMvc.perform(get("/api/v1/interview-imports/{id}", task).with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ANALYSIS_FAILED"));
         org.junit.jupiter.api.Assertions.assertEquals(before, jdbc.sql("SELECT COUNT(*) FROM interviews WHERE user_id='user-a'").query(Integer.class).single());
@@ -127,12 +133,14 @@ class InterviewImportControllerTest {
 
     @Test void keepsTranscriptReadyWhenModelFindsNoInterviewQuestions() throws Exception {
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("你好，我叫张明，之前负责过一个面试平台项目。"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(json.readTree("""
+            {"roles":[{"turnId":0,"role":"CANDIDATE"}],"questions":[{"kind":"INTRODUCTION","question":"自我介绍","answer":"你好，我叫张明，之前负责过一个面试平台项目。","questionTurnIds":[],"answerTurnIds":[0],"notes":[],"edits":[]}]}
+            """));
         String task = upload("user-a");
         mockMvc.perform(get("/api/v1/interview-imports/{id}", task).with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY"))
             .andExpect(jsonPath("$.transcript").value("你好，我叫张明，之前负责过一个面试平台项目。"))
-            .andExpect(jsonPath("$.questions").isEmpty());
+            .andExpect(jsonPath("$.questions[0].kind").value("INTRODUCTION"));
         org.mockito.Mockito.verify(transcription).transcribeImport(anyString(), org.mockito.ArgumentMatchers.argThat(bytes -> bytes.length > 0), org.mockito.ArgumentMatchers.eq(0), org.mockito.ArgumentMatchers.eq(0L));
         org.junit.jupiter.api.Assertions.assertTrue(jdbc.sql("SELECT object_path FROM interview_audio_imports WHERE id=:id").param("id", task).query(String.class).optional().isEmpty());
     }
@@ -145,7 +153,7 @@ class InterviewImportControllerTest {
             int segment=call.getArgument(2); long offset=call.getArgument(3);
             return new AudioTranscriptionService.Transcript("转写结果",java.util.List.of(new AudioTranscriptionService.Turn(segment,segment%2,offset,offset+1000,"转写结果")));
         });
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[]}"));
         MvcResult result = mockMvc.perform(multipart("/api/v1/interview-imports/audio")
                 .file(new MockMultipartFile("file", "large.wav", "audio/wav", audio))
                 .with(jwt().jwt(token -> token.subject("user-a"))))
@@ -175,7 +183,7 @@ class InterviewImportControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(before,temporaryAudio());
         org.mockito.Mockito.verifyNoInteractions(model);
         org.mockito.Mockito.doReturn(transcript("面试官：使用React吗？候选人：没有。")).when(transcription).transcribeImport(anyString(),any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyLong());
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"React？\",\"answer\":\"没有\"}]}"));
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"React？\",\"answer\":\"没有\"}]}"));
         String next=upload("reupload-user");
         org.junit.jupiter.api.Assertions.assertNotEquals(json.readTree(failed.getResponse().getContentAsString()).path("id").asText(),next);
         mockMvc.perform(get("/api/v1/interview-imports/{id}",next).with(jwt().jwt(t->t.subject("reupload-user")))).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY"));
@@ -184,7 +192,7 @@ class InterviewImportControllerTest {
     @Test void legacyRetryUsesSavedTranscriptAndRejectsInventedSpeakerCorrections() throws Exception {
         String id=java.util.UUID.randomUUID().toString();
         jdbc.sql("INSERT INTO interview_audio_imports(id,user_id,original_filename,content_type,size_bytes,status,transcript) VALUES(:id,'legacy-user','old.wav','audio/wav',100,'ANALYSIS_FAILED','问：缓存？答：不知道。')").param("id",id).update();
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}"));
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","缓存？","不知道。"));
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject("legacy-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.turns").isEmpty());
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/roles",id).with(jwt().jwt(t->t.subject("legacy-user"))).contentType(MediaType.APPLICATION_JSON).content("{\"roles\":[{\"turnId\":0,\"role\":\"CANDIDATE\"}]}"))
@@ -212,24 +220,41 @@ class InterviewImportControllerTest {
 
     @Test void retriesOnlyFailedBlocksAndRoleCorrectionNeverRetranscribes() throws Exception {
         var turns=java.util.List.of(new AudioTranscriptionService.Turn(0,0,0L,1000L,"如何设计缓存？"),
-            new AudioTranscriptionService.Turn(0,1,1000L,2000L,"甲".repeat(2000)),new AudioTranscriptionService.Turn(1,0,2000L,3000L,"乙".repeat(2500)));
+            new AudioTranscriptionService.Turn(0,1,1000L,2000L,"甲".repeat(8000)),new AudioTranscriptionService.Turn(1,0,2000L,3000L,"乙".repeat(8000)));
         when(transcription.transcribeImport(anyString(),any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyLong())).thenReturn(new AudioTranscriptionService.Transcript("原话",turns));
-        JsonNode first=json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}");
-        JsonNode next=json.readTree("{\"roles\":[{\"turnId\":2,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[2]}]}");
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(first).thenThrow(new ReviewFailedException("AUTHENTICATION","auth",null)).thenReturn(next);
+        JsonNode first=topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","如何设计缓存？","甲".repeat(8000));
+        JsonNode next=topic("{\"roles\":[{\"turnId\":2,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1,2]}]}","如何设计缓存？","甲".repeat(8000)+"乙".repeat(8000));
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(first).thenThrow(new ReviewFailedException("AUTHENTICATION","auth",null)).thenReturn(next);
         String id=upload("checkpoint-user");
         mockMvc.perform(get("/api/v1/interview-imports/{id}",id).with(jwt().jwt(t->t.subject("checkpoint-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ANALYSIS_FAILED")).andExpect(jsonPath("$.questions.length()").value(1));
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject("checkpoint-user"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions.length()").value(1));
-        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(3)).importJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(3)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         String roles="{\"roles\":[{\"turnId\":2,\"role\":\"INTERVIEWER\"}]}";
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/roles",id).with(jwt().jwt(t->t.subject("other-user"))).contentType(MediaType.APPLICATION_JSON).content(roles)).andExpect(status().isNotFound());
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/roles",id).with(jwt().jwt(t->t.subject("checkpoint-user"))).contentType(MediaType.APPLICATION_JSON).content(roles))
             .andExpect(status().isOk()).andExpect(jsonPath("$.turns[2].role").value("INTERVIEWER")).andExpect(jsonPath("$.turns[2].roleCorrected").value(true));
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(first).thenReturn(json.readTree("{\"roles\":[],\"questions\":[]}"));
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(first).thenReturn(json.readTree("{\"roles\":[],\"questions\":[]}"));
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject("checkpoint-user"))))
-            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions[0].answer").value("甲".repeat(2000)));
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions[0].answer").value("甲".repeat(8000)));
+        org.mockito.Mockito.verify(transcription,org.mockito.Mockito.times(1)).transcribeImport(anyString(),any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test void truncatedTopicCheckpointResumesWithoutReplayingCompletedHalf() throws Exception {
+        when(transcription.transcribeImport(anyString(),any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyLong()))
+            .thenReturn(transcript("面试官：请求封装？候选人：Axios。面试官：缓存策略？候选人：Redis。"));
+        var first=topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","请求封装？","Axios。");
+        var next=topic("{\"roles\":[{\"turnId\":2,\"role\":\"INTERVIEWER\"},{\"turnId\":3,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[2],\"answerTurnIds\":[3]}]}","缓存策略？","Redis。");
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt()))
+            .thenThrow(new ReviewFailedException("TRUNCATED","length",null)).thenThrow(new ReviewFailedException("TRUNCATED","length",null))
+            .thenReturn(first).thenThrow(new ReviewFailedException("AUTHENTICATION","auth",null)).thenReturn(next);
+        String id=upload("split-checkpoint-user");
+        mockMvc.perform(get("/api/v1/interview-imports/{id}",id).with(jwt().jwt(t->t.subject("split-checkpoint-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ANALYSIS_FAILED")).andExpect(jsonPath("$.questions.length()").value(1));
+        mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject("split-checkpoint-user"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.questions.length()").value(2));
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(5)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         org.mockito.Mockito.verify(transcription,org.mockito.Mockito.times(1)).transcribeImport(anyString(),any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyLong());
     }
 
@@ -239,7 +264,7 @@ class InterviewImportControllerTest {
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> InterviewImportService.validateAudioSize(InterviewImportService.MAX_AUDIO_BYTES));
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> InterviewImportService.validateAudioSize(InterviewImportService.MAX_AUDIO_BYTES + 1));
         when(transcription.transcribeImport(anyString(), any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(transcript("转写"));
-        when(model.importJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"问题\",\"answer\":\"回答\",\"orderIndex\":1,\"speakerEvidence\":\"\"}]}"));
+        when(model.organizeImportJson(anyString(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(output("{\"questions\":[{\"question\":\"问题\",\"answer\":\"回答\",\"orderIndex\":1,\"speakerEvidence\":\"\"}]}"));
         String task = upload("user-a");
         String packageId = packageFor("user-a");
         String invalid = "{\"interview\":{\"company\":\"A\",\"role\":\"后端\",\"interviewRound\":\"一面\",\"interviewTime\":\"2026-08-16T10:00:00+08:00\",\"interviewPackageId\":\"" + packageId + "\",\"status\":\"PENDING_REVIEW\",\"result\":\"UNKNOWN\"},\"questions\":[{\"question\":\"问题\",\"answer\":\"回答\",\"orderIndex\":2,\"speakerEvidence\":\"\"}]}";
@@ -247,39 +272,44 @@ class InterviewImportControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(before, jdbc.sql("SELECT COUNT(*) FROM interviews WHERE user_id='user-a'").query(Integer.class).single());
     }
 
-    @Test void textPreviewUsesOnlyOwnedLinkedResumeAndKeepsRawWhenAcceptingOrRevokingCorrections() throws Exception {
+    @Test void topicDraftUsesOnlyOwnedLinkedMaterialsAndKeepsRawWhenRestoringOrEditing() throws Exception {
         String user="resume-preview-user",target=existingInterview(user),raw="使用什么工具？\n我用过靠带。\n";
         jdbc.sql("UPDATE resume_files SET parsed_status='READY',parsed_text='工具：Codex。' WHERE id=(SELECT p.resume_file_id FROM interview_packages p JOIN interviews i ON i.interview_package_id=p.id WHERE i.id=:id)").param("id",target).update();
         String other=existingInterview("other-resume-user");
         jdbc.sql("UPDATE resume_files SET parsed_status='READY',parsed_text='OTHER_USER_SECRET' WHERE user_id='other-resume-user'").update();
+        linkCard(user,target,"请求封装","Axios、baseURL、localStorage");
+        linkCard("other-resume-user",other,"OTHER_CARD_SECRET","SECRET_STACK");
         var result=json.readTree("""
             {"roles":[{"turnId":0,"role":"INTERVIEWER"},{"turnId":1,"role":"CANDIDATE"}],
-             "questions":[{"questionTurnIds":[0],"answerTurnIds":[1]}],
-             "corrections":[{"turnId":1,"start":3,"end":5,"original":"靠带","replacement":"Codex","evidenceSource":"RESUME","evidenceStart":3,"evidenceEnd":8,"evidence":"Codex","reason":"本场简历名称"}]}
+             "questions":[{"kind":"QA","question":"使用什么工具？","answer":"我用过Codex。","questionTurnIds":[0],"answerTurnIds":[1],"notes":[],
+             "edits":[{"turnId":1,"original":"靠带","replacement":"Codex","evidenceSource":"RESUME","evidenceId":"","evidence":"Codex","reason":"本场简历名称","uncertain":false}]}]}
             """);
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(result);
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(result);
         mockMvc.perform(post("/api/v1/interview-imports/text").with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of("interviewId",other,"transcript",raw)))).andExpect(status().isNotFound());
         var preview=mockMvc.perform(post("/api/v1/interview-imports/text").with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of("interviewId",target,"transcript",raw))))
             .andExpect(status().isCreated()).andExpect(jsonPath("$.source").value("TEXT")).andExpect(jsonPath("$.status").value("READY"))
-            .andExpect(jsonPath("$.resume.status").value("READY")).andExpect(jsonPath("$.questions[0].answer").value("我用过靠带。"))
-            .andExpect(jsonPath("$.corrections[0].accepted").value(false)).andExpect(jsonPath("$.corrections[0].error").value(""))
+            .andExpect(jsonPath("$.resume.status").value("READY")).andExpect(jsonPath("$.questions[0].answer").value("我用过Codex。"))
+            .andExpect(jsonPath("$.questions[0].edits[0].replacement").value("Codex")).andExpect(jsonPath("$.organization").value(ImportOrganization.VERSION))
+            .andExpect(jsonPath("$.evidenceCards[0]").value("请求封装"))
             .andExpect(jsonPath("$.transcript").value(raw)).andReturn();
         JsonNode task=json.readTree(preview.getResponse().getContentAsString()); String id=task.path("id").asText();
-        var prompts=org.mockito.ArgumentCaptor.forClass(String.class); org.mockito.Mockito.verify(model).importJson(prompts.capture(),org.mockito.ArgumentMatchers.anyInt());
+        var prompts=org.mockito.ArgumentCaptor.forClass(String.class); org.mockito.Mockito.verify(model).organizeImportJson(prompts.capture(),org.mockito.ArgumentMatchers.anyInt());
         org.junit.jupiter.api.Assertions.assertTrue(prompts.getValue().contains("工具：Codex。"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompts.getValue().contains("Axios、baseURL、localStorage"));
         org.junit.jupiter.api.Assertions.assertFalse(prompts.getValue().contains("OTHER_USER_SECRET"));
+        org.junit.jupiter.api.Assertions.assertFalse(prompts.getValue().contains("OTHER_CARD_SECRET"));
         org.mockito.Mockito.verifyNoInteractions(transcription);
-        String correction=task.path("corrections").get(0).path("id").asText();
-        var body=json.createObjectNode(); body.set("questions",task.path("questions")); body.putArray("acceptedCorrectionIds").add(correction);
+        var body=json.createObjectNode(); body.set("questions",task.path("questions"));
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject("other-resume-user"))).contentType(MediaType.APPLICATION_JSON).content(body.toString())).andExpect(status().isNotFound());
         var accepted=mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].answer").value("我用过Codex。"))
             .andExpect(jsonPath("$.turns[1].text").value("我用过靠带。")).andExpect(jsonPath("$.transcript").value(raw)).andReturn();
-        body.set("questions",json.readTree(accepted.getResponse().getContentAsString()).path("questions")); body.putArray("acceptedCorrectionIds");
+        body.set("questions",json.readTree(accepted.getResponse().getContentAsString()).path("questions"));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("questions").get(0)).put("answer","我用过靠带。");
         var revoked=mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].answer").value("我用过靠带。")).andReturn();
         body.set("questions",json.readTree(revoked.getResponse().getContentAsString()).path("questions"));
-        ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("questions").get(0)).put("answer","手工核对\n\n原文段落"); body.putArray("acceptedCorrectionIds").add(correction);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("questions").get(0)).put("answer","手工核对\n\n原文段落");
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].answer").value("手工核对\n\n原文段落"));
         mockMvc.perform(post("/api/v1/interview-imports/{id}/confirm",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
@@ -289,7 +319,7 @@ class InterviewImportControllerTest {
     }
     @Test void uncertainAnswersRequireExplicitReviewOrExclusionAndCannotHideSources() throws Exception {
         String user="pending-preview-user",target=existingInterview(user);
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}"));
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","问题？","实际回答。"));
         var response=mockMvc.perform(post("/api/v1/interview-imports/text").with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of("interviewId",target,"transcript","问题？实际回答。"))))
             .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("READY")).andExpect(jsonPath("$.resume.status").value("PENDING"))
             .andExpect(jsonPath("$.questions[0].warnings[0].code").value("ANSWER_ROLE_UNCERTAIN")).andExpect(jsonPath("$.turns[1].role").value("UNKNOWN")).andReturn();
@@ -305,35 +335,45 @@ class InterviewImportControllerTest {
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/draft",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].reviewConfirmed").value(true)).andExpect(jsonPath("$.questions[0].warnings.length()").value(1));
         // Explicit exclusion is audited and is the only way to remove a pending source before saving other items.
-        replaced.putArray("excludedQuestionIds").add("0");
+        replaced.putArray("excludedQuestionIds").add("QA:0");
         mockMvc.perform(post("/api/v1/interview-imports/{id}/confirm",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(replaced.toString()))
             .andExpect(status().isOk()).andExpect(jsonPath("$.questions[0].answerText").value("手工回答"));
-        mockMvc.perform(get("/api/v1/interview-imports/{id}",id).with(jwt().jwt(t->t.subject(user)))).andExpect(jsonPath("$.excludedQuestionIds[0]").value("0"));
+        mockMvc.perform(get("/api/v1/interview-imports/{id}",id).with(jwt().jwt(t->t.subject(user)))).andExpect(jsonPath("$.excludedQuestionIds[0]").value("QA:0"));
         org.mockito.Mockito.verifyNoInteractions(transcription);
     }
-    @Test void cacheContractAndResumeChangesInvalidateOnlyAnalysis() throws Exception {
+    @Test void cacheContractAndLinkedMaterialChangesInvalidateOnlyAnalysis() throws Exception {
         String user="cache-preview-user",target=existingInterview(user);
-        var result=json.readTree("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}");
-        when(model.importJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(result);
+        var result=topic("{\"roles\":[{\"turnId\":0,\"role\":\"INTERVIEWER\"},{\"turnId\":1,\"role\":\"CANDIDATE\"}],\"questions\":[{\"questionTurnIds\":[0],\"answerTurnIds\":[1]}]}","问题？","回答。");
+        when(model.organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt())).thenReturn(result);
         var response=mockMvc.perform(post("/api/v1/interview-imports/text").with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(java.util.Map.of("interviewId",target,"transcript","问题？回答。")))).andExpect(status().isCreated()).andReturn();
         String id=json.readTree(response.getResponse().getContentAsString()).path("id").asText();
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
-        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(1)).importJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(1)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         jdbc.sql("UPDATE resume_files SET parsed_status='READY',parsed_text='不同简历' WHERE user_id=:user").param("user",user).update();
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk()).andExpect(jsonPath("$.resume.status").value("READY"));
-        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(2)).importJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(2)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=:old WHERE id=:id").param("old",json.writeValueAsString(java.util.Map.of("0",result))).param("id",id).update();
         mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk());
-        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(3)).importJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(3)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         var progress=json.readTree(jdbc.sql("SELECT analysis_progress_json FROM interview_audio_imports WHERE id=:id").param("id",id).query(String.class).single());
-        org.junit.jupiter.api.Assertions.assertEquals("resume-asr-v1",progress.path("version").asText());
-        org.junit.jupiter.api.Assertions.assertTrue(progress.path("blocks").get("0").has("context"));
+        org.junit.jupiter.api.Assertions.assertEquals(ImportOrganization.VERSION,progress.path("version").asText());
+        org.junit.jupiter.api.Assertions.assertTrue(progress.path("blocks").get("organized-0").has("context"));
+        linkCard(user,target,"新增项目","新的证据");
+        mockMvc.perform(post("/api/v1/interview-imports/{id}/analyze",id).with(jwt().jwt(t->t.subject(user)))).andExpect(status().isOk()).andExpect(jsonPath("$.evidenceCards[0]").value("新增项目"));
+        org.mockito.Mockito.verify(model,org.mockito.Mockito.times(4)).organizeImportJson(anyString(),org.mockito.ArgumentMatchers.anyInt());
         mockMvc.perform(patch("/api/v1/interview-imports/{id}/roles",id).with(jwt().jwt(t->t.subject(user))).contentType(MediaType.APPLICATION_JSON).content("{\"roles\":[{\"turnId\":1,\"role\":\"CANDIDATE\"}]}"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.transcript").value("问题？回答。"))
             .andExpect(jsonPath("$.turns[1].roleCorrected").value(true)).andExpect(jsonPath("$.turns[1].startMs").isEmpty());
         org.mockito.Mockito.verifyNoInteractions(transcription);
     }
 
+    private void linkCard(String user,String target,String name,String stack) {
+        String id=java.util.UUID.randomUUID().toString();
+        jdbc.sql("INSERT INTO project_evidence_cards(id,user_id,project_name,technology_stack,project_description_and_responsibilities,project_highlights) VALUES(:id,:user,:name,:stack,'职责','亮点')")
+            .param("id",id).param("user",user).param("name",name).param("stack",stack).update();
+        jdbc.sql("INSERT INTO interview_package_evidence_cards(interview_package_id,evidence_card_id) SELECT interview_package_id,:card FROM interviews WHERE id=:target")
+            .param("card",id).param("target",target).update();
+    }
     private String upload(String user) throws Exception { return upload(user, null); }
     private String upload(String user, String interviewId) throws Exception {
         var request = multipart("/api/v1/interview-imports/audio").file(wav()).with(jwt().jwt(token -> token.subject(user)));

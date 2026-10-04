@@ -45,6 +45,7 @@ public class ReviewModelClient {
     }
 
     public JsonNode importJson(String prompt, int timeoutSeconds) { return jsonReply(prompt, "问答分析", timeoutSeconds, 4096); }
+    public JsonNode organizeImportJson(String prompt,int timeoutSeconds) { return jsonReply(prompt,"面试话题整理",timeoutSeconds,12288); }
 
     private JsonNode jsonReply(String prompt, String label) { return jsonReply(prompt, label, 60, 8192); }
     private JsonNode jsonReply(String prompt, String label, int timeoutSeconds, int tokens) {

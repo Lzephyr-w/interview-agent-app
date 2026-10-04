@@ -203,3 +203,22 @@ test('editing sources resets review and preserves manual text in the request', a
   assert.deepEqual(question.answerTurnIds, [1, 2]);
   assert.equal(question.answer, '手工回答\n\n段落');
 });
+
+test('topic drafts show corrected prose, linked evidence and raw sources including introductions', async () => {
+  const questions = [
+    { kind: 'INTRODUCTION', question: '自我介绍', answer: '负责请求封装项目。', orderIndex: 1, speakerEvidence: '', sourceId: 'INTRODUCTION:0', questionTurnIds: [], answerTurnIds: [0] },
+    { kind: 'QA', question: '请求封装与登录状态？', answer: '创建Axios实例。\n\n登录过期后清除localStorage。', orderIndex: 2, speakerEvidence: '', sourceId: 'QA:1', questionTurnIds: [1], answerTurnIds: [2], notes: ['问题按上下文整理'], edits: [{ original: 'Excel', replacement: 'Axios', evidence: 'Axios封装', evidenceSource: 'EVIDENCE_CARD', reason: '技术栈核对', uncertain: false }] },
+  ];
+  const task = { id: 'organized', source: 'TEXT', status: 'READY', organization: 'topic-editor-v2', originalFilename: '转写.txt', sizeBytes: 100, transcript: '原文', error: '', evidenceCards: ['请求封装项目'], questions, turns: [
+    { id: 0, segmentIndex: -1, text: '嗯我负责请求封装项目。', role: 'CANDIDATE' }, { id: 1, segmentIndex: -1, text: '怎么封装？', role: 'INTERVIEWER' }, { id: 2, segmentIndex: -1, text: '创建Excel实例。', role: 'CANDIDATE' },
+  ] };
+  const buttons = [], requests = [];
+  const html = renderQuestions({ method: 'text', task, questions, buttons, onApi: async (url, options) => { requests.push({ url, options }); return task; } });
+  assert.match(html, /话题整理稿/); assert.match(html, /个话题 · 自我介绍/);
+  assert.match(html, /\[0\] 嗯我负责请求封装项目。/); assert.match(html, /\[2\] 创建Excel实例。/);
+  assert.match(html, /关联证据卡：请求封装项目/); assert.match(html, /Excel → Axios/); assert.match(html, /问题按上下文整理/);
+  assert.match(html, /rows="6"/); assert.match(html, /将本话题恢复为原文摘录/);
+  buttons.find((p) => p.children === '重新识别问答').onClick();
+  await new Promise(setImmediate);
+  assert.equal(requests[0].url, '/api/v1/interview-imports/organized/analyze?force=true'); // Readable generated prose is not an unsaved manual edit.
+});

@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -28,7 +29,7 @@ class InterviewImportService {
     private static final long MAX_DIRECT_AUDIO_BYTES = 5_000_000L;
 
     private static final int MAX_TRANSCRIPT_CHARS = 72_000;
-    @Value("${app.interview-import.request-timeout-seconds:90}") private int requestTimeout = 90;
+    @Value("${app.interview-import.request-timeout-seconds:180}") private int requestTimeout = 180;
     @Value("${app.interview-import.analysis-budget-seconds:900}") private int analysisBudget = 900;
     private final JdbcClient jdbc;
     private final AudioTranscriptionService transcription;
@@ -208,7 +209,6 @@ class InterviewImportService {
             .param("id", id).param("user", userId).param("previous",row.status).update();
         if (claimed == 0) throw new IllegalArgumentException("任务处理中或已确认，请刷新后重试。");
         long deadline = System.nanoTime() + Math.max(1, analysisBudget) * 1_000_000_000L;
-        List<ImportedQuestion> all = new ArrayList<>();
         List<ImportTurn> turns = new ArrayList<>(readTurns(row));
         boolean legacy=turns.isEmpty();
         if(legacy) turns.addAll(textTurns(row.transcript));
@@ -217,39 +217,47 @@ class InterviewImportService {
             ResumeSnapshot resume=resume(userId,row.targetInterviewId);
             String inputHash=inputHash(turns,resume);
             JsonNode previous=row.progress==null?json.createObjectNode():json.readTree(row.progress);
-            boolean compatible=!force&&previous.path("blocks").isObject()&&previous.path("version").asText().equals("resume-asr-v1")&&previous.path("inputHash").asText().equals(inputHash);
+            boolean compatible=!force&&previous.path("blocks").isObject()&&previous.path("version").asText().equals(ImportOrganization.VERSION)&&previous.path("inputHash").asText().equals(inputHash);
             if(compatible) progress.putAll(json.convertValue(previous.path("blocks"),new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String,JsonNode>>(){}));
             else for(int i=0;i<turns.size();i++) { var t=turns.get(i); if(!t.roleCorrected()) turns.set(i,new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),"UNKNOWN",false)); }
-            List<ImportCorrection> corrections=new ArrayList<>();
-            List<String> accepted=compatible?corrections(row).stream().filter(ImportCorrection::accepted).map(ImportCorrection::id).toList():List.of();
-            List<ImportAnalysis.Block> blocks = ImportAnalysis.blocks(turns);
-            List<Integer> contextIds = List.of();
-            for (int i=0;i<blocks.size();i++) {
-                ImportAnalysis.Block block=new ImportAnalysis.Block(contextIds,blocks.get(i).added());
-                JsonNode cached=progress.get(Integer.toString(i));
+            List<ImportedQuestion> organized=new ArrayList<>(); List<Integer> editContext=List.of();
+            var editBlocks=new ArrayList<>(ImportOrganization.blocks(turns));
+            for(int i=0;i<editBlocks.size();i++) {
+                var block=new ImportAnalysis.Block(editContext,editBlocks.get(i).added()); String key="organized-"+i;
+                JsonNode cached=progress.get(key);
+                // Reconstruct a previous truncation split before looking up its checkpoint.
+                if(cached!=null&&cached.path("added").isArray()&&cached.path("context").equals(json.valueToTree(block.context()))) {
+                    List<Integer> saved=json.convertValue(cached.path("added"),new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>(){});
+                    if(!saved.isEmpty()&&saved.size()<block.added().size()&&saved.equals(block.added().subList(0,saved.size()))) {
+                        editBlocks.set(i,new ImportAnalysis.Block(List.of(),saved));
+                        editBlocks.add(i+1,new ImportAnalysis.Block(List.of(),List.copyOf(block.added().subList(saved.size(),block.added().size()))));
+                        block=new ImportAnalysis.Block(editContext,saved);
+                    }
+                }
                 JsonNode result=cached!=null&&cached.path("added").equals(json.valueToTree(block.added()))&&cached.path("context").equals(json.valueToTree(block.context()))?cached.get("result"):null;
                 long started=System.nanoTime();
                 if(result==null) {
-                    try(var task=org.slf4j.MDC.putCloseable("importId",id); var part=org.slf4j.MDC.putCloseable("importBlock",Integer.toString(i))) {
-                        result=ImportAnalysis.request(model,json,block,turns,requestTimeout,deadline,0,resume.text());
+                    try(var task=org.slf4j.MDC.putCloseable("importId",id); var part=org.slf4j.MDC.putCloseable("importBlock",key)) {
+                        try { result=ImportOrganization.request(model,json,block,turns,resume.text(),resume.cards(),organized,requestTimeout,deadline); }
+                        catch(ReviewFailedException e) {
+                            if(!e.code().equals("TRUNCATED")||block.added().size()<2) throw e;
+                            int mid=block.added().size()/2;
+                            editBlocks.set(i,new ImportAnalysis.Block(List.of(),block.added().subList(0,mid)));
+                            editBlocks.add(i+1,new ImportAnalysis.Block(List.of(),block.added().subList(mid,block.added().size())));
+                            i--; continue;
+                        }
                     }
-                    progress.put(Integer.toString(i),json.valueToTree(java.util.Map.of("added",block.added(),"context",block.context(),"result",result)));
-                    jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=:progress WHERE id=:id AND user_id=:user")
-                        .param("progress",json.writeValueAsString(java.util.Map.of("version","resume-asr-v1","inputHash",inputHash,"blocks",progress))).param("id",id).param("user",userId).update();
+                    // Cache only after cross-block continuity validation, so bad continuations can be retried.
                 }
-                ImportAnalysis.merge(all,ImportAnalysis.parse(result,block,turns),turns); contextIds=ImportAnalysis.context(all,block,turns);
-                for(var c:ImportCorrections.parse(result,block,turns,resume.text())) if(corrections.stream().noneMatch(old->old.id().equals(c.id()))) corrections.add(c);
-                var selected=ImportCorrections.select(corrections,accepted.stream().filter(key->corrections.stream().anyMatch(c->c.id().equals(key))).toList());
-                var display=ImportCorrections.display(turns,selected);
-                if(all.size()>80) throw new IllegalArgumentException("问答超过80条，请手工整理。");
-                List<ImportedQuestion> ordered=new ArrayList<>();
-                for(var q:ImportAnalysis.boundaries(all)) {
-                    ordered.add(new ImportedQuestion(ImportAnalysis.text(q.questionTurnIds(),display),ImportAnalysis.text(q.answerTurnIds(),display),ordered.size()+1,q.speakerEvidence(),q.questionTurnIds(),q.answerTurnIds(),q.warnings(),false,q.sourceId()));
-                    for(var warning:q.warnings()) log.info("importId={} stage=VALIDATION block={} code={} turns={}",id,i,warning.code(),warning.turnIds());
-                }
-                jdbc.sql("UPDATE interview_audio_imports SET analysis_json=:analysis,transcript_json=:detail WHERE id=:id AND user_id=:user")
-                    .param("analysis",json.writeValueAsString(java.util.Map.of("questions",ordered,"corrections",selected,"resume",resume,"excludedQuestionIds",List.of()))).param("detail",legacy?null:json.writeValueAsString(turns)).param("id",id).param("user",userId).update();
-                log.info("importId={} stage=ANALYSIS block={} outputChars={} elapsedMs={}",id,i,result.toString().length(),(System.nanoTime()-started)/1_000_000);
+                var next=ImportOrganization.parse(result,block,turns,resume.text(),resume.cards()); ImportOrganization.merge(organized,next);
+                if(organized.size()>80) throw new IllegalArgumentException("整理话题超过80条，请手工整理。");
+                progress.put(key,json.valueToTree(java.util.Map.of("added",block.added(),"context",block.context(),"result",result)));
+                jdbc.sql("UPDATE interview_audio_imports SET analysis_progress_json=:progress,analysis_json=:analysis,transcript_json=:detail WHERE id=:id AND user_id=:user")
+                    .param("progress",json.writeValueAsString(java.util.Map.of("version",ImportOrganization.VERSION,"inputHash",inputHash,"blocks",progress)))
+                    .param("analysis",json.writeValueAsString(java.util.Map.of("questions",ImportOrganization.boundaries(organized,turns),"corrections",List.of(),"resume",resume,"excludedQuestionIds",List.of(),"organization",ImportOrganization.VERSION)))
+                    .param("detail",legacy?null:json.writeValueAsString(turns)).param("id",id).param("user",userId).update();
+                editContext=ImportOrganization.context(organized,block,turns);
+                log.info("importId={} stage=ORGANIZATION block={} topics={} outputChars={} elapsedMs={}",id,i,organized.size(),result.toString().length(),(System.nanoTime()-started)/1_000_000);
             }
             jdbc.sql("UPDATE interview_audio_imports SET status='READY',error='',updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:user").param("id",id).param("user",userId).update();
         } catch(Exception e) {
@@ -267,20 +275,28 @@ class InterviewImportService {
             ImportedQuestion item = items.get(i);
             if (item == null || item.orderIndex() != i + 1 || text(item.question(), 4_000).isBlank()) throw new IllegalArgumentException("问题不能为空且顺序必须连续，请检查后重试。");
             String answer = text(item.answer(), 20_000);
-            result.add(new QuestionRequest(text(item.question(), 4_000), answer, answer.isBlank() ? "UNANSWERED" : "UNCERTAIN"));
+            String question=text(item.question(),4000);
+            if(item.kind().equals("CANDIDATE_QUESTION")) { question="【候选人反问】"+question; if(!answer.isBlank()) answer="【面试官回答】"+answer; }
+            if(item.kind().equals("INTERVIEWER_NOTE")) { question="【面试官说明】"+question; if(!answer.isBlank()) answer="【面试官发言】"+answer; }
+            result.add(new QuestionRequest(text(question,4000),text(answer,20000),answer.isBlank()?"UNANSWERED":"UNCERTAIN"));
         }
         return result;
     }
 
-    private record ResumeSnapshot(String fileId,ImportResume info,String text) {}
+    private record ResumeSnapshot(String fileId,ImportResume info,String text,List<ImportOrganization.Evidence> cards) {}
     private ResumeSnapshot resume(String user,String target) {
-        if(target==null) return new ResumeSnapshot("",new ImportResume("","NONE",false),"");
-        return jdbc.sql("SELECT rf.id,rf.original_filename,rf.parsed_status,rf.parsed_text,rf.parsed_truncated FROM interviews i JOIN interview_packages p ON p.id=i.interview_package_id AND p.user_id=:user LEFT JOIN resume_files rf ON rf.id=p.resume_file_id AND rf.user_id=:user WHERE i.id=:target AND i.user_id=:user")
+        if(target==null) return new ResumeSnapshot("",new ImportResume("","NONE",false),"",List.of());
+        var snapshot=jdbc.sql("SELECT rf.id,rf.original_filename,rf.parsed_status,rf.parsed_text,rf.parsed_truncated FROM interviews i JOIN interview_packages p ON p.id=i.interview_package_id AND p.user_id=:user LEFT JOIN resume_files rf ON rf.id=p.resume_file_id AND rf.user_id=:user WHERE i.id=:target AND i.user_id=:user")
             .param("user",user).param("target",target).query((rs,n)-> {
                 String id=rs.getString(1),name=rs.getString(2),status=rs.getString(3),raw=rs.getString(4);
                 String value="READY".equals(status)&&raw!=null?raw:"";
-                return new ResumeSnapshot(id==null?"":id,new ImportResume(name==null?"":name,status==null?"NONE":status,rs.getBoolean(5)||value.length()>12000),value.substring(0,Math.min(value.length(),12000)));
-            }).optional().orElse(new ResumeSnapshot("",new ImportResume("","NONE",false),""));
+                return new ResumeSnapshot(id==null?"":id,new ImportResume(name==null?"":name,status==null?"NONE":status,rs.getBoolean(5)||value.length()>12000),value.substring(0,Math.min(value.length(),12000)),List.of());
+            }).optional().orElse(new ResumeSnapshot("",new ImportResume("","NONE",false),"",List.of()));
+        var linked=jdbc.sql("SELECT c.id,c.project_name,c.technology_stack,c.project_description_and_responsibilities,c.project_highlights FROM interviews i JOIN interview_packages p ON p.id=i.interview_package_id AND p.user_id=:user JOIN interview_package_evidence_cards link ON link.interview_package_id=p.id JOIN project_evidence_cards c ON c.id=link.evidence_card_id AND c.user_id=:user WHERE i.id=:target AND i.user_id=:user ORDER BY c.id")
+            .param("user",user).param("target",target).query((rs,n)->new ImportOrganization.Evidence(rs.getString(1),rs.getString(2),"项目："+rs.getString(2)+"\n技术栈："+rs.getString(3)+"\n职责："+rs.getString(4)+"\n亮点："+rs.getString(5))).list();
+        List<ImportOrganization.Evidence> cards=new ArrayList<>(); int remaining=12000;
+        for(var c:linked) { if(remaining<=0) break; String value=c.text().substring(0,Math.min(remaining,c.text().length())); cards.add(new ImportOrganization.Evidence(c.id(),c.name(),value)); remaining-=value.length(); }
+        return new ResumeSnapshot(snapshot.fileId(),snapshot.info(),snapshot.text(),List.copyOf(cards));
     }
     private String inputHash(List<ImportTurn> turns,ResumeSnapshot resume) throws Exception {
         var original=turns.stream().map(t->new ImportTurn(t.id(),t.segmentIndex(),t.speakerId(),t.startMs(),t.endMs(),t.text(),t.roleCorrected()?t.role():"UNKNOWN",t.roleCorrected())).toList();
@@ -300,6 +316,7 @@ class InterviewImportService {
         if(request==null||request.questions()==null||request.questions().size()>80) throw new IllegalArgumentException("问答草稿无效。");
         try {
             var current=api(row);
+            boolean organized=current.organization().equals(ImportOrganization.VERSION);
             var turns=readTurns(row); if(turns.isEmpty()) turns=textTurns(row.transcript);
             var oldCorrections=corrections(row); var selected=ImportCorrections.select(oldCorrections,request.acceptedCorrectionIds());
             var oldDisplay=ImportCorrections.display(turns,oldCorrections); var display=ImportCorrections.display(turns,selected);
@@ -312,17 +329,25 @@ class InterviewImportService {
                 var q=checkedIds(item.questionTurnIds(),turns); var a=checkedIds(item.answerTurnIds(),turns);
                 if(!known.contains(item.sourceId())&&!item.sourceId().equals(q.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")))) throw new IllegalArgumentException("问答来源标识无效。");
                 if(!item.sourceId().isBlank()&&!sources.add(item.sourceId())) throw new IllegalArgumentException("问答来源重复。");
-                if(known.contains(item.sourceId())&&!item.sourceId().isBlank()&&q.isEmpty()) throw new IllegalArgumentException("请保留或修正问题来源，不能删除来源绕过待确认。");
+                var old=current.questions().stream().filter(value->value.sourceId().equals(item.sourceId())).findFirst()
+                    .orElse(new ImportedQuestion(item.question(),item.answer(),item.orderIndex(),item.speakerEvidence(),q,a));
+                if(known.contains(item.sourceId())&&!item.sourceId().isBlank()&&(old.questionTurnIds().isEmpty()?a.isEmpty():q.isEmpty())) throw new IllegalArgumentException("请保留或修正来源，不能删除来源绕过待确认。");
                 if(excluded.contains(item.sourceId())) throw new IllegalArgumentException("已排除的问答不能同时加入。");
                 String question=text(item.question(),4000),answer=text(item.answer(),20000);
                 if(question.isBlank()) throw new IllegalArgumentException("请先填写问题，再保存预览修改。");
-                var old=current.questions().stream().filter(value->value.sourceId().equals(item.sourceId())).findFirst().orElse(item);
-                if(!q.isEmpty()&&question.equals(ImportAnalysis.text(old.questionTurnIds(),oldDisplay))) question=ImportAnalysis.text(q,display);
-                if(answer.equals(ImportAnalysis.text(old.answerTurnIds(),oldDisplay))) answer=ImportAnalysis.text(a,display);
-                var warnings=q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns);
-                updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId()));
+                if(!organized) {
+                    if(!q.isEmpty()&&question.equals(ImportAnalysis.text(old.questionTurnIds(),oldDisplay))) question=ImportAnalysis.text(q,display);
+                    if(answer.equals(ImportAnalysis.text(old.answerTurnIds(),oldDisplay))) answer=ImportAnalysis.text(a,display);
+                } else if(!q.equals(old.questionTurnIds())||!a.equals(old.answerTurnIds())) {
+                    // Changing citations invalidates generated prose; preserve only explicitly edited text.
+                    if(question.equals(old.question())) question=q.isEmpty()?old.question():ImportAnalysis.text(q,turns);
+                    if(answer.equals(old.answer())) answer=ImportAnalysis.text(a,turns);
+                }
+                var warnings=organized?ImportOrganization.warnings(old.kind(),q,a,turns):new ArrayList<>(q.isEmpty()?List.<ImportWarning>of():ImportAnalysis.warnings(q,a,turns));
+                if(organized) for(var warning:old.warnings()) if(Set.of("DRAFT_UNCERTAIN","UNCOVERED_TURNS").contains(warning.code())) warnings.add(warning);
+                updated.add(new ImportedQuestion(question,answer,updated.size()+1,item.speakerEvidence()==null?"":text(item.speakerEvidence(),2000),q,a,warnings,item.reviewConfirmed(),item.sourceId(),old.kind(),old.notes(),old.edits()));
             }
-            updated=new ArrayList<>(ImportAnalysis.boundaries(updated));
+            updated=new ArrayList<>(organized?ImportOrganization.boundaries(updated,turns):ImportAnalysis.boundaries(updated));
             for(var old:current.questions()) if(!old.warnings().isEmpty()&&!sources.contains(old.sourceId())&&!excluded.contains(old.sourceId())) throw new IllegalArgumentException("请明确核对或排除待确认问答，不能隐去其来源。");
             if(confirming) for(var q:updated) if(!q.warnings().isEmpty()&&!q.reviewConfirmed()) throw new IllegalArgumentException("请先核对待确认问答的原文与归属，或明确排除。");
             var root=row.analysis==null?json.createObjectNode():(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(row.analysis);
@@ -346,7 +371,10 @@ class InterviewImportService {
             List<Integer> questionIds=item.has("questionTurnIds") ? json.convertValue(item.path("questionTurnIds"), new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>() {}) : List.of();
             List<Integer> answerIds=item.has("answerTurnIds") ? json.convertValue(item.path("answerTurnIds"), new com.fasterxml.jackson.core.type.TypeReference<List<Integer>>() {}) : List.of();
             List<ImportWarning> warnings=item.has("warnings")?json.convertValue(item.path("warnings"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportWarning>>(){}):List.of();
-            result.add(new ImportedQuestion(compactGeneratedText(question,questionIds,turns),compactGeneratedText(answer,answerIds,turns),i+1,evidence,questionIds,answerIds,warnings,item.path("reviewConfirmed").asBoolean(false),item.has("sourceId")?item.path("sourceId").asText():null));
+            List<String> notes=item.has("notes")?json.convertValue(item.path("notes"),new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){}):List.of();
+            List<ImportEdit> edits=item.has("edits")?json.convertValue(item.path("edits"),new com.fasterxml.jackson.core.type.TypeReference<List<ImportEdit>>(){}):List.of();
+            if(!root.path("organization").asText().equals(ImportOrganization.VERSION)) { question=compactGeneratedText(question,questionIds,turns); answer=compactGeneratedText(answer,answerIds,turns); }
+            result.add(new ImportedQuestion(question,answer,i+1,evidence,questionIds,answerIds,warnings,item.path("reviewConfirmed").asBoolean(false),item.has("sourceId")?item.path("sourceId").asText():null,item.path("kind").asText("QA"),notes,edits));
         }
         return result;
     }
@@ -366,7 +394,8 @@ class InterviewImportService {
             JsonNode analysis=row.analysis==null?json.createObjectNode():json.readTree(row.analysis);
             ImportResume reference=analysis.has("resume")?json.treeToValue(analysis.path("resume").path("info"),ImportResume.class):new ImportResume("","NONE",false);
             List<String> excluded=analysis.has("excludedQuestionIds")?json.convertValue(analysis.path("excludedQuestionIds"),new com.fasterxml.jackson.core.type.TypeReference<List<String>>(){}):List.of();
-            return new InterviewImport(row.id,row.status,row.filename,row.size,row.transcript,row.error,questions,row.finalInterviewId,turns,corrections(row),reference,row.contentType.equals("text/plain")?"TEXT":"AUDIO",excluded);
+            List<String> cards=new ArrayList<>(); for(var c:analysis.path("resume").path("cards")) cards.add(c.path("name").asText());
+            return new InterviewImport(row.id,row.status,row.filename,row.size,row.transcript,row.error,questions,row.finalInterviewId,turns,corrections(row),reference,row.contentType.equals("text/plain")?"TEXT":"AUDIO",excluded,analysis.path("organization").asText(""),List.copyOf(cards));
         } catch(Exception e) { throw new IllegalStateException("导入结果格式无效，请重新分析。",e); }
     }
     private static String validateAudio(MultipartFile file) {

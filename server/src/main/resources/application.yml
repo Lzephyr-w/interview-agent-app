@@ -52,7 +52,7 @@ app:
   interview-import:
     engine: ${INTERVIEW_IMPORT_ASR_ENGINE:}
     hotwords: ${INTERVIEW_IMPORT_ASR_HOTWORDS:}
-    request-timeout-seconds: ${INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS:90}
+    request-timeout-seconds: ${INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS:180}
     analysis-budget-seconds: ${INTERVIEW_IMPORT_AI_BUDGET_SECONDS:900}
   agent:
     url: ${AGENT_SERVICE_URL:http://localhost:8090}
