@@ -152,18 +152,18 @@ export default function LoginPage() {
         <h1 id="auth-title">
           {registering ? (
             <>
-              开启你的<em>进阶之旅。</em>
+              开启你的<em>进阶之旅</em>
             </>
           ) : (
             <>
-              好久不见，<em>继续向前。</em>
+              好久不见，<em>继续向前</em>
             </>
           )}
         </h1>
         <p className="intro">
           {registering
-            ? "创建账号，把每一次练习变成看得见的进步。"
-            : "登录智面，向下一个心动的机会再近一步。"}
+            ? "创建账号，把每一次练习变成看得见的进步"
+            : "登录智面，向下一个心动的 offer 再近一步"}
         </p>
         <form
           ref={formRef}
