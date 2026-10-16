@@ -136,8 +136,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       callback(microphoneGranted && !stopping);
     });
-    await window.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
-      '<meta charset="utf-8"><title>智面</title><body style="font:18px system-ui;background:#f5f7f4;color:#245842;display:grid;place-content:center;height:90vh">正在启动智面…</body>'));
+    await window.loadFile(path.join(__dirname, 'loading.html'));
     if (stopping) return;
     startup = runServices('Start');
     try {

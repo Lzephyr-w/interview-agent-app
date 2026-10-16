@@ -27,9 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class WeaknessService {
-    private static final Set<String> TAGS = Set.of("技术基础", "算法与数据结构", "系统设计", "项目深挖", "业务理解", "行为面", "沟通表达", "岗位匹配", "简历风险", "英语表达");
     private static final Set<String> STATUSES = Set.of("NOT_STARTED", "IN_PROGRESS", "COMPLETED");
-    private static final int MAX_ITEMS = 3;
+    private static final int MAX_ITEMS = 8;
     private static final String INPUT_VERSION_PREFIX = "v3:";
     private final JdbcClient jdbc;
     private final ObjectMapper json;
@@ -67,9 +66,9 @@ public class WeaknessService {
         String version = inputVersion(userId);
         ParsedAnalysis parsed;
         try {
-            parsed = parse(model.replyJson(prompt(input)), input.questions());
+            parsed = parse(model.analyzeWeaknesses(prompt(input)), input.questions());
         } catch (InvalidAnalysisException exception) {
-            parsed = parse(model.replyJson(retryPrompt(input)), input.questions());
+            parsed = parse(model.analyzeWeaknesses(retryPrompt(input)), input.questions());
         }
         String items;
         try {
@@ -88,7 +87,7 @@ public class WeaknessService {
     }
 
     public WeaknessItem weakness(String userId, String tag) {
-        if (!TAGS.contains(tag)) throw notFound();
+        if (!WEAKNESS_TAGS.contains(tag)) throw notFound();
         return weaknesses(userId).stream().filter(item -> item.tag().equals(tag)).findFirst().orElseThrow(WeaknessService::notFound);
     }
 
@@ -189,16 +188,19 @@ public class WeaknessService {
     private String prompt(AnalysisInput input) {
         return """
             你是面试复盘分析助手。仅根据下方 JSON 中已有资料生成中文 JSON，不得臆造简历事实、项目指标或面试内容。
-            目标是总结当前账户最多 3 个具体薄弱点，而不是计数或复述标签。每个题目只能作为一个弱项的证据；每场面试只提供了最新复盘。资料不足必须写“待补充”。
+            目标是总结当前账户最多 %d 个具体薄弱点，按最值得优先练习的顺序排列，而不是计数或复述标签。
+            有多少可靠证据就输出多少，不为覆盖类目凑项。每个标签只能出现一次，每个题目只能作为一个弱项的证据；每场面试只提供了最新复盘。资料不足必须写“待补充”。
+            优先使用最具体的标签：性能优化关注瓶颈定位与优化验证；工程质量关注测试、可维护性与发布质量；问题排查关注定位思路与修复验证；
+            技术权衡关注方案选择、替代方案与成本；成果量化关注真实结果、指标口径与个人贡献；协作推进关注跨团队沟通、分工与落地。
             本场已确认问答是评价主体，结合逐题评价、回答依据与改进动作；关联简历仅辅助理解背景，不作为标准答案或缺失资料清单。
             不把 readiness 当能力分数。尊重没做过、不了解的边界，转写不清不猜错答。
             【候选人反问】的回答和【面试官说明】均是面试官发言，不当成候选人错答或薄弱点；不将练习追问当成实际发生的追问。
             禁止输出通过概率、录用/淘汰建议、招聘结论、能力评级。
-            """ + "标签只能是：" + String.join("、", TAGS) + "。\n" + """
-            只输出 JSON：{"summary":"...","weaknesses":[{"tag":"十个既有标签之一","title":"具体标题","diagnosis":"诊断","action":"下一步动作","evidence":[{"questionId":"输入中的 ID","reason":"关联理由"}]}]}。
-            weaknesses 最多 3 项，每项 evidence 为 1 到 3 个。不得返回用户、面试或复盘 ID，除了 evidence.questionId。
+            """.formatted(MAX_ITEMS) + "标签只能是：" + String.join("、", WEAKNESS_TAGS) + "。\n" + """
+            只输出 JSON：{"summary":"...","weaknesses":[{"tag":"上述标签之一","title":"具体标题","diagnosis":"诊断","action":"下一步动作","evidence":[{"questionId":"输入中的 ID","reason":"关联理由"}]}]}。
+            weaknesses 最多 %d 项，每项 evidence 为 1 到 3 个。不得返回用户、面试或复盘 ID，除了 evidence.questionId。
             输入：
-            """ + input.json();
+            """.formatted(MAX_ITEMS) + input.json();
     }
 
     private String retryPrompt(AnalysisInput input) {
@@ -221,7 +223,7 @@ public class WeaknessService {
         for (JsonNode value : values) {
             fields(value, Set.of("tag", "title", "diagnosis", "action", "evidence"));
             String tag = text(value, "tag", 40);
-            if (!TAGS.contains(tag) || !tags.add(tag)) throw invalidOutput();
+            if (!WEAKNESS_TAGS.contains(tag) || !tags.add(tag)) throw invalidOutput();
             String title = text(value, "title", 120);
             String diagnosis = text(value, "diagnosis", 800);
             String action = text(value, "action", 800);
@@ -257,7 +259,7 @@ public class WeaknessService {
     private ValidTask validate(String userId, TrainingTaskRequest request) {
         String title = required(request.title(), "任务标题");
         String tag = required(request.weaknessTag(), "弱项标签");
-        if (!TAGS.contains(tag)) throw new IllegalArgumentException("弱项标签值无效。");
+        if (!WEAKNESS_TAGS.contains(tag)) throw new IllegalArgumentException("弱项标签值无效。");
         String action = required(request.action(), "练习内容");
         String status = required(request.status(), "状态");
         if (!STATUSES.contains(status)) throw new IllegalArgumentException("状态值无效。");

@@ -30,6 +30,7 @@ function launch(single = true) {
       windows.push(this);
     }
     loadURL(url) { this.url = url; return Promise.resolve(); }
+    loadFile(file) { this.file = file; return Promise.resolve(); }
     setAppDetails(details) { this.appDetails = details; }
     isDestroyed() { return false; }
     isMinimized() { return this.minimized; }
@@ -67,6 +68,8 @@ function launch(single = true) {
   assert.equal(cold.children[0].action, 'Start');
   assert.equal(cold.children[0].options.windowsHide, true);
   const win = cold.windows[0];
+  assert.equal(win.file, path.join(__dirname, 'loading.html'), 'Show the local animation before services are ready');
+  assert.ok(fs.existsSync(win.file));
   assert.equal(win.options.webPreferences.nodeIntegration, false);
   assert.equal(win.options.webPreferences.sandbox, true);
   assert.ok(win.options.icon.endsWith('icon.ico'));

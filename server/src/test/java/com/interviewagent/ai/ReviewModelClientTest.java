@@ -70,12 +70,13 @@ class ReviewModelClientTest {
         org.mockito.Mockito.when(response.body()).thenReturn(json.writeValueAsString(java.util.Map.of("choices", java.util.List.of(java.util.Map.of("message", java.util.Map.of("content", "解释\n" + valid + "\n结束"))))));
         assertTrue(client.importJson("test", 10).path("ok").asBoolean());
         assertTrue(client.replyJson("test").path("ok").asBoolean());
+        assertTrue(client.analyzeWeaknesses("test").path("ok").asBoolean());
         org.mockito.Mockito.when(response.body()).thenReturn(json.writeValueAsString(java.util.Map.of("choices", java.util.List.of(java.util.Map.of("finish_reason", "length", "message", java.util.Map.of("content", valid))))));
         var truncated = org.junit.jupiter.api.Assertions.assertThrows(com.interviewagent.interview.ReviewFailedException.class, () -> client.review("test", 10));
         org.junit.jupiter.api.Assertions.assertEquals("TRUNCATED", truncated.code());
     }
 
-    @Test void reviewUsesConfigurableTimeoutAndImportKeepsItsOwnTimeout() throws Exception {
+    @Test void reviewAndWeaknessUseConfigurableTimeoutsAndImportKeepsItsOwnTimeout() throws Exception {
         var http = org.mockito.Mockito.mock(java.net.http.HttpClient.class);
         java.net.http.HttpResponse<String> response = org.mockito.Mockito.mock(java.net.http.HttpResponse.class);
         org.mockito.Mockito.when(response.statusCode()).thenReturn(200);
@@ -91,9 +92,12 @@ class ReviewModelClientTest {
         client.review("test", 899);
         client.importJson("test", 7);
         client.replyJson("test");
+        client.analyzeWeaknesses("test");
+        org.springframework.test.util.ReflectionTestUtils.setField(client, "weaknessTimeoutSeconds", 91);
+        client.analyzeWeaknesses("test");
         var requests = org.mockito.ArgumentCaptor.forClass(java.net.http.HttpRequest.class);
-        org.mockito.Mockito.verify(http, org.mockito.Mockito.times(6)).send(requests.capture(), org.mockito.ArgumentMatchers.<java.net.http.HttpResponse.BodyHandler<String>>any());
-        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of(240L, 120L, 17L, 120L, 7L, 60L), requests.getAllValues().stream().map(request -> request.timeout().orElseThrow().toSeconds()).toList());
+        org.mockito.Mockito.verify(http, org.mockito.Mockito.times(8)).send(requests.capture(), org.mockito.ArgumentMatchers.<java.net.http.HttpResponse.BodyHandler<String>>any());
+        org.junit.jupiter.api.Assertions.assertEquals(java.util.List.of(240L, 120L, 17L, 120L, 7L, 60L, 240L, 91L), requests.getAllValues().stream().map(request -> request.timeout().orElseThrow().toSeconds()).toList());
     }
 
     @Test void classifiesHttpEnvelopeContentJsonAndTruncation() throws Exception {

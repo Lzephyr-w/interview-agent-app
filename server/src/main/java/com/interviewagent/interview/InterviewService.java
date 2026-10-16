@@ -2,6 +2,7 @@ package com.interviewagent.interview;
 
 import com.interviewagent.ai.ReviewModelClient;
 import static com.interviewagent.interview.InterviewApi.*;
+import static com.interviewagent.weakness.WeaknessApi.WEAKNESS_TAGS;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -33,7 +34,6 @@ public class InterviewService {
     private static final Set<String> RESULTS = Set.of("UNKNOWN", "PASSED", "REJECTED", "PENDING");
     private static final Set<String> ASSESSMENTS = Set.of("GOOD", "UNCERTAIN", "UNANSWERED");
     private static final Set<String> READINESS = Set.of("准备不足", "基本准备", "准备充分");
-    private static final Set<String> WEAKNESS_TAGS = Set.of("技术基础", "算法与数据结构", "系统设计", "项目深挖", "业务理解", "行为面", "沟通表达", "岗位匹配", "简历风险", "英语表达");
     // ponytail: conservative character/output proxies, not tokenizer guarantees; fail intact if the provider truncates.
     static final int MAX_INPUT_CHARS = 32_000;
     static final int REPAIR_RESERVE_CHARS = 1_000;

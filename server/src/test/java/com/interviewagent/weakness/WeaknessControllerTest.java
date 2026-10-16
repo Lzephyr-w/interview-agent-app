@@ -53,7 +53,7 @@ class WeaknessControllerTest {
         insertReview(a.interview(), "z-new-a", "最新复盘", a.question());
         Seed b = seed("user-b", "b", "B 的私有问题？");
         insertReview(b.interview(), "review-b", "B 复盘", b.question());
-        doReturn(output("已根据当前回答生成分析。", "系统设计", "缓存一致性回答缺少边界与验证", a.question())).when(model).replyJson(anyString());
+        doReturn(output("已根据当前回答生成分析。", "系统设计", "缓存一致性回答缺少边界与验证", a.question())).when(model).analyzeWeaknesses(anyString());
 
         mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.stale").value(false))
@@ -63,7 +63,7 @@ class WeaknessControllerTest {
             .andExpect(jsonPath("$.items[0].evidence[0].interviewId").value(a.interview()));
         org.junit.jupiter.api.Assertions.assertTrue(jdbc.sql("SELECT input_version FROM weakness_analyses WHERE user_id = 'user-a'").query(String.class).single().startsWith("v3:"));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
-        verify(model).replyJson(prompt.capture());
+        verify(model).analyzeWeaknesses(prompt.capture());
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains(a.question()));
         org.junit.jupiter.api.Assertions.assertFalse(prompt.getValue().contains(b.question()));
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("最新复盘"));
@@ -79,13 +79,13 @@ class WeaknessControllerTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$[0].tag").value("系统设计"));
         mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-b"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.items").isEmpty());
-        verify(model, never()).replyJson(org.mockito.ArgumentMatchers.contains("B 的私有问题"));
+        verify(model, never()).analyzeWeaknesses(org.mockito.ArgumentMatchers.contains("B 的私有问题"));
     }
 
     @Test void rejectsInvalidOutputWithoutOverwritingStableSnapshot() throws Exception {
         Seed a = seed("user-a", "a", "如何验证缓存？");
         insertReview(a.interview(), "review-a", "复盘", a.question());
-        doReturn(output("稳定分析", "系统设计", "缓存回答缺少验证", a.question())).when(model).replyJson(anyString());
+        doReturn(output("稳定分析", "系统设计", "缓存回答缺少验证", a.question())).when(model).analyzeWeaknesses(anyString());
         mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isOk());
 
         for (String invalid : new String[] {
@@ -95,30 +95,76 @@ class WeaknessControllerTest {
             "{\"summary\":\"通过概率很高\",\"weaknesses\":[]}",
             "{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"" + "x".repeat(121) + "\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}"
         }) {
-            doReturn(json.readTree(invalid)).when(model).replyJson(anyString());
+            doReturn(json.readTree(invalid)).when(model).analyzeWeaknesses(anyString());
             mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a")))).andExpect(status().isBadGateway());
             mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("稳定分析"));
         }
     }
 
+    @Test void timeoutDoesNotRetryOrOverwriteStableSnapshot() throws Exception {
+        Seed a = seed("user-a", "a", "如何验证缓存？");
+        doReturn(output("稳定分析", "系统设计", "缓存回答缺少验证", a.question())).when(model).analyzeWeaknesses(anyString());
+        analyze("user-a");
+        org.mockito.Mockito.reset(model);
+        org.mockito.Mockito.when(model.analyzeWeaknesses(anyString())).thenThrow(
+            new com.interviewagent.interview.ReviewFailedException("HTTP_TIMEOUT", "AI 请求超时，请重试。", new java.net.http.HttpTimeoutException("request timed out")));
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isBadGateway()).andExpect(jsonPath("$.code").value("REVIEW_FAILED"));
+        verify(model).analyzeWeaknesses(anyString());
+        mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("稳定分析"));
+    }
+
     @Test void retriesInvalidOutputWithStricterPrompt() throws Exception {
         Seed a = seed("user-a", "a", "如何验证缓存？");
         insertReview(a.interview(), "review-a", "复盘", a.question());
         JsonNode invalid = json.readTree("{\"summary\":\"x\",\"weaknesses\":[{\"tag\":\"系统设计\",\"title\":\"a\",\"diagnosis\":\"b\",\"action\":\"c\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]},{\"tag\":\"项目深挖\",\"title\":\"d\",\"diagnosis\":\"e\",\"action\":\"f\",\"evidence\":[{\"questionId\":\"" + a.question() + "\",\"reason\":\"x\"}]}]}");
-        doReturn(invalid, output("已修正", "系统设计", "缓存回答缺少验证", a.question())).when(model).replyJson(anyString());
+        doReturn(invalid, output("已修正", "系统设计", "缓存回答缺少验证", a.question())).when(model).analyzeWeaknesses(anyString());
 
         mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
             .andExpect(status().isOk()).andExpect(jsonPath("$.summary").value("已修正"));
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
-        verify(model, org.mockito.Mockito.times(2)).replyJson(prompt.capture());
+        verify(model, org.mockito.Mockito.times(2)).analyzeWeaknesses(prompt.capture());
         org.junit.jupiter.api.Assertions.assertTrue(prompt.getAllValues().get(1).contains("只能出现一次"));
+    }
+
+    @Test void acceptsEightEvidenceBackedItemsAndExpandedTrainingCategories() throws Exception {
+        String[] tags = {"性能优化", "工程质量", "问题排查", "技术权衡", "成果量化", "协作推进", "系统设计", "项目深挖", "沟通表达"};
+        var result = json.createObjectNode().put("summary", "按具体回答整理练习方向。");
+        var values = result.putArray("weaknesses");
+        for (int index = 0; index < tags.length; index++) {
+            Seed source = seed("user-a", "expanded-" + index, "问题 " + index);
+            values.add(output("分析", tags[index], tags[index] + "待练习", source.question()).path("weaknesses").get(0));
+        }
+        var eightItems = result.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ArrayNode) eightItems.path("weaknesses")).remove(8);
+        doReturn(eightItems).when(model).analyzeWeaknesses(anyString());
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(8));
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        verify(model).analyzeWeaknesses(prompt.capture());
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("最多 8 个"));
+        org.junit.jupiter.api.Assertions.assertTrue(prompt.getValue().contains("不为覆盖类目凑项"));
+        for (int index = 0; index < 6; index++) {
+            String tag = tags[index];
+            mockMvc.perform(get("/api/v1/weaknesses/{tag}", tag).with(jwt().jwt(token -> token.subject("user-a"))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.tag").value(tag));
+            mockMvc.perform(post("/api/v1/training-tasks").with(jwt().jwt(token -> token.subject("user-a"))).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(new WeaknessApi.TrainingTaskRequest("练习" + tag, tag, "补充验证", "NOT_STARTED", null, null, null))))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.weaknessTag").value(tag));
+        }
+        doReturn(result).when(model).analyzeWeaknesses(anyString());
+        mockMvc.perform(post("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isBadGateway());
+        mockMvc.perform(get("/api/v1/weaknesses/analysis").with(jwt().jwt(token -> token.subject("user-a"))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(8));
     }
 
     @Test void marksSnapshotStaleForQuestionReviewInterviewAndResumeChanges() throws Exception {
         Seed a = seed("user-a", "a", "问题一？");
         insertReview(a.interview(), "review-a", "复盘", a.question());
-        doReturn(output("分析", "系统设计", "标题", a.question())).when(model).replyJson(anyString());
+        doReturn(output("分析", "系统设计", "标题", a.question())).when(model).analyzeWeaknesses(anyString());
         analyze("user-a");
         jdbc.sql("UPDATE interview_questions SET answer_text = '已修改' WHERE id = :id").param("id", a.question()).update();
         stale("user-a");

@@ -1141,10 +1141,16 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
 }
 .weakness-workspace {
   margin-top: 26px;
+  background: var(--paper);
+  border-radius: 20px;
+  box-shadow: none;
 }
 .weakness-workspace > .interview-tabs {
   margin-bottom: 20px;
 }
+.weaknesses-hero { min-height: 220px; padding: 30px; }
+.weaknesses-hero h1 { margin: 12px 0; font-size: clamp(26px, 3vw, 38px); }
+.weaknesses-hero .intro { margin: 0; font-size: 14px; }
 .training-task-panels {
   display: grid;
   margin-top: 20px;
@@ -1154,10 +1160,82 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   display: grid;
   gap: 18px;
 }
-.weakness-report .section-heading .primary-button {
+.weakness-report .primary-button {
   width: auto;
-  padding-inline: 24px;
+  flex-shrink: 0;
+  padding: 11px 18px;
+  font-size: 13px;
 }
+.weaknesses-page .section-heading h2 { font-family: inherit; font-size: 24px; letter-spacing: -.03em; }
+.weaknesses-page .profile-label { color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.weakness-report .section-heading .muted { margin-bottom: 0; font-size: 12px; }
+.weakness-analysis-progress { margin: 0; padding: 12px 16px; color: var(--green); background: var(--green-soft); border-radius: 10px; font-size: 13px; line-height: 1.7; }
+.weakness-overview { display: grid; gap: 24px; }
+.weakness-summary-card { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 28px; padding: 24px; background: color-mix(in srgb, var(--green-soft) 35%, var(--paper)); border: 1px solid var(--line); border-radius: 16px; }
+.weakness-summary-marker { display: inline-block; color: var(--green); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.weakness-summary-card .analysis-summary { margin-top: 10px; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.weakness-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: center; gap: 16px; margin: 0; padding-left: 28px; border-left: 1px solid var(--line); }
+.weakness-metrics dt { color: var(--muted); font-size: 11px; }
+.weakness-metrics dd { margin: 10px 0 0; font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.weakness-metrics small { margin-left: 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.weakness-dimension-heading h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.weakness-dimension-heading p { margin: 8px 0 0; font-size: 12px; }
+.weakness-group-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.weakness-group-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 16px; }
+.weakness-group-card header { display: flex; align-items: center; gap: 12px; }
+.weakness-group-number { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; color: var(--green); background: var(--green-soft); border-radius: 12px; font-size: 13px; font-weight: 600; }
+.weakness-group-card header > div { min-width: 0; }
+.weakness-group-card h4 { margin: 0; font-size: 17px; font-weight: 600; }
+.weakness-group-card header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.weakness-group-count { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: 11px; }
+.weakness-dimension-chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+.weakness-dimension-chips button { padding: 5px 9px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; line-height: 1.5; }
+.weakness-dimension-chips button[data-identified="true"] { color: var(--green); background: var(--green-soft); border-color: transparent; }
+.weakness-dimension-chips button:hover { color: var(--green); border-color: var(--green); }
+.weakness-focus-list { margin: 16px 0 0; padding: 0; list-style: none; }
+.weakness-focus-list li + li { border-top: 1px solid var(--line); }
+.weakness-focus-list button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 0; color: var(--ink); text-align: left; background: transparent; border: 0; font-size: 13px; line-height: 1.7; }
+.weakness-focus-list button > span { min-width: 0; overflow-wrap: anywhere; }
+.weakness-focus-list button:hover { color: var(--green); }
+.weakness-focus-list small { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: 10px; }
+.weakness-group-empty { margin: 22px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.weakness-detail-layout { display: grid; grid-template-columns: 204px minmax(0, 1fr); align-items: start; gap: 22px; }
+.weakness-group-nav { position: sticky; top: 88px; padding: 16px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.weakness-nav-heading { padding: 0 6px 14px; }
+.weakness-nav-heading h3 { margin: 0; color: var(--ink); font-size: 13px; }
+.weakness-nav-heading p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
+.weakness-group-links { display: grid; gap: 8px; }
+.weakness-group-links button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px 10px; color: var(--ink); text-align: left; background: transparent; border: 1px solid transparent; border-radius: 10px; }
+.weakness-nav-number { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; font-size: 10px; }
+.weakness-group-links strong { display: block; font-size: 13px; font-weight: 600; }
+.weakness-group-links small { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }
+.weakness-nav-arrow { margin-left: auto; color: var(--muted); font-size: 18px; }
+.weakness-group-links button:hover { background: var(--paper); }
+.weakness-group-links button[aria-pressed="true"] { color: var(--green); background: var(--green-soft); border-color: color-mix(in srgb, var(--green) 28%, var(--line)); }
+.weakness-group-links button[aria-pressed="true"] .weakness-nav-number { color: var(--paper); background: var(--green); border-color: var(--green); }
+.weakness-group-links button[aria-pressed="true"] .weakness-nav-arrow { color: var(--green); }
+.weakness-detail-main { display: grid; min-width: 0; gap: 18px; }
+.weakness-category-panel { min-width: 0; padding: 22px; background: var(--paper); border: 1px solid var(--line); border-radius: 16px; }
+.weakness-category-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.weakness-category-panel .profile-label { margin: 0 0 6px; }
+.weakness-category-panel h3 { margin: 0; font-size: 19px; font-weight: 600; }
+.weakness-category-panel .muted { margin: 8px 0 0; font-size: 12px; line-height: 1.7; }
+.weakness-category-count { flex-shrink: 0; padding: 5px 9px; color: var(--muted); background: var(--surface); border-radius: 7px; font-size: 10px; }
+.weakness-category-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.weakness-category-list[data-count="2"], .weakness-category-list[data-count="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.weakness-category-list button { display: grid; gap: 8px; min-width: 0; padding: 14px 16px; color: var(--ink); text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.weakness-category-list button > span { font-size: 13px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.weakness-category-list small { color: var(--muted); font-size: 10px; }
+.weakness-category-list button[data-identified="true"] small { color: var(--green); }
+.weakness-category-list button:hover { border-color: var(--green); }
+.weakness-category-list button[aria-pressed="true"] { color: var(--green); background: var(--green-soft); border-color: var(--green); box-shadow: inset 0 3px 0 var(--green); }
+#weakness-dimension-detail { min-width: 0; scroll-margin-top: 88px; }
+#weakness-dimension-detail:focus { outline: none; }
+.weakness-dimension-empty { padding: 40px 28px; background: var(--surface); border: 1px dashed var(--line); border-radius: 16px; }
+.weakness-dimension-empty h3 { margin: 14px 0 10px; font-size: 22px; }
+.weakness-dimension-empty p { max-width: 520px; color: var(--muted); font-size: 13px; line-height: 1.9; }
+.weakness-dimension-empty .secondary-button { margin-top: 14px; }
+.weakness-dimension-chips button:focus-visible, .weakness-focus-list button:focus-visible, .weakness-group-links button:focus-visible, .weakness-category-list button:focus-visible, .question-evidence summary:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
 .analysis-empty,
 .analysis-summary {
   margin: 0;
@@ -1168,18 +1246,14 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   border-left: 3px solid var(--orange);
   background: var(--paper);
 }
-.analysis-content {
-  display: grid;
-  gap: 18px;
-}
 .weakness-report-item {
   display: grid;
   gap: 16px;
-  padding: 20px;
+  padding: 24px;
   scroll-margin-top: 20px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 22px 6px 22px 6px;
+  border-radius: 16px;
 }
 .weakness-report-item-heading {
   display: flex;
@@ -1187,13 +1261,12 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   justify-content: space-between;
   gap: 16px;
 }
-.weakness-report-item-heading .secondary-button {
-  flex: 0 0 auto;
-}
 .weakness-report-item h3 {
   margin: 6px 0 0;
-  font-family: Georgia, "Songti SC", serif;
-  font-size: 24px;
+  font-family: inherit;
+  font-size: 21px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 .analysis-details {
   display: grid;
@@ -1201,18 +1274,22 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
   margin: 0;
 }
 .analysis-details div {
-  padding-top: 10px;
+  padding: 16px 0;
   border-top: 1px solid var(--line);
 }
+.analysis-details .weakness-next-action { padding: 16px; background: color-mix(in srgb, var(--green-soft) 50%, var(--paper)); border: 0; border-radius: 10px; }
 .analysis-details dt,
 .evidence-list h4 {
-  color: var(--orange);
+  color: var(--green);
   font-size: 12px;
   font-weight: 800;
 }
 .analysis-details dd {
   margin: 4px 0 0;
   line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14px;
 }
 .evidence-list {
   display: grid;
@@ -1221,20 +1298,32 @@ fieldset.import-questions { margin: 0; padding: 0; border: 0; }
 .evidence-list h4 {
   margin: 0;
 }
+.evidence-list h4 span { margin-left: 8px; color: var(--muted); font-size: 11px; font-weight: 400; }
 .question-evidence {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
+  padding: 0;
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 12px 4px 12px 4px;
+  border-radius: 10px;
 }
+.question-evidence summary { display: flex; align-items: baseline; gap: 12px; padding: 16px; cursor: pointer; list-style: none; }
+.question-evidence summary::-webkit-details-marker { display: none; }
+.question-evidence summary::after { content: "+"; margin-left: auto; flex-shrink: 0; color: var(--green); }
+.question-evidence[open] summary::after { content: "−"; }
+.weakness-evidence-number { flex-shrink: 0; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.weakness-evidence-body { display: grid; gap: 12px; padding: 0 16px 16px; font-size: 13px; }
+.weakness-evidence-body .muted { font-size: 11px; }
+.weakness-evidence-body .item-actions { flex-wrap: wrap; gap: 12px; font-size: 12px; }
+.weakness-evidence-body .text-button { padding: 0; color: var(--green); background: transparent; border: 0; font-size: 12px; }
+.weakness-evidence-body .text-button:hover { text-decoration: underline; }
 .question-evidence p {
   margin: 0;
   line-height: 1.65;
 }
 .question-evidence-text {
-  font-weight: 800;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 .saved-training-tasks .section-heading { align-items: center; }
 .saved-training-tasks h2 { font-family: inherit; font-size: 24px; letter-spacing: -.03em; }

@@ -42,6 +42,8 @@ app:
     api-key: ${AI_REVIEW_API_KEY:}
     model: ${AI_REVIEW_MODEL:}
     request-timeout-seconds: ${AI_REVIEW_TIMEOUT_SECONDS:240}
+  weakness-analysis:
+    request-timeout-seconds: ${AI_WEAKNESS_TIMEOUT_SECONDS:240}
   ai-mock-audio:
     bucket: ${SUPABASE_AI_MOCK_AUDIO_BUCKET:ai-mock-audio}
   tencent-asr:

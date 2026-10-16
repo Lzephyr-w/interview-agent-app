@@ -25,7 +25,7 @@
 - **AI 录音模拟**：进行 10 道题的录音模拟，每题限时 5 分钟；常规模拟在创建或更新面试包后异步准备十题计划，每个槽位提供三个切入点，每场随机选取并调整同题型顺序，开始后单独生成首题；支持浏览器录音、语音转写、回答确认和逐题反馈，完成后可形成正式面试记录。
   <img width="2560" height="1186" alt="语音模拟面试" src="https://github.com/user-attachments/assets/06712822-436c-40d7-bfb5-08fc738cedb0" />
 
-- **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历生成最多 3 个具体薄弱点；每项可追溯到具体题目，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
+- **薄弱点与训练任务**：用户主动发起 AI 汇总分析，结合当前面试问答、每场最新逐题复盘和关联简历，从技术能力、项目与业务、表达与协作、岗位与简历四组共 16 个维度生成最多 8 个有证据支持的具体薄弱点。页面分为分析总览、维度详情和训练任务；详情按维度查看、按需展开题目证据，并可据此创建、编辑和删除训练任务。分析结果按用户保存为快照，数据发生变化后会标记为过期；刷新或 GET 请求不会自动调用模型。
    <img width="2560" height="1184" alt="薄弱点" src="https://github.com/user-attachments/assets/27707cb0-7505-4e8b-ada8-5d17aa13ee2f" />
 
 - **AI 对话**：创建带可选面试包、面试、复盘或薄弱点上下文的会话；保存历史消息，调用 AI 回复，并支持删除会话。
@@ -123,12 +123,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
 | `AI_REVIEW_API_KEY` | AI 模型服务端密钥 |
 | `AI_REVIEW_MODEL` | AI 模型名 |
 | `AI_REVIEW_TIMEOUT_SECONDS` | 仅复盘单次请求超时，默认240秒；每次还受整场剩余时间限制，输出8192 tokens |
+| `AI_WEAKNESS_TIMEOUT_SECONDS` | 薄弱点分析单次请求超时，默认240秒；独立于复盘和录音导入 |
 | `TENCENT_CLOUD_SECRET_ID` / `TENCENT_CLOUD_SECRET_KEY` | 腾讯云 ASR 服务端密钥 |
 | `TENCENT_CLOUD_REGION` | 默认 `ap-shanghai` |
 | `TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE` | 共享默认 `16k_zh`，保留 AI 语音模拟兼容性 |
 | `INTERVIEW_IMPORT_ASR_ENGINE` | 仅真实导入覆盖；空值沿用共享默认，可选 `16k_zh_en_2.0` / `16k_zh_en_meeting`，不同引擎费用不同 |
 | `INTERVIEW_IMPORT_ASR_HOTWORDS` | 可选 `JavaScript\|5,TypeScript\|5,Vue\|5,React\|5,Node.js\|5,Axios\|5,Base64\|5`；最多128项，每词30字符/10汉字，权重1–11；100仅16k_zh且可能强制同音替换 |
-| `INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS` | 录音整理单次 AI 超时，默认180秒；弱项通用 JSON 调用仍60秒，复盘独立默认240秒 |
+| `INTERVIEW_IMPORT_AI_TIMEOUT_SECONDS` | 录音整理单次 AI 超时，默认180秒；薄弱点分析与复盘各自独立默认240秒 |
 | `INTERVIEW_IMPORT_AI_BUDGET_SECONDS` | 导入分析总预算，默认900秒；超预算保留有效结果 |
 | `AGENT_SERVICE_URL` | Python Agent 地址，默认 `http://localhost:8090` |
 | `AGENT_INTERNAL_KEY` | Java 与 Python Agent 之间的共享密钥，必须与 `agent/.env.local` 相同 |

@@ -232,7 +232,8 @@ export default function HomePage() {
           onDismissNotice={() => setNotice("")}
         />
         {loading || !dashboard ? (
-          <section className="library-section">
+          <section className="library-section home-loading" role="status">
+            <WavingInterviewer />
             <p className="muted">正在整理当前准备进度…</p>
           </section>
         ) : (

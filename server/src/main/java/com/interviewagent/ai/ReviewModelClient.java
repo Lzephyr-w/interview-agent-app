@@ -24,6 +24,7 @@ public class ReviewModelClient {
     private final String apiKey;
     private final String model;
     @Value("${app.review-model.request-timeout-seconds:240}") private int reviewTimeoutSeconds = 240;
+    @Value("${app.weakness-analysis.request-timeout-seconds:240}") private int weaknessTimeoutSeconds = 240;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public ReviewModelClient(ObjectMapper json, @Value("${app.review-model.url:}") String url, @Value("${app.review-model.api-key:}") String apiKey, @Value("${app.review-model.model:}") String model) {
@@ -56,6 +57,8 @@ public class ReviewModelClient {
     public JsonNode replyJson(String prompt) {
         return jsonReply(prompt, "AI");
     }
+
+    public JsonNode analyzeWeaknesses(String prompt) { return jsonReply(prompt, "AI 薄弱点分析", weaknessTimeoutSeconds, 8192); }
 
     public JsonNode importJson(String prompt, int timeoutSeconds) { return jsonReply(prompt, "问答分析", timeoutSeconds, 4096); }
     public JsonNode organizeImportJson(String prompt,int timeoutSeconds) { return jsonReply(prompt,"面试话题整理",timeoutSeconds,12288); }
@@ -122,7 +125,7 @@ public class ReviewModelClient {
         } catch (java.io.IOException e) { error = "CONNECTION"; throw new ReviewFailedException(error, "AI 连接失败，请重试。", e);
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); error = "INTERRUPTED"; throw new ReviewFailedException(error, "AI 请求已中断。", e);
         } catch (Exception e) { error = "CONFIGURATION"; throw new ReviewFailedException(error, "AI 请求配置无效。", e);
-        } finally { log.info("importId={} block={} model={} inputChars={} outputChars={} httpStatus={} elapsedMs={} errorType={} requestId={}", org.slf4j.MDC.get("importId"), org.slf4j.MDC.get("importBlock"), model, body.toString().length(), outputLength, status, (System.nanoTime()-started)/1_000_000, error, safeRequestId(requestId)); }
+        } finally { log.info("importId={} block={} model={} timeoutSeconds={} inputChars={} outputChars={} httpStatus={} elapsedMs={} errorType={} requestId={}", org.slf4j.MDC.get("importId"), org.slf4j.MDC.get("importBlock"), model, Math.max(1, timeoutSeconds), body.toString().length(), outputLength, status, (System.nanoTime()-started)/1_000_000, error, safeRequestId(requestId)); }
     }
     private static String safeRequestId(String value) { String safe=value.replaceAll("[^a-zA-Z0-9._-]", ""); return safe.substring(0,Math.min(128,safe.length())); }
 

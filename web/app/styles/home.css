@@ -1,4 +1,5 @@
 .dashboard-page { max-width: 1440px; margin: 0 auto; padding: 24px clamp(20px, 3vw, 44px) 44px; }
+.home-loading { display: flex; flex-direction: column; align-items: center; padding: 32px; text-align: center; }
 .app-shell:has(.dashboard-page) .app-topbar strong { font-family: inherit; font-size: 18px; }
 .app-shell:has(.dashboard-page) .sidebar-link { border-radius: 10px; }
 .home-welcome { position: relative; isolation: isolate; display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 200px; margin-bottom: 20px; padding: 28px 30px; overflow: hidden; border: 1px solid #a6c6af4d; border-radius: 20px; color: #f8f6ef; background: radial-gradient(ellipse at 85% 50%, #50795b59, transparent 50%), linear-gradient(120deg, #122b23, #1f3e31); }
@@ -42,7 +43,6 @@
 .home-art-stage::before, .home-art-stage::after { content: ""; position: absolute; inset: 0; border: 1px solid light-dark(#78966c80, #cde3b66e); border-radius: 50%; background: radial-gradient(closest-side, transparent 90%, light-dark(#9ab68a15, #cde3b609)); box-shadow: 0 0 12px light-dark(#a8c39630, #cde3b614); opacity: 0; animation: home-art-ripple 4.8s cubic-bezier(.22, .61, .36, 1) infinite; }
 .home-art-stage::after { animation-delay: -2.4s; }
 .home-waving-robot { display: block; position: relative; width: min(220px, 120%); flex-shrink: 0; filter: drop-shadow(0 8px 20px #cde3b618); }
-.home-waving-robot img { display: block; width: 100%; height: auto; object-fit: contain; }
 .home-art-caption { position: relative; margin-top: -7px; font: 8px ui-monospace, monospace; letter-spacing: .06em; color: light-dark(var(--muted), #a8bea4); white-space: nowrap; }
 .home-practice-side { display: grid; grid-template-rows: 1fr auto; gap: 14px; min-width: 0; }
 .home-text-practice { display: block; padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(135deg, var(--paper), color-mix(in srgb, var(--green-soft) 45%, var(--paper))); }

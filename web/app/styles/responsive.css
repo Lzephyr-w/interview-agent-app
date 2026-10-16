@@ -11,6 +11,12 @@
   .chat-session-status { display: none; }
   .chat-starters { gap: 8px; }
   .chat-starters button { padding: 14px 10px; }
+  .weakness-summary-card { grid-template-columns: 1fr; gap: 20px; }
+  .weakness-metrics { padding: 18px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .weakness-detail-layout { grid-template-columns: 1fr; gap: 16px; }
+  .weakness-group-nav { position: static; }
+  .weakness-group-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .weakness-report-item-heading { flex-wrap: wrap; }
 }
 @media (max-width: 700px) {
   .chat-app-main {
@@ -130,6 +136,28 @@
   .weakness-report-item {
     padding: 16px;
   }
+  .weakness-report > .section-heading { flex-wrap: wrap; }
+  .weaknesses-hero { min-height: 0; padding: 24px; }
+  .weakness-summary-card { padding: 18px; }
+  .weakness-group-grid { grid-template-columns: 1fr; gap: 12px; }
+  .weakness-group-card { padding: 18px; }
+  .weakness-overview { gap: 18px; }
+  .weaknesses-page .interview-tab { flex-wrap: wrap; }
+  .weaknesses-page .section-heading h2 { font-size: 21px; }
+  .weakness-report-item h3 { font-size: 18px; }
+  .weakness-dimension-empty { padding: 24px 18px; }
+  .weakness-group-nav { padding: 14px 10px; }
+  .weakness-group-links button { gap: 8px; padding: 10px 8px; }
+  .weakness-group-links strong { font-size: 12px; }
+  .weakness-nav-number { width: 24px; height: 24px; }
+  .weakness-nav-arrow { display: none; }
+  .weakness-category-panel { padding: 16px; }
+  .weakness-category-panel header { flex-wrap: wrap; gap: 10px; }
+  .weakness-category-count { padding: 0; background: transparent; }
+  .weakness-category-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .weakness-category-list button { padding: 12px 10px; }
+  .weakness-category-list button > span { font-size: 12px; }
+  .evidence-list h4 span { display: block; margin: 5px 0 0; }
   .training-task-panels {
     grid-template-columns: 1fr;
   }
@@ -182,7 +210,7 @@
     width: min(100% - 24px, 960px);
   }
   .app-page {
-    width: 100%;
+    width: auto;
     padding-top: 18px;
   }
   .auth-card {

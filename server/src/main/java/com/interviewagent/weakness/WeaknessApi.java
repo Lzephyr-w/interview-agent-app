@@ -6,6 +6,11 @@ import java.util.List;
 public final class WeaknessApi {
     private WeaknessApi() {}
 
+    public static final List<String> WEAKNESS_TAGS = List.of(
+        "技术基础", "算法与数据结构", "系统设计", "性能优化", "工程质量", "问题排查",
+        "项目深挖", "业务理解", "技术权衡", "成果量化",
+        "沟通表达", "行为面", "协作推进", "英语表达", "岗位匹配", "简历风险");
+
     public record WeaknessAnalysis(String summary, OffsetDateTime analyzedAt, boolean stale, List<WeaknessItem> items) {}
     public record WeaknessItem(String tag, String title, String diagnosis, String action, List<WeaknessEvidence> evidence) {}
     public record WeaknessEvidence(String questionId, String reviewReportId, String interviewId, String questionText, String company, String role, String interviewRound, String interviewType, String reason) {}

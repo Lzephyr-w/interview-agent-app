@@ -1,0 +1,28 @@
+/* ponytail: one CSS sprite animation shared by the offline desktop loader and homepage. */
+.zhimian-robot {
+  display: block;
+  aspect-ratio: 984 / 1199;
+  background-image: url("./images/joyful-robot.webp");
+  background-size: 400% 300%;
+  background-repeat: no-repeat;
+  animation: zhimian-robot-joy 4s step-end infinite;
+}
+
+@keyframes zhimian-robot-joy {
+  0%, 100% { background-position: 0% 0%; }
+  8.333333% { background-position: 33.333333% 0%; }
+  16.666667% { background-position: 66.666667% 0%; }
+  25% { background-position: 100% 0%; }
+  33.333333% { background-position: 0% 50%; }
+  41.666667% { background-position: 33.333333% 50%; }
+  50% { background-position: 66.666667% 50%; }
+  58.333333% { background-position: 100% 50%; }
+  66.666667% { background-position: 0% 100%; }
+  75% { background-position: 33.333333% 100%; }
+  83.333333% { background-position: 66.666667% 100%; }
+  91.666667% { background-position: 100% 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zhimian-robot { animation: none; }
+}
