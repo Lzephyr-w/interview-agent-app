@@ -439,6 +439,7 @@ export default function MockInterviewsPage() {
                       <label className="field">
                         自评
                         <select
+                          data-guide="mock-assessment"
                           value={assessment}
                           onChange={(event) =>
                             setAssessment(event.target.value)
@@ -451,7 +452,7 @@ export default function MockInterviewsPage() {
                       </label>
                     </div>
                     <div className="form-actions">
-                      <button className="primary-button" disabled={saving}>
+                      <button className="primary-button" data-guide="mock-submit" disabled={saving}>
                         {saving ? "正在保存…" : "提交回答"}
                       </button>
                       <button
@@ -479,6 +480,7 @@ export default function MockInterviewsPage() {
                     <p className="muted">可以结束并保存为正式面试记录。</p>
                     <button
                       className="primary-button"
+                      data-guide="mock-finish"
                       type="button"
                       onClick={() => void finish()}
                       disabled={saving}
@@ -555,7 +557,7 @@ export default function MockInterviewsPage() {
                     </button>
                   </div>
                 </div>
-                <div className="mock-history">
+                <div className="mock-history" data-guide="mock-review">
                   <h3>本场复盘</h3>
                   <ol>
                     {session.questions.map((item) => (
@@ -592,6 +594,7 @@ export default function MockInterviewsPage() {
                   面试包
                   <select
                     required
+                    data-guide="mock-package"
                     value={form.packageId}
                     onChange={(event) => selectPackage(event.target.value)}
                   >
@@ -665,7 +668,7 @@ export default function MockInterviewsPage() {
                 <p className="muted">
                   {sourceMode === "KNOWLEDGE" ? `本场将从 ${knowledgeDocuments.filter((doc) => categoryIds.includes(doc.categoryId)).length} 份文档检索出题依据。` : "每次开始都会创建一场新的文字模拟。AI 将结合已解析简历、JD 和证据卡出题。"}
                 </p>
-                <button className="primary-button" disabled={saving || (sourceMode === "KNOWLEDGE" && categoryIds.length === 0)}>
+                <button className="primary-button" data-guide="mock-start" disabled={saving || (sourceMode === "KNOWLEDGE" && categoryIds.length === 0)}>
                   {saving ? "正在创建…" : "开始 AI 文本模拟"}
                 </button>
               </form>

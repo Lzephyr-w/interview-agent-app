@@ -145,6 +145,8 @@
   width: min(720px, calc(100% - 32px));
   max-height: min(760px, calc(100vh - 32px));
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--green) 30%, transparent) transparent;
   padding: 0;
   color: var(--ink);
   background: var(--paper);
@@ -152,6 +154,11 @@
   border-radius: 30px 8px 30px 8px;
   box-shadow: 0 28px 80px color-mix(in srgb, var(--ink) 24%, transparent);
   animation: guide-dialog-in 180ms ease-out;
+}
+@supports selector(::-webkit-scrollbar) {
+  .guide-dialog { scrollbar-width: auto; }
+  .guide-dialog::-webkit-scrollbar { width: 4px; height: 4px; }
+  .guide-dialog::-webkit-scrollbar-thumb { border-width: 1px; }
 }
 .guide-dialog::backdrop {
   background: color-mix(in srgb, var(--ink) 46%, transparent);

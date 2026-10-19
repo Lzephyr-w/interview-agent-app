@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 const steps = [
   ["01", "准备资料", "上传简历、录入岗位 JD；项目证据卡可选，用来补充真实经历。"],
@@ -13,6 +14,12 @@ const steps = [
 export default function UserGuide({ showLibraryLink = true }: { showLibraryLink?: boolean }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [open, setOpen] = useState(false);
+  const router = useRouter();
+
+  function startGuide() {
+    setOpen(false);
+    router.push(`/guide?returnTo=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`);
+  }
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -55,6 +62,15 @@ export default function UserGuide({ showLibraryLink = true }: { showLibraryLink?
             ×
           </button>
         </div>
+
+        <section className="guide-practice-entry">
+          <div>
+            <span className="profile-label">边操作，边学会</span>
+            <h3>跟着指引，亲手完成第一次练习</h3>
+            <p>高亮提示 · 示例输入 · 分步闯关。约 8 分钟，体验资料准备、真实面试记录、添加题目到复盘训练，示例数据不会保存到你的账户。</p>
+          </div>
+          <button className="dialog-confirm-button primary" type="button" onClick={startGuide}>开始操作指引 <span aria-hidden="true">↗</span></button>
+        </section>
 
         <div className="guide-steps" aria-label="使用流程">
           {steps.map(([number, title, description]) => (

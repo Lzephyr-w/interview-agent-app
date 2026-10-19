@@ -217,7 +217,8 @@ const ImportDialogue = memo(function ImportDialogue({ importTask, audioImportBus
 export default function InterviewsPage() {
   const pathname = usePathname();
   const router = useRouter();
-  const [, , pathSegment, action] = pathname.split("/");
+  const currentPath = pathname === "/guide" ? new URLSearchParams(window.location.search).get("interviewPath") ?? "/interviews" : pathname;
+  const [, , pathSegment, action] = currentPath.split("/");
   const mode: PageMode =
     pathSegment === "new"
       ? "new"
@@ -356,7 +357,7 @@ export default function InterviewsPage() {
       );
       setDetail(saved);
       await load();
-      router.replace(`/interviews/${saved.interview.id}`);
+      if (pathname !== "/guide") router.replace(`/interviews/${saved.interview.id}`);
       setMessage("面试记录已保存。");
     } catch (cause) {
       setError(errorMessage(cause, "保存失败。"));
@@ -725,7 +726,7 @@ export default function InterviewsPage() {
             <Link className="text-link" href="/library">
               管理面试包
             </Link>
-            <Link className="secondary-button" href="/interviews/new">
+            <Link className="secondary-button" data-guide="interview-create" href="/interviews/new">
               创建面试
             </Link>
           </div>
@@ -835,6 +836,7 @@ export default function InterviewsPage() {
                 关联面试包
                 <select
                   required
+                  data-guide="interview-package"
                   value={form.interviewPackageId}
                   onChange={(event) => {
                     const selected = packages.find(
@@ -886,6 +888,7 @@ export default function InterviewsPage() {
                   <input
                     required
                     type="datetime-local"
+                    data-guide="interview-time"
                     value={form.interviewTime}
                     onChange={(event) =>
                       setForm({ ...form, interviewTime: event.target.value })
@@ -893,7 +896,7 @@ export default function InterviewsPage() {
                   />
                 </label>
               </div>
-              <div className="form-row">
+              <div className="form-row" data-guide="interview-outcome">
                 <label className="field">
                   状态
                   <select
@@ -923,13 +926,14 @@ export default function InterviewsPage() {
               </div>
               <Field
                 label="备注"
+                guideTarget="interview-notes"
                 multiline
                 value={form.notes}
                 onChange={(notes) => setForm({ ...form, notes })}
                 required={false}
               />
               <div className="form-actions">
-                <button className="primary-button" disabled={saving}>
+                <button className="primary-button" data-guide="interview-save" disabled={saving}>
                   {saving
                     ? "正在保存…"
                     : mode === "edit"
@@ -974,7 +978,7 @@ export default function InterviewsPage() {
                 返回历史
               </Link>
             </div>
-            <div className="interview-overview">
+            <div className="interview-overview" data-guide="interview-overview">
               <div>
                 <span className="profile-label">面试时间</span>
                 <strong>
@@ -1002,6 +1006,7 @@ export default function InterviewsPage() {
                 <Link
                   className="primary-button"
                   href={`/interviews/${detail.interview.id}/questions`}
+                  data-guide="interview-questions"
                 >
                   进入问答记录
                 </Link>
@@ -1083,13 +1088,14 @@ export default function InterviewsPage() {
                 {!questionReadOnly && <section className="qa-composer" aria-label="添加问答">
                   <div className="qa-composer-toolbar"><strong>添加问答</strong><div className="qa-methods" role="group" aria-label="添加方式">
                     <button type="button" aria-pressed={addMethod === "audio"} aria-controls="qa-audio-panel" onClick={() => setAddMethod("audio")}><span aria-hidden="true">♫</span>录音导入</button>
-                    <button type="button" aria-pressed={addMethod === "text"} aria-controls="qa-text-panel" onClick={() => setAddMethod("text")}><span aria-hidden="true">≡</span>粘贴文本</button>
-                    <button type="button" aria-pressed={addMethod === "manual"} aria-controls="qa-manual-panel" onClick={() => setAddMethod("manual")}><span aria-hidden="true">＋</span>手动添加</button>
+                    <button type="button" data-guide="question-text" aria-pressed={addMethod === "text"} aria-controls="qa-text-panel" onClick={() => setAddMethod("text")}><span aria-hidden="true">≡</span>粘贴文本</button>
+                    <button type="button" data-guide="question-manual" aria-pressed={addMethod === "manual"} aria-controls="qa-manual-panel" onClick={() => setAddMethod("manual")}><span aria-hidden="true">＋</span>手动添加</button>
                   </div></div>
                 <div id="qa-audio-panel" hidden={addMethod !== "audio"}>{!importTask && audioImportPanel}</div>
                   <div id="qa-text-panel" className="qa-input-panel" hidden={addMethod !== "text"}>
                     <label className="field">粘贴面试转写
                     <textarea
+                      data-guide="question-transcript"
                       value={transcript}
                       onChange={(event) => setTranscript(event.target.value)}
                       placeholder={
@@ -1103,6 +1109,7 @@ export default function InterviewsPage() {
                         className="primary-button"
                         type="button"
                         disabled={!transcript.trim() || audioImportBusy}
+                        data-guide="question-segment"
                         onClick={() => void segment()}
                       >
                         分段并加入问答
@@ -1113,6 +1120,7 @@ export default function InterviewsPage() {
                     <form className="library-form qa-manual-form" onSubmit={addQuestion}>
                     <Field
                       label="问题"
+                      guideTarget="question-title"
                       value={question.questionText}
                       onChange={(questionText) =>
                         setQuestion({ ...question, questionText })
@@ -1120,6 +1128,7 @@ export default function InterviewsPage() {
                     />
                     <Field
                       label="回答"
+                      guideTarget="question-answer"
                       multiline
                       value={question.answerText}
                       onChange={(answerText) =>
@@ -1130,6 +1139,7 @@ export default function InterviewsPage() {
                     <label className="field">
                       自评
                       <select
+                        data-guide="question-assessment"
                         value={question.selfAssessment}
                         onChange={(event) =>
                           setQuestion({
@@ -1144,13 +1154,13 @@ export default function InterviewsPage() {
                       </select>
                     </label>
                     <div className="form-actions">
-                      <button className="primary-button">添加问答</button>
+                      <button className="primary-button" data-guide="question-add">添加问答</button>
                     </div>
                     </form>
                   </div>
                   {importTask && audioImportPanel}
                 </section>}
-                <div className="question-list">
+                <div className="question-list" data-guide="question-list">
                   <div className="qa-list-heading"><h3>本场问答 <span>{detail.questions.length}</span></h3><span>{questionReadOnly ? "面试原始记录" : "点击问题可编辑"}</span></div>
                   {detail.questions.map((item) => (
                     <details className="question-card" key={item.id}>
@@ -1310,24 +1320,28 @@ function Field({
   onChange,
   multiline = false,
   required = true,
+  guideTarget,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   multiline?: boolean;
   required?: boolean;
+  guideTarget?: string;
 }) {
   return (
     <label className="field">
       {label}
       {multiline ? (
         <textarea
+          data-guide={guideTarget}
           required={required}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
         <input
+          data-guide={guideTarget}
           required={required}
           value={value}
           onChange={(event) => onChange(event.target.value)}

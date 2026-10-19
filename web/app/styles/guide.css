@@ -1,0 +1,63 @@
+.guide-practice-entry { display: flex; align-items: center; gap: 24px; margin: 22px 34px 0; padding: 20px; border: 1px solid var(--line); border-radius: 18px 5px 18px 5px; background: linear-gradient(120deg, var(--green-soft), var(--surface)); }
+.guide-practice-entry h3 { margin-top: 6px; }
+.guide-practice-entry > button { flex-shrink: 0; white-space: nowrap; }
+.operation-guide .app-page { padding-bottom: 380px; }
+.operation-guide[data-page="library"] [data-guide-nav="/library"], .operation-guide[data-page="mock"] [data-guide-nav="/mock-interviews"], .operation-guide[data-page="weaknesses"] [data-guide-nav="/weaknesses"] { color: var(--green); background: var(--green-soft); }
+.operation-guide[data-page^="interview"] [data-guide-nav="/interviews"] { color: var(--green); background: var(--green-soft); }
+.operation-guide .topbar-actions { visibility: hidden; }
+.operation-guide-mask { position: fixed; inset: 0; z-index: 200; pointer-events: none; }
+.operation-guide-mask > div, .operation-guide-curtain { position: fixed; background: #071b14b8; pointer-events: auto; }
+.operation-guide-curtain { inset: 0; z-index: 200; backdrop-filter: blur(4px); }
+.operation-guide-spotlight { position: fixed; border: 2px solid var(--orange); border-radius: 10px; box-shadow: 0 0 0 4px #e986552b, 0 0 24px #e986553b; }
+.operation-guide-panel { position: fixed; z-index: 202; width: min(350px, calc(100vw - 24px)); max-height: calc(100svh - 24px); overflow-y: auto; padding: 22px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 22px 6px 22px 6px; box-shadow: 0 24px 70px #0005; outline: none; }
+.operation-guide-panel.centered { top: 50%; left: 50%; width: min(480px, calc(100vw - 24px)); transform: translate(-50%, -50%); padding: 28px; }
+.operation-guide-panel.docked { top: auto !important; bottom: 12px; left: auto !important; right: 12px; max-height: 52svh; }
+.operation-guide-panel.docked.above { top: 12px !important; bottom: auto; }
+.operation-guide-stage textarea { max-height: 24svh; min-height: 100px; }
+.operation-guide-stage .mock-history-detail, .operation-guide-stage .analysis-details, .operation-guide-stage [data-guide="mock-review"] { max-height: 30svh; overflow-y: auto; }
+.operation-guide-stage .question-list, .operation-guide-stage .question-editor { max-height: 30svh; overflow-y: auto; }
+.operation-guide-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; color: var(--green); font-size: 13px; font-weight: 700; }
+.operation-guide-top small { margin-left: 5px; padding: 3px 6px; color: var(--orange); background: var(--surface); border-radius: 5px; font-size: 10px; }
+.operation-guide-top button, .operation-guide-bottom button, .operation-guide-text-button { padding: 4px 0; color: var(--muted); background: transparent; border: 0; font-size: 12px; }
+.operation-guide-panel button:hover { filter: brightness(1.12); }
+.operation-guide-panel button:focus-visible, .operation-guide-stage :focus-visible { outline: 3px solid var(--orange); outline-offset: 3px; }
+.operation-guide-phases { display: flex; gap: 4px; justify-content: space-between; margin-bottom: 10px; color: var(--muted); font-size: 10px; }
+.operation-guide-phases [data-state="active"] { color: var(--orange); font-weight: 800; }
+.operation-guide-phases [data-state="done"] { color: var(--green); }
+.operation-guide-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; color: var(--muted); font-size: 11px; }
+.operation-guide-progress progress { flex: 1; width: 0; height: 5px; overflow: hidden; appearance: none; border: 0; border-radius: 10px; background: var(--green-soft); }
+.operation-guide-progress progress::-webkit-progress-bar { background: var(--green-soft); }
+.operation-guide-progress progress::-webkit-progress-value { background: var(--green); border-radius: 10px; transition: width 180ms; }
+.operation-guide-progress progress::-moz-progress-bar { background: var(--green); }
+.operation-guide-mark { display: inline-grid; width: 36px; height: 36px; place-items: center; margin-bottom: 10px; color: var(--orange); background: var(--green-soft); border-radius: 50% 50% 42% 58%; font: 700 18px Georgia, serif; }
+.operation-guide-panel h2 { margin: 0; font-size: 20px; line-height: 1.45; }
+.operation-guide-panel.centered h2 { font-size: 26px; }
+.operation-guide-panel p { margin: 10px 0 18px; color: var(--muted); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.operation-guide-panel .primary-button { width: 100%; margin-top: 4px; padding: 12px; font-size: 13px; }
+.operation-guide-panel .primary-button:disabled { cursor: default; }
+.operation-guide-recap { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 22px 0; }
+.operation-guide-recap span { padding: 12px; color: var(--green); background: var(--green-soft); border-radius: 10px 3px 10px 3px; font-size: 13px; }
+.operation-guide-panel .operation-guide-note { margin-bottom: 16px; font-size: 12px; }
+.operation-guide-example { margin: 14px 0; padding: 12px; background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; }
+.operation-guide-example > span { color: var(--muted); font-size: 10px; }
+.operation-guide-example p { max-height: 100px; overflow-y: auto; margin: 6px 0 8px; color: var(--ink); font-size: 12px; line-height: 1.6; }
+.operation-guide-example button { padding: 0; color: var(--green); background: transparent; border: 0; font-size: 12px; font-weight: 700; }
+.operation-guide-panel .operation-guide-instruction { margin: 16px 0; padding: 10px; color: var(--green); background: var(--green-soft); border-radius: 8px; font-size: 12px; text-align: center; }
+.operation-guide-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; color: var(--muted); border-top: 1px solid var(--line); font-size: 10px; }
+.operation-guide-text-button { display: block; margin: 12px auto 0; }
+@media (max-width: 700px) {
+  .operation-guide-panel:not(.centered) { top: auto !important; bottom: 12px; left: 12px !important; width: calc(100vw - 24px); max-height: 52svh; }
+}
+@media (max-width: 620px) {
+  .guide-practice-entry { flex-direction: column; align-items: stretch; gap: 14px; margin: 20px 20px 0; }
+  .operation-guide-panel { padding: 16px; }
+  .operation-guide-panel.centered { padding: 22px; }
+  .operation-guide-panel h2 { font-size: 18px; }
+  .operation-guide-top { margin-bottom: 12px; }
+  .operation-guide-panel p { margin-bottom: 12px; font-size: 12px; }
+  .operation-guide-example p { max-height: 62px; }
+  .operation-guide-progress { margin-bottom: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operation-guide progress::-webkit-progress-value { transition: none; }
+}

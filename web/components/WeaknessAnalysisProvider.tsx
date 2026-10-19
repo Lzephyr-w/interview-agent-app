@@ -81,7 +81,7 @@ export default function WeaknessAnalysisProvider({ children }: { children: React
   return (
     <WeaknessAnalysisContext.Provider value={{ analysis, analyzing, loadAnalysis, startAnalysis }}>
       {children}
-      {analyzing && pathname !== "/weaknesses" && (
+      {analyzing && pathname !== "/weaknesses" && pathname !== "/guide" && (
         <div className="toast-region" aria-label="页面提示">
           <div className="toast toast-notice" role="status">正在进行 AI 分析，完成后会通知你。</div>
         </div>
@@ -92,7 +92,7 @@ export default function WeaknessAnalysisProvider({ children }: { children: React
         description="薄弱点分析已生成，可以前往薄弱点页面查看结果。"
         confirmLabel="前往查看"
         onCancel={() => setSuccessOpen(false)}
-        onConfirm={() => { setSuccessOpen(false); router.push("/weaknesses"); }}
+        onConfirm={() => { setSuccessOpen(false); if (pathname !== "/guide") router.push("/weaknesses"); }}
       />
     </WeaknessAnalysisContext.Provider>
   );

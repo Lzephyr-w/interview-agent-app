@@ -21,6 +21,9 @@ export function api<T>(
   path: string,
   options: ApiOptions = {},
 ): Promise<T> {
+  if (typeof window !== "undefined" && window.location.pathname === "/guide") {
+    return import("./guide-demo").then(({ guideDemoApi }) => guideDemoApi<T>(path, options));
+  }
   const session = getSession();
   if (!session) {
     redirectToLogin();
@@ -82,6 +85,9 @@ export async function streamApi(
   options: ApiOptions,
   onEvent: (event: string, data: string) => void,
 ) {
+  if (typeof window !== "undefined" && window.location.pathname === "/guide") {
+    throw new Error("体验区使用示例回复，请按操作指引继续。");
+  }
   const session = getSession();
   if (!session) { redirectToLogin(); throw new Error("登录已过期，请重新登录。"); }
   const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080"}${path}`, {
@@ -115,6 +121,9 @@ export async function streamApi(
 }
 
 export async function apiBlob(path: string): Promise<Blob> {
+  if (typeof window !== "undefined" && window.location.pathname === "/guide") {
+    throw new Error("体验区不提供真实文件，请按操作指引继续。");
+  }
   const session = getSession();
   if (!session) {
     redirectToLogin();

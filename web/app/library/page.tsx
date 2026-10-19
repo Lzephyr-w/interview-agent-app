@@ -78,6 +78,7 @@ function Field({
   multiline = false,
   rows,
   hint,
+  guideTarget,
 }: {
   label: string;
   value: string;
@@ -85,6 +86,7 @@ function Field({
   multiline?: boolean;
   rows?: number;
   hint?: string;
+  guideTarget?: string;
 }) {
   return (
     <label className="field">
@@ -92,6 +94,7 @@ function Field({
       {hint && <small className="field-hint">{hint}</small>}
       {multiline ? (
         <textarea
+          data-guide={guideTarget}
           required
           rows={rows}
           value={value}
@@ -99,6 +102,7 @@ function Field({
         />
       ) : (
         <input
+          data-guide={guideTarget}
           required
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -320,9 +324,12 @@ export default function LibraryPage() {
                   }
                   type="button"
                   key={tab.id}
+                  data-guide={`tab-${tab.id}`}
                   onClick={() => {
                     setActiveTab(tab.id);
-                    window.history.replaceState(null, "", `/library?tab=${tab.id}`);
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("tab", tab.id);
+                    window.history.replaceState(null, "", url);
                     void loadTab(tab.id);
                   }}
                 >
@@ -368,7 +375,7 @@ export default function LibraryPage() {
                   <SavedResources title="已保存的简历" count={resumeFiles.length} loading={loadingTab === "resume-files"}>
                     <ul className="resource-list">
                     {resumeFiles.map((file) => (
-                      <li className="resource-item" key={file.id}>
+                      <li className="resource-item" data-guide="resume" key={file.id}>
                         <div>
                           <strong>{file.originalFilename}</strong>
                           <p>
@@ -439,6 +446,7 @@ export default function LibraryPage() {
                     <div className="form-row">
                       <Field
                         label="公司"
+                        guideTarget="jd-company"
                         value={jobDescription.company}
                         onChange={(company) =>
                           setJobDescription({ ...jobDescription, company })
@@ -446,6 +454,7 @@ export default function LibraryPage() {
                       />
                       <Field
                         label="岗位"
+                        guideTarget="jd-role"
                         value={jobDescription.role}
                         onChange={(role) =>
                           setJobDescription({ ...jobDescription, role })
@@ -454,6 +463,7 @@ export default function LibraryPage() {
                     </div>
                       <Field
                         label="JD 文本"
+                        guideTarget="jd-content"
                         multiline
                         rows={16}
                         value={jobDescription.content}
@@ -462,7 +472,7 @@ export default function LibraryPage() {
                       }
                     />
                     <div className="form-actions">
-                      <button className="primary-button">
+                      <button className="primary-button" data-guide="jd-save">
                         {jobDescriptionId ? "更新 JD" : "保存 JD"}
                       </button>
                       {jobDescriptionId && (
@@ -633,6 +643,7 @@ export default function LibraryPage() {
                   >
                     <Field
                       label="面试轮次"
+                      guideTarget="package-round"
                       value={interviewPackage.interviewRound}
                       onChange={(interviewRound) =>
                         setInterviewPackage({
@@ -645,6 +656,7 @@ export default function LibraryPage() {
                       选择已上传的简历文件
                       <select
                         required
+                        data-guide="package-resume"
                         value={interviewPackage.resumeFileId}
                         onChange={(event) =>
                           setInterviewPackage({
@@ -665,6 +677,7 @@ export default function LibraryPage() {
                       关联 JD
                       <select
                         required
+                        data-guide="package-jd"
                         value={interviewPackage.jobDescriptionId}
                         onChange={(event) => {
                           const selected = jobDescriptions.find((item) => item.id === event.target.value);
@@ -720,7 +733,7 @@ export default function LibraryPage() {
                       </div>
                     </div>
                     <div className="form-actions">
-                      <button className="primary-button">
+                      <button className="primary-button" data-guide="package-save">
                         {packageId ? "更新面试包" : "创建面试包"}
                       </button>
                       {packageId && (

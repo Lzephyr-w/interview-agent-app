@@ -51,6 +51,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 current?.href === link.href ? "sidebar-link active" : "sidebar-link"
               }
               href={link.href}
+              data-guide-nav={link.href}
               key={link.href}
             >
               <strong>{link.label}</strong>
@@ -69,7 +70,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <header className="app-topbar">
           <div className="topbar-title">
             <span className="topbar-kicker">智面 · AI 面试训练平台</span>
-            <strong>{current?.label ?? "智面"}</strong>
+            <strong>{pathname === "/guide" ? "操作指引 · 体验区" : current?.label ?? "智面"}</strong>
           </div>
           <div className="topbar-actions">
             <UserGuide />

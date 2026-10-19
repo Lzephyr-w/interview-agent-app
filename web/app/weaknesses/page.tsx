@@ -129,7 +129,9 @@ export default function WeaknessesPage() {
     focusDimension.current = panel === "details" && Boolean(tag) && focusDetail;
     setActivePanel(panel);
     if (panel === "details") setSelectedTag(dimension);
-    window.history.replaceState(null, "", `/weaknesses?tab=${panel}${panel === "details" ? `#${encodeURIComponent(dimension)}` : ""}`);
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", panel);
+    window.history.replaceState(null, "", `${window.location.pathname}?${params}${panel === "details" ? `#${encodeURIComponent(dimension)}` : ""}`);
   }
 
   function moveTab(event: KeyboardEvent<HTMLDivElement>) {
@@ -282,7 +284,7 @@ export default function WeaknessesPage() {
                   <h2>{activePanel === "analysis" ? "薄弱点分析总览" : "逐项看清，逐项改善"}</h2>
                   <p className="muted">{analysis?.analyzedAt ? `最后分析：${new Date(analysis.analyzedAt).toLocaleString()}` : "尚未进行 AI 分析"}</p>
                 </div>
-                <button className="primary-button" type="button" onClick={() => void analyze()} disabled={analyzing}>
+                <button className="primary-button" data-guide="analyze" type="button" onClick={() => void analyze()} disabled={analyzing}>
                   {analyzing ? "AI 分析处理中…" : analysis?.analyzedAt ? "重新分析" : "开始 AI 分析"}
                 </button>
               </div>
